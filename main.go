@@ -47,17 +47,21 @@ func (vc *VectorClock) Snapshot() map[string]uint32 {
 // just two plain maps in, one Relation out. Safe to call from anywhere,
 // any number of times, concurrently, with no risk of deadlock.
 func CompareSnapshots(this, other map[string]uint32) Relation {
-	if len(this) != len(other) {
-		panic("Vector clocks are not comparable, different number of nodes")
-	}
-
 	isThisGreater := false
 	isOtherGreater := false
 
-	for node, version := range this {
-		if version > other[node] {
+	seen := make(map[string]bool, len(this)+len(other))
+	for node := range this {
+		seen[node] = true
+	}
+	for node := range other {
+		seen[node] = true
+	}
+
+	for node := range seen {
+		if this[node] > other[node] {
 			isThisGreater = true
-		} else if version < other[node] {
+		} else if this[node] < other[node] {
 			isOtherGreater = true
 		}
 	}
@@ -106,6 +110,17 @@ type Node struct {
 	id        string
 	dataStore *DataStore
 	address   string
+}
+
+// Replicate pushes item into peer's DataStore for key, going through the
+// same resolve() path a local Put would. This is the in-memory stand-in
+// for what a real RPC-based replication call would eventually do.
+func (n *Node) Replicate(peer *Node, key string, item *DataItem) {
+	peer.dataStore.mu.Lock()
+	defer peer.dataStore.mu.Unlock()
+
+	existing := peer.dataStore.store[key]
+	peer.dataStore.store[key] = resolve(existing, item)
 }
 
 func NewNode(id string, address string) *Node {
