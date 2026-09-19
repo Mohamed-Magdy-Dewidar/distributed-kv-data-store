@@ -1,0 +1,6 @@
+# .gitignore
+*.exe
+*.test
+*.out
+.vscode/
+.idea/
