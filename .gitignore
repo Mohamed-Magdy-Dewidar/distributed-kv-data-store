@@ -1,6 +1,58 @@
-# .gitignore
+# ==========================================
+# 1. Go Specific
+# ==========================================
+# Binaries and compiled files
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 *.test
 *.out
-.vscode/
+
+# Go workspace file (if you ever use go work)
+go.work
+go.work.sum
+
+# Dependency directory (uncomment if you use 'go mod vendor')
+# vendor/
+
+# ==========================================
+# 2. Project Specific (Protobuf & Tools)
+# ==========================================
+# The local folder where we downloaded the protoc compiler
+.tools/
+
+# Generated Protobuf files. 
+# NOTE: If you want other people to clone your repo and run it WITHOUT 
+# installing protoc, you should COMMENT OUT these next two lines so the 
+# .pb.go files ARE committed to Git.
+internal/rpc/pb/*.pb.go
+
+# ==========================================
+# 3. IDE and Editor Files
+# ==========================================
+# GoLand / IntelliJ
 .idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# Vim / Emacs
+*.swp
+*.swo
+*~
+
+# ==========================================
+# 4. OS Specific Files
+# ==========================================
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+._*
