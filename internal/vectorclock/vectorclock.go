@@ -87,3 +87,16 @@ func BuildFromContext(context map[string]uint32, nodeID string) *VectorClock {
 	vc.Increment(nodeID)
 	return vc
 }
+
+// FromSnapshot reconstructs a VectorClock verbatim from a known state — no
+// increment, no new causal event. Use this when you're rebuilding an exact
+// state you already have (e.g., from wire data), as opposed to
+// BuildFromContext, which represents a new write happening on top of a
+// known history.
+func FromSnapshot(state map[string]uint32) *VectorClock {
+	vc := New()
+	for node, version := range state {
+		vc.state[node] = version
+	}
+	return vc
+}

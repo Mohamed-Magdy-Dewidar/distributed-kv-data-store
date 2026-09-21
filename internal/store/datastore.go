@@ -110,10 +110,13 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 // the same conflict-resolution path a local Put uses. This owns its own
 // locking, so a caller (Node.Replicate) never has to reach into DataStore
 // internals directly — the encapsulation the old direct field access broke.
-func (ds *DataStore) MergeReplicated(key string, item *DataItem) {
+func (ds *DataStore) MergeReplicated(key string, item *DataItem) bool {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
 	existing := ds.store[key]
 	ds.store[key] = resolve(existing, item)
+
+	// if at least one of the existing items was removed, then the merge was successful
+	return len(ds.store[key]) < len(existing)
 }

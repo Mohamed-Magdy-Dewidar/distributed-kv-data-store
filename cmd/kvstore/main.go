@@ -1,9 +1,8 @@
 package main
 
 import (
-	"fmt"
-
 	"distributed-kv-datastore/internal/store"
+	"fmt"
 )
 
 func main() {

@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package kvstore;
+
+option go_package = "distributed-kv-datastore/internal/rpc/pb";
+
+message DataItem {
+  bytes value = 1;                    // JSON-encoded Go value
+  map<string, uint32> vector_clock = 2;
+  string last_updated_by = 3;
+  bool is_deleted = 4;
+}
+
+message ReplicateRequest {
+  string key = 1;
+  DataItem item = 2;
+}
+
+message ReplicateResponse {
+  bool accepted = 1;
+}
+
+message FetchItemRequest {
+  string key = 1;
+}
+
+message FetchItemResponse {
+  repeated DataItem items = 1;
+  bool found = 2;
+}
+
+service KVReplication {
+  rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
+  rpc FetchItem(FetchItemRequest) returns (FetchItemResponse);
+}
