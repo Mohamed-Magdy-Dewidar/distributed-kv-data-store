@@ -15,6 +15,12 @@ type quorumOverride struct {
 
 // startTestCluster starts a full-mesh cluster of len(addrs) nodes, one per
 // id->address entry in addrs — every node is a neighbor of every other.
+// Every node gets N=len(addrs) (full replication across the whole test
+// cluster) — these tests predate partitioning and were designed/reasoned
+// about assuming every node holds every key; N=3 keeps replicaSetFor
+// returning the same "every other node" set the old flat neighbor list
+// gave them, so quorum math already reasoned about by name (e.g. "W=2
+// requires 2 of 3 nodes up") still holds unchanged.
 // Unless overrides[id] says otherwise, a node gets W=2, R=1 (mirroring
 // startTestNode's default); these tests only care about the *coordinating*
 // node's quorum settings; peers that never initiate a Put/Get don't need an
@@ -43,7 +49,7 @@ func startTestCluster(t *testing.T, addrs map[string]string, overrides map[strin
 			w, r = o.w, o.r
 		}
 
-		n := New(id, addr, w, r, neighbors)
+		n := New(id, addr, len(addrs), w, r, neighbors)
 		listener, err := rpc.Serve(addr, n.Store)
 		if err != nil {
 			t.Fatalf("failed to start server for %s: %v", id, err)

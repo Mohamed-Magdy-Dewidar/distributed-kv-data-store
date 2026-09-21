@@ -16,7 +16,7 @@ import (
 func main() {
 	nodeCount := 3
 	basePort := 60100
-	w, r := 2, 1
+	w, r, n := 2, 2, 2
 
 	addresses := make(map[string]string, nodeCount)
 	for i := 0; i < nodeCount; i++ {
@@ -37,7 +37,8 @@ func main() {
 			}
 		}
 
-		n := node.New(id, addr, w, r, neighbors)
+		n := node.New(id, addr, n, w, r, neighbors)
+
 		listener, err := rpc.Serve(addr, n.Store)
 		if err != nil {
 			log.Fatalf("failed to start %s on %s: %v", id, addr, err)

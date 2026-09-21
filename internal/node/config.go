@@ -1,13 +1,12 @@
 package node
 
-// QuorumConfig holds cluster-wide quorum settings. N is implicit — it's
-// just len(NeighborAddrs)+1 (every node in the cluster, until consistent
-// hashing introduces real partitioning).
+// QuorumConfig holds cluster-wide replication and quorum settings.
 type QuorumConfig struct {
-	W int
-	R int
+	N int // replication factor — how many nodes hold each key
+	W int // write quorum
+	R int // read quorum
 }
 
-func NewQuorumConfig(w, r int) QuorumConfig {
-	return QuorumConfig{W: w, R: r}
+func NewQuorumConfig(n, w, r int) QuorumConfig {
+	return QuorumConfig{N: n, W: w, R: r}
 }

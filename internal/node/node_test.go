@@ -11,7 +11,11 @@ import (
 func startTestNode(t *testing.T, id, address string, neighbors map[string]string) *Node {
 	t.Helper()
 
-	n := New(id, address, 2, 1, neighbors)
+	// N=2: full replication across this 2-node test cluster, preserving
+	// these pre-partitioning tests' original "every node has every key"
+	// assumption — none of them go through replicaSetFor's hash-ring
+	// selection anyway (they call Store.Put/Replicate/FetchItem directly).
+	n := New(id, address, 2, 2, 1, neighbors)
 
 	listener, err := rpc.Serve(address, n.Store)
 	if err != nil {

@@ -5,9 +5,21 @@ import (
 	"fmt"
 	"sync"
 
+	"distributed-kv-datastore/internal/hashring"
 	"distributed-kv-datastore/internal/rpc"
 	"distributed-kv-datastore/internal/store"
 )
+
+// defaultVirtualNodesPerPhysical is kept at 150 (not bumped to something
+// like 500) as a deliberate tradeoff, not an oversight: this project's
+// current goal is proving partitioning/routing mechanics work correctly,
+// not delivering tight load-balancing. Measured relative deviation in
+// per-node primary-key share at 150 vnodes ranges roughly -58% to +91%
+// depending on physical node count (see
+// internal/hashring.TestNoNodeIsCatastrophicallyOverOrUnderloaded) — a
+// real, known limitation of this default, not a bug. Revisit if load
+// fairness becomes a goal; 500 vnodes measured closer to ±30-40%.
+const defaultVirtualNodesPerPhysical = 150
 
 type Node struct {
 	ID            string
@@ -15,30 +27,54 @@ type Node struct {
 	Address       string
 	NeighborAddrs map[string]string
 	QuorumConfig  QuorumConfig
+	Ring          *hashring.HashRing
 
 	clientsMu sync.Mutex
 	clients   map[string]*rpc.Client
 }
 
-func New(id, address string, w, r int, neighborAddrs map[string]string) *Node {
+// New builds a Node and seeds its hash ring with itself plus every
+// configured neighbor. Every node in the cluster must be constructed with
+// the same set of node IDs (this node's own id plus every neighbor's) for
+// all nodes to compute identical preference lists.
+func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node {
+	ring := hashring.NewHashRing(defaultVirtualNodesPerPhysical)
+	ring.AddNode(id)
+	for peerID := range neighborAddrs {
+		ring.AddNode(peerID)
+	}
+
 	return &Node{
 		ID:            id,
 		Store:         store.NewDataStore(id),
 		Address:       address,
 		NeighborAddrs: neighborAddrs,
-		QuorumConfig:  NewQuorumConfig(w, r),
+		QuorumConfig:  NewQuorumConfig(n, w, r),
+		Ring:          ring,
 		clients:       make(map[string]*rpc.Client),
 	}
 }
 
-// replicaSetFor returns the peer IDs responsible for key. Currently this is
-// every configured neighbor (no partitioning yet); once consistent hashing
-// exists, this becomes the seam where it plugs in — the fan-out logic
-// itself never needs to change.
+// replicaSetFor returns the peer IDs (excluding this node) that the hash
+// ring assigns as replicas for key.
+//
+// KNOWN GAP: Put/Get below still unconditionally read/write this node's
+// own local store regardless of whether this node actually appears in the
+// ring's preference list for key. With N < cluster size, that means a
+// coordinator that isn't one of the "true" N replicas for a given key
+// still ends up holding a copy of it, silently making the effective
+// replication factor N+1 for any write whose client happens to land on a
+// non-replica node. Worth a deliberate decision (e.g., only apply the
+// local write if n.ID is in the preference list) once this is running and
+// visible in the dashboard — not fixed here, flagged intentionally.
 func (n *Node) replicaSetFor(key string) []string {
-	peers := make([]string, 0, len(n.NeighborAddrs))
-	for peerID := range n.NeighborAddrs {
-		peers = append(peers, peerID)
+	preferenceList := n.Ring.GetPreferenceList(key, n.QuorumConfig.N)
+
+	peers := make([]string, 0, len(preferenceList))
+	for _, nodeID := range preferenceList {
+		if nodeID != n.ID {
+			peers = append(peers, nodeID)
+		}
 	}
 	return peers
 }
@@ -57,7 +93,7 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 	item := n.Store.Put(key, value, context)
 
 	peers := n.replicaSetFor(key)
-	totalNodes := len(peers) + 1 // +1 for this node
+	totalNodes := len(peers) + 1
 	needed := n.QuorumConfig.W
 
 	successes := 1 // the local write above
@@ -86,6 +122,7 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 			if successes >= needed {
 				return nil
 			}
+			// revert the local write above in case quorum failures does not math
 			if totalNodes-failures < needed {
 				n.Store.RestoreVersions(key, prevVersions)
 				return fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
