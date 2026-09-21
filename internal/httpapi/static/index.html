@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>KV Cluster Dashboard</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f1117; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; color: #9aa5ce; }
+  .nodes { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .node { border: 1px solid #2a2e3f; border-radius: 8px; padding: 12px 16px; min-width: 160px; background: #161923; }
+  .node.down { opacity: 0.5; border-color: #7f1d1d; }
+  .node .id { font-weight: 600; }
+  .node .addr { font-size: 12px; color: #8892b0; }
+  .node button { margin-top: 8px; font-size: 12px; padding: 4px 8px; cursor: pointer; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .up .status-dot { background: #4ade80; }
+  .down .status-dot { background: #f87171; }
+  .panel { border: 1px solid #2a2e3f; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #161923; }
+  .panel h2 { margin-top: 0; font-size: 14px; color: #9aa5ce; }
+  input, select { background: #0f1117; border: 1px solid #2a2e3f; color: #e6e6e6; padding: 6px 8px; border-radius: 4px; margin-right: 8px; }
+  button.action { background: #3b82f6; border: none; color: white; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+  pre { background: #0f1117; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
+  .sibling { border-left: 3px solid #f59e0b; padding-left: 8px; margin: 6px 0; }
+  .ok { color: #4ade80; } .err { color: #f87171; }
+</style>
+</head>
+<body>
+  <h1>Distributed KV Cluster</h1>
+
+  <div class="nodes" id="nodes"></div>
+
+  <div class="panel">
+    <h2>Put</h2>
+    <select id="putNode"></select>
+    <input id="putKey" placeholder="key" value="foo">
+    <input id="putValue" placeholder="value" value="hello">
+    <button class="action" onclick="doPut()">Put</button>
+    <pre id="putResult"></pre>
+  </div>
+
+  <div class="panel">
+    <h2>Get</h2>
+    <select id="getNode"></select>
+    <input id="getKey" placeholder="key" value="foo">
+    <button class="action" onclick="doGet()">Get</button>
+    <pre id="getResult"></pre>
+  </div>
+
+<script>
+async function refreshNodes() {
+  const res = await fetch('/api/nodes');
+  const nodes = await res.json();
+  nodes.sort((a, b) => a.id.localeCompare(b.id));
+
+  const container = document.getElementById('nodes');
+  container.innerHTML = '';
+  const putSel = document.getElementById('putNode');
+  const getSel = document.getElementById('getNode');
+  const prevPutValue = putSel.value;
+  const prevGetValue = getSel.value;
+  putSel.innerHTML = '';
+  getSel.innerHTML = '';
+
+  for (const n of nodes) {
+    const div = document.createElement('div');
+    div.className = 'node ' + (n.alive ? 'up' : 'down');
+    div.innerHTML = `
+      <div class="id"><span class="status-dot"></span>${n.id}</div>
+      <div class="addr">${n.address} · W=${n.w} R=${n.r}</div>
+      <button onclick="toggleNode('${n.id}', ${n.alive})">${n.alive ? 'Stop' : 'Start'}</button>
+    `;
+    container.appendChild(div);
+
+    for (const sel of [putSel, getSel]) {
+      const opt = document.createElement('option');
+      opt.value = n.id;
+      opt.textContent = n.id;
+      sel.appendChild(opt);
+    }
+  }
+
+  const nodeIds = new Set(nodes.map(n => n.id));
+  if (nodeIds.has(prevPutValue)) putSel.value = prevPutValue;
+  if (nodeIds.has(prevGetValue)) getSel.value = prevGetValue;
+}
+
+async function toggleNode(id, alive) {
+  await fetch(`/api/nodes/${id}/${alive ? 'stop' : 'start'}`, { method: 'POST' });
+  refreshNodes();
+}
+
+async function doPut() {
+  const node = document.getElementById('putNode').value;
+  const key = document.getElementById('putKey').value;
+  const value = document.getElementById('putValue').value;
+  const res = await fetch(`/api/nodes/${node}/put`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value })
+  });
+  const data = await res.json();
+  const el = document.getElementById('putResult');
+  el.innerHTML = `<span class="${data.success ? 'ok' : 'err'}">${data.success ? 'OK' : 'FAILED'}</span> (${data.elapsedMs}ms) ${data.error || ''}`;
+}
+
+async function doGet() {
+  const node = document.getElementById('getNode').value;
+  const key = document.getElementById('getKey').value;
+  const res = await fetch(`/api/nodes/${node}/get/${encodeURIComponent(key)}`);
+  const data = await res.json();
+  const el = document.getElementById('getResult');
+
+  if (!data.success) {
+    el.innerHTML = `<span class="err">FAILED</span> (${data.elapsedMs}ms) ${data.error}`;
+    return;
+  }
+  if (!data.items || data.items.length === 0) {
+    el.innerHTML = `<span class="err">not found</span> (${data.elapsedMs}ms)`;
+    return;
+  }
+
+  let html = `<span class="ok">OK</span> (${data.elapsedMs}ms) — ${data.items.length} version(s)`;
+  if (data.items.length > 1) html += ' <b style="color:#f59e0b">— CONFLICT</b>';
+  for (const item of data.items) {
+    html += `<div class="sibling">value: ${JSON.stringify(item.value)}${item.isDeleted ? ' (deleted)' : ''}<br>vc: ${JSON.stringify(item.vectorClock)}<br>by: ${item.lastUpdatedBy}</div>`;
+  }
+  el.innerHTML = html;
+}
+
+refreshNodes();
+setInterval(refreshNodes, 2000);
+</script>
+</body>
+</html>
