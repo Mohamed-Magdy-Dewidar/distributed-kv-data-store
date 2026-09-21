@@ -2,15 +2,19 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"distributed-kv-datastore/internal/rpc"
 )
 
-// quorumOverride specifies non-default W/R for one node in a test cluster.
+// quorumOverride specifies non-default N/W/R for one node in a test
+// cluster. n=0 means "use the default", i.e. len(addrs) (full replication)
+// — the zero value stays backward compatible with existing overrides that
+// only set w/r.
 type quorumOverride struct {
-	w, r int
+	n, w, r int
 }
 
 // startTestCluster starts a full-mesh cluster of len(addrs) nodes, one per
@@ -44,12 +48,15 @@ func startTestCluster(t *testing.T, addrs map[string]string, overrides map[strin
 			}
 		}
 
-		w, r := 2, 1
+		replicationFactor, w, r := len(addrs), 2, 1
 		if o, ok := overrides[id]; ok {
 			w, r = o.w, o.r
+			if o.n != 0 {
+				replicationFactor = o.n
+			}
 		}
 
-		n := New(id, addr, len(addrs), w, r, neighbors)
+		n := New(id, addr, replicationFactor, w, r, neighbors)
 		listener, err := rpc.Serve(addr, n.Store)
 		if err != nil {
 			t.Fatalf("failed to start server for %s: %v", id, err)
@@ -283,5 +290,67 @@ func TestPutRollbackDoesNotAccumulateAcrossRepeatedFailures(t *testing.T) {
 	items, found := nodes["node-1"].Store.Get("foo")
 	if found || len(items) != 0 {
 		t.Fatalf("expected repeated failed writes to leave no trace (key absent), got found=%v items=%v", found, items)
+	}
+}
+
+// node-1 is overridden to N=2 on an otherwise-3-node cluster; node-2 and
+// node-3 keep the default N=3 (irrelevant here — Replicate/FetchItem write
+// straight to a peer's Store regardless of that peer's own QuorumConfig).
+// We probe node-1's own ring — identical on every node, since all three
+// are seeded with the same 3 IDs — for a key whose N=2 preference list
+// happens to land on node-2 and node-3, excluding node-1 itself. Put/Get
+// coordinated by node-1 for that key must never touch node-1's local
+// store, while the two actual replicas end up holding it.
+func TestPutGetActAsPureCoordinatorWhenNotAReplica(t *testing.T) {
+	addrs := map[string]string{
+		"node-1": "localhost:60281",
+		"node-2": "localhost:60282",
+		"node-3": "localhost:60283",
+	}
+	nodes, _ := startTestCluster(t, addrs, map[string]quorumOverride{
+		"node-1": {n: 2, w: 2, r: 2},
+	})
+
+	var key string
+	for i := 0; i < 10000; i++ {
+		candidate := fmt.Sprintf("probe-key-%d", i)
+		list := nodes["node-1"].Ring.GetPreferenceList(candidate, 2)
+		if len(list) != 2 {
+			continue
+		}
+		if list[0] != "node-1" && list[1] != "node-1" {
+			key = candidate
+			break
+		}
+	}
+	if key == "" {
+		t.Fatal("could not find a probe key whose N=2 preference list excludes node-1")
+	}
+
+	ctx := context.Background()
+	if err := nodes["node-1"].Put(ctx, key, "coordinator-only", nil); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	if items, found := nodes["node-1"].Store.Get(key); found || len(items) != 0 {
+		t.Fatalf("expected non-replica node-1 to never store %q locally after Put, got found=%v items=%v", key, found, items)
+	}
+
+	for _, replicaID := range nodes["node-1"].Ring.GetPreferenceList(key, 2) {
+		items, found := nodes[replicaID].Store.Get(key)
+		if !found || len(items) != 1 || items[0].Value != "coordinator-only" {
+			t.Fatalf("expected replica %q to hold the coordinated write, got found=%v items=%v", replicaID, found, items)
+		}
+	}
+
+	got, err := nodes["node-1"].Get(ctx, key)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if len(got) != 1 || got[0].Value != "coordinator-only" {
+		t.Fatalf("expected Get to return the coordinated value via fan-out, got %v", got)
+	}
+	if items, found := nodes["node-1"].Store.Get(key); found || len(items) != 0 {
+		t.Fatalf("expected Get to leave no local copy on non-replica node-1, got found=%v items=%v", found, items)
 	}
 }

@@ -79,6 +79,29 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *Data
 	return incoming
 }
 
+// BuildItem constructs the DataItem Put would produce for value/context —
+// same vector-clock derivation, same LastUpdatedBy attribution — without
+// writing it into the store. For a coordinator that isn't itself one of
+// key's replicas: it still needs to hand replicas a properly versioned
+// item, but must not end up holding a local copy of its own.
+func (ds *DataStore) BuildItem(key string, value any, context map[string]uint32) *DataItem {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	base := context
+	if base == nil {
+		if existing, ok := ds.store[key]; ok {
+			base = unionVectorClock(existing)
+		}
+	}
+
+	return &DataItem{
+		Value:         value,
+		VectorClock:   vectorclock.BuildFromContext(base, ds.id),
+		LastUpdatedBy: ds.id,
+	}
+}
+
 // Delete treats deletion as just another write — a tombstoned DataItem
 // with its own vector clock, run through the same resolve() path.
 func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string) {
