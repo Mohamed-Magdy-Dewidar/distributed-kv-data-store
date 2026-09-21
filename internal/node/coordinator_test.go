@@ -183,3 +183,99 @@ func TestGetSurfacesGenuineSiblingConflictsAcrossNodes(t *testing.T) {
 		t.Fatalf("expected siblings {%q, %q}, got %v", "from-node1", "from-node2", values)
 	}
 }
+
+// N=3, W=2 on the coordinator. Stopping the other 2 nodes leaves only the
+// coordinator itself up (1/3), so W=2 is unreachable and Put must fail. The
+// bug this guards against: Put applied the local write unconditionally
+// before fanning out, and never rolled it back on failure — so a "failed"
+// write was left sitting in the local store, indistinguishable from a
+// committed one. This is the very first write to "foo", so a correct
+// rollback must remove the key entirely rather than leave an orphaned
+// version behind.
+func TestPutRollsBackLocalWriteWhenQuorumUnreachableFirstWrite(t *testing.T) {
+	addrs := map[string]string{
+		"node-1": "localhost:60241",
+		"node-2": "localhost:60242",
+		"node-3": "localhost:60243",
+	}
+	nodes, listeners := startTestCluster(t, addrs, map[string]quorumOverride{
+		"node-1": {w: 2, r: 1},
+	})
+
+	listeners["node-2"].Stop()
+	listeners["node-3"].Stop()
+
+	ctx := context.Background()
+	if err := nodes["node-1"].Put(ctx, "foo", "bar", nil); err == nil {
+		t.Fatal("expected Put to fail: W=2 requires 2 nodes, but only the coordinator is up")
+	}
+
+	items, found := nodes["node-1"].Store.Get("foo")
+	if found || len(items) != 0 {
+		t.Fatalf("expected failed first write to be rolled back (key absent), got found=%v items=%v", found, items)
+	}
+}
+
+// Same setup, but "foo" already has a committed value before the peers go
+// down. A failed Put attempting to overwrite it must restore the local
+// store to exactly the pre-attempt version, not leave the unacknowledged
+// overwrite in place.
+func TestPutRollsBackLocalWriteWhenQuorumUnreachableOverwrite(t *testing.T) {
+	addrs := map[string]string{
+		"node-1": "localhost:60251",
+		"node-2": "localhost:60252",
+		"node-3": "localhost:60253",
+	}
+	nodes, listeners := startTestCluster(t, addrs, map[string]quorumOverride{
+		"node-1": {w: 2, r: 1},
+	})
+
+	ctx := context.Background()
+	if err := nodes["node-1"].Put(ctx, "foo", "committed", nil); err != nil {
+		t.Fatalf("setup Put failed: %v", err)
+	}
+	before, _ := nodes["node-1"].Store.Get("foo")
+
+	listeners["node-2"].Stop()
+	listeners["node-3"].Stop()
+
+	if err := nodes["node-1"].Put(ctx, "foo", "orphan", nil); err == nil {
+		t.Fatal("expected Put to fail: W=2 requires 2 nodes, but only the coordinator is up")
+	}
+
+	after, found := nodes["node-1"].Store.Get("foo")
+	if !found || len(after) != 1 || after[0].Value != "committed" {
+		t.Fatalf("expected rollback to restore exactly the pre-attempt version %v, got found=%v items=%v", before, found, after)
+	}
+}
+
+// Two consecutive failed Puts against the same never-before-written key
+// must not leave behind multiple orphaned sibling versions, nor keep
+// advancing the vector clock across attempts — each failed attempt should
+// be fully undone before the next one starts.
+func TestPutRollbackDoesNotAccumulateAcrossRepeatedFailures(t *testing.T) {
+	addrs := map[string]string{
+		"node-1": "localhost:60261",
+		"node-2": "localhost:60262",
+		"node-3": "localhost:60263",
+	}
+	nodes, listeners := startTestCluster(t, addrs, map[string]quorumOverride{
+		"node-1": {w: 2, r: 1},
+	})
+
+	listeners["node-2"].Stop()
+	listeners["node-3"].Stop()
+
+	ctx := context.Background()
+	if err := nodes["node-1"].Put(ctx, "foo", "attempt-1", nil); err == nil {
+		t.Fatal("expected first Put to fail: only the coordinator is up")
+	}
+	if err := nodes["node-1"].Put(ctx, "foo", "attempt-2", nil); err == nil {
+		t.Fatal("expected second Put to fail: only the coordinator is up")
+	}
+
+	items, found := nodes["node-1"].Store.Get("foo")
+	if found || len(items) != 0 {
+		t.Fatalf("expected repeated failed writes to leave no trace (key absent), got found=%v items=%v", found, items)
+	}
+}

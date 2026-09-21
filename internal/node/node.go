@@ -53,6 +53,7 @@ type replicateResult struct {
 // soon as W total acks are collected — or failure as soon as reaching W
 // becomes mathematically impossible, without waiting for every straggler.
 func (n *Node) Put(ctx context.Context, key string, value any, context map[string]uint32) error {
+	prevVersions, _ := n.Store.Get(key)
 	item := n.Store.Put(key, value, context)
 
 	peers := n.replicaSetFor(key)
@@ -86,6 +87,7 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 				return nil
 			}
 			if totalNodes-failures < needed {
+				n.Store.RestoreVersions(key, prevVersions)
 				return fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
 					key, successes, totalNodes, needed)
 			}
@@ -94,6 +96,7 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 		}
 	}
 
+	n.Store.RestoreVersions(key, prevVersions)
 	return fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
 		key, successes, totalNodes, needed)
 }

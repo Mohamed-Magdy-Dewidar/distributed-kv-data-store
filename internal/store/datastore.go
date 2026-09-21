@@ -106,6 +106,23 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 	return true, "Key deleted"
 }
 
+// RestoreVersions overwrites key's sibling set with items, bypassing the
+// vector-clock/tombstone machinery in Put/Delete. It exists for rolling back
+// a local write that never reached quorum — an internal undo, not a
+// semantic delete — so it must not itself be recorded as a new version. A
+// nil/empty items removes the key entirely, restoring "no prior write"
+// rather than leaving behind an empty-but-present slice.
+func (ds *DataStore) RestoreVersions(key string, items []*DataItem) {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	if len(items) == 0 {
+		delete(ds.store, key)
+		return
+	}
+	ds.store[key] = items
+}
+
 // MergeReplicated applies an item that arrived from another node through
 // the same conflict-resolution path a local Put uses. This owns its own
 // locking, so a caller (Node.Replicate) never has to reach into DataStore
