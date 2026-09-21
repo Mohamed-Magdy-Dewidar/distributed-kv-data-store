@@ -54,8 +54,7 @@ func (ds *DataStore) GetLiveItems(key string) ([]*DataItem, bool) {
 	}
 	return aliveItems, len(aliveItems) > 0
 }
-
-func (ds *DataStore) Put(key string, value any, context map[string]uint32) {
+func (ds *DataStore) Put(key string, value any, context map[string]uint32) *DataItem {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -74,9 +73,10 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) {
 
 	if !ok {
 		ds.store[key] = []*DataItem{incoming}
-		return
+		return incoming
 	}
 	ds.store[key] = resolve(existing, incoming)
+	return incoming
 }
 
 // Delete treats deletion as just another write — a tombstoned DataItem
@@ -110,13 +110,10 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 // the same conflict-resolution path a local Put uses. This owns its own
 // locking, so a caller (Node.Replicate) never has to reach into DataStore
 // internals directly — the encapsulation the old direct field access broke.
-func (ds *DataStore) MergeReplicated(key string, item *DataItem) bool {
+func (ds *DataStore) MergeReplicated(key string, item *DataItem) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
 	existing := ds.store[key]
 	ds.store[key] = resolve(existing, item)
-
-	// if at least one of the existing items was removed, then the merge was successful
-	return len(ds.store[key]) < len(existing)
 }

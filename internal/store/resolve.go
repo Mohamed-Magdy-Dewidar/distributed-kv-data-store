@@ -45,3 +45,15 @@ func unionVectorClock(items []*DataItem) map[string]uint32 {
 	}
 	return union
 }
+
+// MergeSiblings folds two independently-obtained sibling sets into one,
+// using the same conflict-resolution logic as a local Put. Used by a
+// Coordinator merging FetchItem responses from several peers during a
+// quorum read.
+func MergeSiblings(a, b []*DataItem) []*DataItem {
+	merged := a
+	for _, item := range b {
+		merged = resolve(merged, item)
+	}
+	return merged
+}

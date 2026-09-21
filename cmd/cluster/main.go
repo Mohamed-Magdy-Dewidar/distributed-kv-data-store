@@ -35,7 +35,7 @@ func main() {
 			}
 		}
 
-		n := node.New(id, addr, neighbors)
+		n := node.New(id, addr, 2, 1, neighbors)
 		listener, err := rpc.Serve(addr, n.Store)
 		if err != nil {
 			log.Fatalf("failed to start %s on %s: %v", id, addr, err)

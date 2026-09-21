@@ -11,7 +11,7 @@ import (
 func startTestNode(t *testing.T, id, address string, neighbors map[string]string) *Node {
 	t.Helper()
 
-	n := New(id, address, neighbors)
+	n := New(id, address, 2, 1, neighbors)
 
 	listener, err := rpc.Serve(address, n.Store)
 	if err != nil {
