@@ -6,6 +6,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/rpc/pb"
 	"distributed-kv-datastore/internal/store"
 )
@@ -23,21 +24,50 @@ func NewServer(ds *store.DataStore) *Server {
 	return &Server{ds: ds}
 }
 
-// Replicate accepts a single item from a peer and merges it into the local
-// store via the same resolve() path a local Put uses.
+// Replicate accepts one or more sibling items from a peer for a single key
+// and merges each into the local store via the same resolve() path a local
+// Put uses.
 func (s *Server) Replicate(ctx context.Context, req *pb.ReplicateRequest) (*pb.ReplicateResponse, error) {
-	if req.Item == nil {
-		return nil, status.Error(codes.InvalidArgument, "item must not be nil")
+	if len(req.Items) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "items must not be empty")
 	}
 
-	item, err := fromProtoDataItem(req.Item)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid item for key %q: %v", req.Key, err)
+	for _, protoItem := range req.Items {
+		item, err := fromProtoDataItem(protoItem)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid item for key %q: %v", req.Key, err)
+		}
+		s.ds.MergeReplicated(req.Key, item)
 	}
-
-	s.ds.MergeReplicated(req.Key, item)
 
 	return &pb.ReplicateResponse{Accepted: true}, nil
+}
+
+// GetMerkleTree builds a fresh merkle tree over the local store's current
+// contents at the requested bucket count and returns it whole — anti-entropy
+// does a bulk fetch of the peer's tree and compares locally rather than
+// recursing over the network one level at a time.
+func (s *Server) GetMerkleTree(ctx context.Context, req *pb.GetMerkleTreeRequest) (*pb.GetMerkleTreeResponse, error) {
+	tree := merkle.Build(s.ds, int(req.NumBuckets))
+	return toProtoTree(tree), nil
+}
+
+// GetBucketKeys returns the keys this node currently holds that fall into
+// bucketIndex under the same key->bucket mapping merkle.Build uses, so a
+// peer that found this bucket divergent via GetMerkleTree can fetch exactly
+// the keys it needs to reconcile.
+func (s *Server) GetBucketKeys(ctx context.Context, req *pb.GetBucketKeysRequest) (*pb.GetBucketKeysResponse, error) {
+	numBuckets := int(req.NumBuckets)
+	bucketIndex := int(req.BucketIndex)
+
+	var keys []string
+	for _, k := range s.ds.Keys() {
+		if merkle.BucketFor(k, numBuckets) == bucketIndex {
+			keys = append(keys, k)
+		}
+	}
+
+	return &pb.GetBucketKeysResponse{Keys: keys}, nil
 }
 
 // FetchItem returns the full sibling set the local store currently holds

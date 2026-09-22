@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/rpc/pb"
 	"distributed-kv-datastore/internal/store"
 )
@@ -31,17 +32,6 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-// Replicate sends item to this peer for key, over the network.
-func (c *Client) Replicate(ctx context.Context, key string, item *store.DataItem) error {
-	protoItem, err := toProtoDataItem(item)
-	if err != nil {
-		return fmt.Errorf("convert item for key %q: %w", key, err)
-	}
-
-	_, err = c.stub.Replicate(ctx, &pb.ReplicateRequest{Key: key, Item: protoItem})
-	return err
-}
-
 // FetchItem retrieves the sibling set this peer currently holds for key.
 func (c *Client) FetchItem(ctx context.Context, key string) ([]*store.DataItem, bool, error) {
 	resp, err := c.stub.FetchItem(ctx, &pb.FetchItemRequest{Key: key})
@@ -61,4 +51,39 @@ func (c *Client) FetchItem(ctx context.Context, key string) ([]*store.DataItem, 
 		items = append(items, item)
 	}
 	return items, true, nil
+}
+
+// Replicate sends one or more sibling items to this peer for key, in a
+// single round-trip.
+func (c *Client) Replicate(ctx context.Context, key string, items []*store.DataItem) error {
+	protoItems := make([]*pb.DataItem, 0, len(items))
+	for _, item := range items {
+		protoItem, err := toProtoDataItem(item)
+		if err != nil {
+			return fmt.Errorf("convert item for key %q: %w", key, err)
+		}
+		protoItems = append(protoItems, protoItem)
+	}
+
+	_, err := c.stub.Replicate(ctx, &pb.ReplicateRequest{Key: key, Items: protoItems})
+	return err
+}
+
+func (c *Client) GetMerkleTree(ctx context.Context, numBuckets int) (*merkle.Tree, error) {
+	resp, err := c.stub.GetMerkleTree(ctx, &pb.GetMerkleTreeRequest{NumBuckets: int32(numBuckets)})
+	if err != nil {
+		return nil, err
+	}
+	return fromProtoTree(resp), nil
+}
+
+func (c *Client) GetBucketKeys(ctx context.Context, bucketIndex, numBuckets int) ([]string, error) {
+	resp, err := c.stub.GetBucketKeys(ctx, &pb.GetBucketKeysRequest{
+		BucketIndex: int32(bucketIndex),
+		NumBuckets:  int32(numBuckets),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Keys, nil
 }

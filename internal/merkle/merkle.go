@@ -52,10 +52,10 @@ func leafIndex(bucketIndex, numBuckets int) int {
 	return numBuckets - 1 + bucketIndex
 }
 
-// bucketFor deterministically maps a key to a bucket index in
+// BucketFor deterministically maps a key to a bucket index in
 // [0, numBuckets). Distinct from hashring's consistent-hash ring, which
 // decides node ownership rather than comparison grouping.
-func bucketFor(key string, numBuckets int) int {
+func BucketFor(key string, numBuckets int) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32()) % numBuckets
@@ -96,7 +96,7 @@ func hashBucketContents(ds *store.DataStore, bucketIndex, numBuckets int) Hash {
 
 	var bucketKeys []string
 	for _, k := range allKeys {
-		if bucketFor(k, numBuckets) == bucketIndex {
+		if BucketFor(k, numBuckets) == bucketIndex {
 			bucketKeys = append(bucketKeys, k)
 		}
 	}

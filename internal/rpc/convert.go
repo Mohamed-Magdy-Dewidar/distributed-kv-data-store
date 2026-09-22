@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/rpc/pb"
 	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/vectorclock"
@@ -35,4 +36,26 @@ func fromProtoDataItem(p *pb.DataItem) (*store.DataItem, error) {
 		LastUpdatedBy: p.LastUpdatedBy,
 		IsDeleted:     p.IsDeleted,
 	}, nil
+}
+
+func toProtoTree(t *merkle.Tree) *pb.GetMerkleTreeResponse {
+	nodes := make([][]byte, len(t.Nodes))
+	for i, h := range t.Nodes {
+		nodes[i] = h[:]
+	}
+	return &pb.GetMerkleTreeResponse{
+		NumBuckets: int32(t.NumBuckets),
+		Nodes:      nodes,
+	}
+}
+
+func fromProtoTree(resp *pb.GetMerkleTreeResponse) *merkle.Tree {
+	nodes := make([]merkle.Hash, len(resp.Nodes))
+	for i, b := range resp.Nodes {
+		copy(nodes[i][:], b)
+	}
+	return &merkle.Tree{
+		NumBuckets: int(resp.NumBuckets),
+		Nodes:      nodes,
+	}
 }

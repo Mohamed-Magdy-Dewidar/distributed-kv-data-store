@@ -23,7 +23,7 @@ const (
 
 type DataItem struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Value         []byte                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"` // JSON-encoded Go value
+	Value         []byte                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
 	VectorClock   map[string]uint32      `protobuf:"bytes,2,rep,name=vector_clock,json=vectorClock,proto3" json:"vector_clock,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	LastUpdatedBy string                 `protobuf:"bytes,3,opt,name=last_updated_by,json=lastUpdatedBy,proto3" json:"last_updated_by,omitempty"`
 	IsDeleted     bool                   `protobuf:"varint,4,opt,name=is_deleted,json=isDeleted,proto3" json:"is_deleted,omitempty"`
@@ -92,7 +92,7 @@ func (x *DataItem) GetIsDeleted() bool {
 type ReplicateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Item          *DataItem              `protobuf:"bytes,2,opt,name=item,proto3" json:"item,omitempty"`
+	Items         []*DataItem            `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -134,9 +134,9 @@ func (x *ReplicateRequest) GetKey() string {
 	return ""
 }
 
-func (x *ReplicateRequest) GetItem() *DataItem {
+func (x *ReplicateRequest) GetItems() []*DataItem {
 	if x != nil {
-		return x.Item
+		return x.Items
 	}
 	return nil
 }
@@ -281,6 +281,198 @@ func (x *FetchItemResponse) GetFound() bool {
 	return false
 }
 
+type GetMerkleTreeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NumBuckets    int32                  `protobuf:"varint,1,opt,name=num_buckets,json=numBuckets,proto3" json:"num_buckets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMerkleTreeRequest) Reset() {
+	*x = GetMerkleTreeRequest{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMerkleTreeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMerkleTreeRequest) ProtoMessage() {}
+
+func (x *GetMerkleTreeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMerkleTreeRequest.ProtoReflect.Descriptor instead.
+func (*GetMerkleTreeRequest) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GetMerkleTreeRequest) GetNumBuckets() int32 {
+	if x != nil {
+		return x.NumBuckets
+	}
+	return 0
+}
+
+type GetMerkleTreeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NumBuckets    int32                  `protobuf:"varint,1,opt,name=num_buckets,json=numBuckets,proto3" json:"num_buckets,omitempty"`
+	Nodes         [][]byte               `protobuf:"bytes,2,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMerkleTreeResponse) Reset() {
+	*x = GetMerkleTreeResponse{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMerkleTreeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMerkleTreeResponse) ProtoMessage() {}
+
+func (x *GetMerkleTreeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMerkleTreeResponse.ProtoReflect.Descriptor instead.
+func (*GetMerkleTreeResponse) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GetMerkleTreeResponse) GetNumBuckets() int32 {
+	if x != nil {
+		return x.NumBuckets
+	}
+	return 0
+}
+
+func (x *GetMerkleTreeResponse) GetNodes() [][]byte {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+type GetBucketKeysRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BucketIndex   int32                  `protobuf:"varint,1,opt,name=bucket_index,json=bucketIndex,proto3" json:"bucket_index,omitempty"`
+	NumBuckets    int32                  `protobuf:"varint,2,opt,name=num_buckets,json=numBuckets,proto3" json:"num_buckets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBucketKeysRequest) Reset() {
+	*x = GetBucketKeysRequest{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBucketKeysRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBucketKeysRequest) ProtoMessage() {}
+
+func (x *GetBucketKeysRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBucketKeysRequest.ProtoReflect.Descriptor instead.
+func (*GetBucketKeysRequest) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetBucketKeysRequest) GetBucketIndex() int32 {
+	if x != nil {
+		return x.BucketIndex
+	}
+	return 0
+}
+
+func (x *GetBucketKeysRequest) GetNumBuckets() int32 {
+	if x != nil {
+		return x.NumBuckets
+	}
+	return 0
+}
+
+type GetBucketKeysResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Keys          []string               `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBucketKeysResponse) Reset() {
+	*x = GetBucketKeysResponse{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBucketKeysResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBucketKeysResponse) ProtoMessage() {}
+
+func (x *GetBucketKeysResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBucketKeysResponse.ProtoReflect.Descriptor instead.
+func (*GetBucketKeysResponse) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetBucketKeysResponse) GetKeys() []string {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
 var File_internal_rpc_pb_kvstore_proto protoreflect.FileDescriptor
 
 const file_internal_rpc_pb_kvstore_proto_rawDesc = "" +
@@ -294,20 +486,35 @@ const file_internal_rpc_pb_kvstore_proto_rawDesc = "" +
 	"is_deleted\x18\x04 \x01(\bR\tisDeleted\x1a>\n" +
 	"\x10VectorClockEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"K\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"M\n" +
 	"\x10ReplicateRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12%\n" +
-	"\x04item\x18\x02 \x01(\v2\x11.kvstore.DataItemR\x04item\"/\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12'\n" +
+	"\x05items\x18\x02 \x03(\v2\x11.kvstore.DataItemR\x05items\"/\n" +
 	"\x11ReplicateResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\"$\n" +
 	"\x10FetchItemRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\"R\n" +
 	"\x11FetchItemResponse\x12'\n" +
 	"\x05items\x18\x01 \x03(\v2\x11.kvstore.DataItemR\x05items\x12\x14\n" +
-	"\x05found\x18\x02 \x01(\bR\x05found2\x97\x01\n" +
+	"\x05found\x18\x02 \x01(\bR\x05found\"7\n" +
+	"\x14GetMerkleTreeRequest\x12\x1f\n" +
+	"\vnum_buckets\x18\x01 \x01(\x05R\n" +
+	"numBuckets\"N\n" +
+	"\x15GetMerkleTreeResponse\x12\x1f\n" +
+	"\vnum_buckets\x18\x01 \x01(\x05R\n" +
+	"numBuckets\x12\x14\n" +
+	"\x05nodes\x18\x02 \x03(\fR\x05nodes\"Z\n" +
+	"\x14GetBucketKeysRequest\x12!\n" +
+	"\fbucket_index\x18\x01 \x01(\x05R\vbucketIndex\x12\x1f\n" +
+	"\vnum_buckets\x18\x02 \x01(\x05R\n" +
+	"numBuckets\"+\n" +
+	"\x15GetBucketKeysResponse\x12\x12\n" +
+	"\x04keys\x18\x01 \x03(\tR\x04keys2\xb7\x02\n" +
 	"\rKVReplication\x12B\n" +
 	"\tReplicate\x12\x19.kvstore.ReplicateRequest\x1a\x1a.kvstore.ReplicateResponse\x12B\n" +
-	"\tFetchItem\x12\x19.kvstore.FetchItemRequest\x1a\x1a.kvstore.FetchItemResponseB*Z(distributed-kv-datastore/internal/rpc/pbb\x06proto3"
+	"\tFetchItem\x12\x19.kvstore.FetchItemRequest\x1a\x1a.kvstore.FetchItemResponse\x12N\n" +
+	"\rGetMerkleTree\x12\x1d.kvstore.GetMerkleTreeRequest\x1a\x1e.kvstore.GetMerkleTreeResponse\x12N\n" +
+	"\rGetBucketKeys\x12\x1d.kvstore.GetBucketKeysRequest\x1a\x1e.kvstore.GetBucketKeysResponseB*Z(distributed-kv-datastore/internal/rpc/pbb\x06proto3"
 
 var (
 	file_internal_rpc_pb_kvstore_proto_rawDescOnce sync.Once
@@ -321,25 +528,33 @@ func file_internal_rpc_pb_kvstore_proto_rawDescGZIP() []byte {
 	return file_internal_rpc_pb_kvstore_proto_rawDescData
 }
 
-var file_internal_rpc_pb_kvstore_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_internal_rpc_pb_kvstore_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_internal_rpc_pb_kvstore_proto_goTypes = []any{
-	(*DataItem)(nil),          // 0: kvstore.DataItem
-	(*ReplicateRequest)(nil),  // 1: kvstore.ReplicateRequest
-	(*ReplicateResponse)(nil), // 2: kvstore.ReplicateResponse
-	(*FetchItemRequest)(nil),  // 3: kvstore.FetchItemRequest
-	(*FetchItemResponse)(nil), // 4: kvstore.FetchItemResponse
-	nil,                       // 5: kvstore.DataItem.VectorClockEntry
+	(*DataItem)(nil),              // 0: kvstore.DataItem
+	(*ReplicateRequest)(nil),      // 1: kvstore.ReplicateRequest
+	(*ReplicateResponse)(nil),     // 2: kvstore.ReplicateResponse
+	(*FetchItemRequest)(nil),      // 3: kvstore.FetchItemRequest
+	(*FetchItemResponse)(nil),     // 4: kvstore.FetchItemResponse
+	(*GetMerkleTreeRequest)(nil),  // 5: kvstore.GetMerkleTreeRequest
+	(*GetMerkleTreeResponse)(nil), // 6: kvstore.GetMerkleTreeResponse
+	(*GetBucketKeysRequest)(nil),  // 7: kvstore.GetBucketKeysRequest
+	(*GetBucketKeysResponse)(nil), // 8: kvstore.GetBucketKeysResponse
+	nil,                           // 9: kvstore.DataItem.VectorClockEntry
 }
 var file_internal_rpc_pb_kvstore_proto_depIdxs = []int32{
-	5, // 0: kvstore.DataItem.vector_clock:type_name -> kvstore.DataItem.VectorClockEntry
-	0, // 1: kvstore.ReplicateRequest.item:type_name -> kvstore.DataItem
+	9, // 0: kvstore.DataItem.vector_clock:type_name -> kvstore.DataItem.VectorClockEntry
+	0, // 1: kvstore.ReplicateRequest.items:type_name -> kvstore.DataItem
 	0, // 2: kvstore.FetchItemResponse.items:type_name -> kvstore.DataItem
 	1, // 3: kvstore.KVReplication.Replicate:input_type -> kvstore.ReplicateRequest
 	3, // 4: kvstore.KVReplication.FetchItem:input_type -> kvstore.FetchItemRequest
-	2, // 5: kvstore.KVReplication.Replicate:output_type -> kvstore.ReplicateResponse
-	4, // 6: kvstore.KVReplication.FetchItem:output_type -> kvstore.FetchItemResponse
-	5, // [5:7] is the sub-list for method output_type
-	3, // [3:5] is the sub-list for method input_type
+	5, // 5: kvstore.KVReplication.GetMerkleTree:input_type -> kvstore.GetMerkleTreeRequest
+	7, // 6: kvstore.KVReplication.GetBucketKeys:input_type -> kvstore.GetBucketKeysRequest
+	2, // 7: kvstore.KVReplication.Replicate:output_type -> kvstore.ReplicateResponse
+	4, // 8: kvstore.KVReplication.FetchItem:output_type -> kvstore.FetchItemResponse
+	6, // 9: kvstore.KVReplication.GetMerkleTree:output_type -> kvstore.GetMerkleTreeResponse
+	8, // 10: kvstore.KVReplication.GetBucketKeys:output_type -> kvstore.GetBucketKeysResponse
+	7, // [7:11] is the sub-list for method output_type
+	3, // [3:7] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
 	3, // [3:3] is the sub-list for extension extendee
 	0, // [0:3] is the sub-list for field type_name
@@ -356,7 +571,7 @@ func file_internal_rpc_pb_kvstore_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_rpc_pb_kvstore_proto_rawDesc), len(file_internal_rpc_pb_kvstore_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

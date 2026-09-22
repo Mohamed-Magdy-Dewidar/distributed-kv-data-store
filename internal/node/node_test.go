@@ -44,7 +44,7 @@ func TestReplicationCreatesSiblingsNaturally(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := node1.Replicate(ctx, "node-2", "foo", node1Items[0]); err != nil {
+	if err := node1.Replicate(ctx, "node-2", "foo", node1Items[:1]); err != nil {
 		t.Fatalf("Replicate failed: %v", err)
 	}
 
@@ -69,10 +69,10 @@ func TestReplicationConvergesBothDirections(t *testing.T) {
 	node2Items, _ := node2.Store.Get("foo")
 
 	ctx := context.Background()
-	if err := node1.Replicate(ctx, "node-2", "foo", node1Items[0]); err != nil {
+	if err := node1.Replicate(ctx, "node-2", "foo", node1Items[:1]); err != nil {
 		t.Fatalf("node1->node2 Replicate failed: %v", err)
 	}
-	if err := node2.Replicate(ctx, "node-1", "foo", node2Items[0]); err != nil {
+	if err := node2.Replicate(ctx, "node-1", "foo", node2Items[:1]); err != nil {
 		t.Fatalf("node2->node1 Replicate failed: %v", err)
 	}
 

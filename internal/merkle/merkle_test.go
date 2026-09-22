@@ -52,7 +52,7 @@ func TestSingleChangedKeyOnlyAffectsItsOwnBucket(t *testing.T) {
 	}
 
 	diverged := DivergentBuckets(treeA, treeB)
-	changedBucket := bucketFor(changedKey, testNumBuckets)
+	changedBucket := BucketFor(changedKey, testNumBuckets)
 
 	if len(diverged) != 1 || diverged[0] != changedBucket {
 		t.Fatalf("expected exactly bucket %d to diverge, got %v", changedBucket, diverged)
@@ -91,7 +91,7 @@ func TestTwoDivergentLeavesInDifferentSubtreesAreBothFound(t *testing.T) {
 	var keyLow, keyHigh string
 	for i := 0; i < 1000; i++ {
 		k := keyN(1000 + i)
-		b := bucketFor(k, testNumBuckets)
+		b := BucketFor(k, testNumBuckets)
 		if b < testNumBuckets/2 && keyLow == "" {
 			keyLow = k
 		}
@@ -113,8 +113,8 @@ func TestTwoDivergentLeavesInDifferentSubtreesAreBothFound(t *testing.T) {
 	treeB := Build(dsB, testNumBuckets)
 
 	diverged := DivergentBuckets(treeA, treeB)
-	wantLow := bucketFor(keyLow, testNumBuckets)
-	wantHigh := bucketFor(keyHigh, testNumBuckets)
+	wantLow := BucketFor(keyLow, testNumBuckets)
+	wantHigh := BucketFor(keyHigh, testNumBuckets)
 
 	if len(diverged) != 2 {
 		t.Fatalf("expected exactly 2 divergent buckets, got %v", diverged)
@@ -187,9 +187,9 @@ func TestBuildPanicsOnInvalidBucketCount(t *testing.T) {
 }
 
 func TestBucketForIsDeterministic(t *testing.T) {
-	first := bucketFor("stable-key", testNumBuckets)
+	first := BucketFor("stable-key", testNumBuckets)
 	for i := 0; i < 20; i++ {
-		if got := bucketFor("stable-key", testNumBuckets); got != first {
+		if got := BucketFor("stable-key", testNumBuckets); got != first {
 			t.Fatalf("run %d: bucketFor returned %d, expected consistently %d", i, got, first)
 		}
 	}
@@ -199,7 +199,7 @@ func TestBucketForDistributesKeysReasonably(t *testing.T) {
 	counts := make(map[int]int)
 	const sampleSize = 1000
 	for i := 0; i < sampleSize; i++ {
-		b := bucketFor(keyN(i), testNumBuckets)
+		b := BucketFor(keyN(i), testNumBuckets)
 		counts[b]++
 	}
 

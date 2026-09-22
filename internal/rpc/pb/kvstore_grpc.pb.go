@@ -19,8 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	KVReplication_Replicate_FullMethodName = "/kvstore.KVReplication/Replicate"
-	KVReplication_FetchItem_FullMethodName = "/kvstore.KVReplication/FetchItem"
+	KVReplication_Replicate_FullMethodName     = "/kvstore.KVReplication/Replicate"
+	KVReplication_FetchItem_FullMethodName     = "/kvstore.KVReplication/FetchItem"
+	KVReplication_GetMerkleTree_FullMethodName = "/kvstore.KVReplication/GetMerkleTree"
+	KVReplication_GetBucketKeys_FullMethodName = "/kvstore.KVReplication/GetBucketKeys"
 )
 
 // KVReplicationClient is the client API for KVReplication service.
@@ -29,6 +31,8 @@ const (
 type KVReplicationClient interface {
 	Replicate(ctx context.Context, in *ReplicateRequest, opts ...grpc.CallOption) (*ReplicateResponse, error)
 	FetchItem(ctx context.Context, in *FetchItemRequest, opts ...grpc.CallOption) (*FetchItemResponse, error)
+	GetMerkleTree(ctx context.Context, in *GetMerkleTreeRequest, opts ...grpc.CallOption) (*GetMerkleTreeResponse, error)
+	GetBucketKeys(ctx context.Context, in *GetBucketKeysRequest, opts ...grpc.CallOption) (*GetBucketKeysResponse, error)
 }
 
 type kVReplicationClient struct {
@@ -59,12 +63,34 @@ func (c *kVReplicationClient) FetchItem(ctx context.Context, in *FetchItemReques
 	return out, nil
 }
 
+func (c *kVReplicationClient) GetMerkleTree(ctx context.Context, in *GetMerkleTreeRequest, opts ...grpc.CallOption) (*GetMerkleTreeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMerkleTreeResponse)
+	err := c.cc.Invoke(ctx, KVReplication_GetMerkleTree_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *kVReplicationClient) GetBucketKeys(ctx context.Context, in *GetBucketKeysRequest, opts ...grpc.CallOption) (*GetBucketKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBucketKeysResponse)
+	err := c.cc.Invoke(ctx, KVReplication_GetBucketKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // KVReplicationServer is the server API for KVReplication service.
 // All implementations must embed UnimplementedKVReplicationServer
 // for forward compatibility.
 type KVReplicationServer interface {
 	Replicate(context.Context, *ReplicateRequest) (*ReplicateResponse, error)
 	FetchItem(context.Context, *FetchItemRequest) (*FetchItemResponse, error)
+	GetMerkleTree(context.Context, *GetMerkleTreeRequest) (*GetMerkleTreeResponse, error)
+	GetBucketKeys(context.Context, *GetBucketKeysRequest) (*GetBucketKeysResponse, error)
 	mustEmbedUnimplementedKVReplicationServer()
 }
 
@@ -80,6 +106,12 @@ func (UnimplementedKVReplicationServer) Replicate(context.Context, *ReplicateReq
 }
 func (UnimplementedKVReplicationServer) FetchItem(context.Context, *FetchItemRequest) (*FetchItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method FetchItem not implemented")
+}
+func (UnimplementedKVReplicationServer) GetMerkleTree(context.Context, *GetMerkleTreeRequest) (*GetMerkleTreeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMerkleTree not implemented")
+}
+func (UnimplementedKVReplicationServer) GetBucketKeys(context.Context, *GetBucketKeysRequest) (*GetBucketKeysResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBucketKeys not implemented")
 }
 func (UnimplementedKVReplicationServer) mustEmbedUnimplementedKVReplicationServer() {}
 func (UnimplementedKVReplicationServer) testEmbeddedByValue()                       {}
@@ -138,6 +170,42 @@ func _KVReplication_FetchItem_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _KVReplication_GetMerkleTree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMerkleTreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVReplicationServer).GetMerkleTree(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KVReplication_GetMerkleTree_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVReplicationServer).GetMerkleTree(ctx, req.(*GetMerkleTreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KVReplication_GetBucketKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBucketKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVReplicationServer).GetBucketKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KVReplication_GetBucketKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVReplicationServer).GetBucketKeys(ctx, req.(*GetBucketKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // KVReplication_ServiceDesc is the grpc.ServiceDesc for KVReplication service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +220,14 @@ var KVReplication_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FetchItem",
 			Handler:    _KVReplication_FetchItem_Handler,
+		},
+		{
+			MethodName: "GetMerkleTree",
+			Handler:    _KVReplication_GetMerkleTree_Handler,
+		},
+		{
+			MethodName: "GetBucketKeys",
+			Handler:    _KVReplication_GetBucketKeys_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -5,7 +5,7 @@ package kvstore;
 option go_package = "distributed-kv-datastore/internal/rpc/pb";
 
 message DataItem {
-  bytes value = 1;                    // JSON-encoded Go value
+  bytes value = 1;
   map<string, uint32> vector_clock = 2;
   string last_updated_by = 3;
   bool is_deleted = 4;
@@ -13,7 +13,7 @@ message DataItem {
 
 message ReplicateRequest {
   string key = 1;
-  DataItem item = 2;
+  repeated DataItem items = 2;                                 
 }
 
 message ReplicateResponse {
@@ -29,7 +29,28 @@ message FetchItemResponse {
   bool found = 2;
 }
 
+message GetMerkleTreeRequest {
+  int32 num_buckets = 1;
+}
+
+message GetMerkleTreeResponse {
+  int32 num_buckets = 1;
+  repeated bytes nodes = 2; 
+                             
+}
+
+message GetBucketKeysRequest {
+  int32 bucket_index = 1;
+  int32 num_buckets = 2;
+}
+
+message GetBucketKeysResponse {
+  repeated string keys = 1;
+}
+
 service KVReplication {
   rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
   rpc FetchItem(FetchItemRequest) returns (FetchItemResponse);
+  rpc GetMerkleTree(GetMerkleTreeRequest) returns (GetMerkleTreeResponse);
+  rpc GetBucketKeys(GetBucketKeysRequest) returns (GetBucketKeysResponse);
 }

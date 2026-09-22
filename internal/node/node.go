@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"distributed-kv-datastore/internal/hashring"
+	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/rpc"
 	"distributed-kv-datastore/internal/store"
 )
@@ -124,7 +126,7 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 	results := make(chan replicateResult, len(peers))
 	for _, peerID := range peers {
 		go func(peerID string) {
-			err := n.Replicate(ctx, peerID, key, item)
+			err := n.Replicate(ctx, peerID, key, []*store.DataItem{item})
 			results <- replicateResult{peerID: peerID, err: err}
 		}(peerID)
 	}
@@ -262,18 +264,149 @@ func (n *Node) getOrDialClient(peerID string) (*rpc.Client, error) {
 	return client, nil
 }
 
-func (n *Node) Replicate(ctx context.Context, peerID string, key string, item *store.DataItem) error {
-	client, err := n.getOrDialClient(peerID)
-	if err != nil {
-		return err
-	}
-	return client.Replicate(ctx, key, item)
-}
-
 func (n *Node) FetchItem(ctx context.Context, peerID string, key string) ([]*store.DataItem, bool, error) {
 	client, err := n.getOrDialClient(peerID)
 	if err != nil {
 		return nil, false, err
 	}
 	return client.FetchItem(ctx, key)
+}
+
+const antiEntropyNumBuckets = 16
+
+// Replicate now forwards a sibling set, matching Client.Replicate's widened signature.
+func (n *Node) Replicate(ctx context.Context, peerID string, key string, items []*store.DataItem) error {
+	client, err := n.getOrDialClient(peerID)
+	if err != nil {
+		return err
+	}
+	return client.Replicate(ctx, key, items)
+}
+
+// coReplicantPeers returns every configured neighbor as an anti-entropy
+// candidate. This is a deliberate simplification, not a precise
+// "which nodes actually share a preference list with me" calculation — an
+// accepted approximation given the current small, static cluster size.
+func (n *Node) coReplicantPeers() []string {
+	seen := make(map[string]bool)
+	for peerID := range n.NeighborAddrs {
+		seen[peerID] = true
+	}
+	peers := make([]string, 0, len(seen))
+	for id := range seen {
+		peers = append(peers, id)
+	}
+	return peers
+}
+
+// RunAntiEntropy reconciles n's data with peerID's: it builds a local
+// Merkle tree, fetches the peer's tree, and reconciles only the buckets
+// that diverge.
+func (n *Node) RunAntiEntropy(ctx context.Context, peerID string) error {
+	localTree := merkle.Build(n.Store, antiEntropyNumBuckets)
+
+	client, err := n.getOrDialClient(peerID)
+	if err != nil {
+		return fmt.Errorf("dial %q for anti-entropy: %w", peerID, err)
+	}
+
+	remoteTree, err := client.GetMerkleTree(ctx, antiEntropyNumBuckets)
+	if err != nil {
+		return fmt.Errorf("fetch merkle tree from %q: %w", peerID, err)
+	}
+
+	diverged := merkle.DivergentBuckets(localTree, remoteTree)
+	if len(diverged) == 0 {
+		return nil
+	}
+
+	for _, bucketIdx := range diverged {
+		if err := n.reconcileBucket(ctx, peerID, client, bucketIdx); err != nil {
+			return fmt.Errorf("reconcile bucket %d with %q: %w", bucketIdx, peerID, err)
+		}
+	}
+	return nil
+}
+
+// reconcileBucket reconciles a single divergent bucket: for every key
+// either side holds in that bucket, it fetches both sides' sibling sets,
+// merges them via store.MergeSiblings, and pushes the merged result back to
+// whichever side differs from it.
+func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.Client, bucketIdx int) error {
+	localKeys := make(map[string]bool)
+	for _, k := range n.Store.Keys() {
+		if merkle.BucketFor(k, antiEntropyNumBuckets) == bucketIdx {
+			localKeys[k] = true
+		}
+	}
+
+	remoteKeys, err := client.GetBucketKeys(ctx, bucketIdx, antiEntropyNumBuckets)
+	if err != nil {
+		return err
+	}
+
+	allKeys := make(map[string]bool, len(localKeys))
+	for k := range localKeys {
+		allKeys[k] = true
+	}
+	for _, k := range remoteKeys {
+		allKeys[k] = true
+	}
+
+	for key := range allKeys {
+		localItems, _ := n.Store.Get(key)
+		remoteItems, _, err := client.FetchItem(ctx, key)
+		if err != nil {
+			return fmt.Errorf("fetch %q from %q: %w", key, peerID, err)
+		}
+
+		merged := store.MergeSiblings(localItems, remoteItems)
+
+		if !itemSetsEqual(merged, localItems) {
+			n.Store.RestoreVersions(key, merged)
+		}
+		if !itemSetsEqual(merged, remoteItems) {
+			if err := n.Replicate(ctx, peerID, key, merged); err != nil {
+				return fmt.Errorf("push reconciled %q to %q: %w", key, peerID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// itemSetsEqual is a shallow pointer-identity comparison: merged always
+// contains either the exact same *DataItem pointers as one input (nothing
+// changed) or a genuinely different set (resolve() dropped or added
+// something), so pointer equality is sufficient.
+func itemSetsEqual(a, b []*store.DataItem) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// StartAntiEntropyLoop runs RunAntiEntropy against every co-replicant peer
+// on a repeating interval until ctx is canceled. Each node's ticker is
+// deliberately independent/unsynchronized from other nodes' tickers, to
+// avoid a thundering-herd effect.
+func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				for _, peerID := range n.coReplicantPeers() {
+					_ = n.RunAntiEntropy(ctx, peerID)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
