@@ -26,6 +26,20 @@ func NewDataStore(id string) *DataStore {
 	}
 }
 
+// Keys returns every key currently present in the store (including
+// tombstoned keys — same "raw" visibility as Get, not GetLiveItems).
+// Needed by anti-entropy to enumerate what a bucket actually contains.
+func (ds *DataStore) Keys() []string {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	keys := make([]string, 0, len(ds.store))
+	for k := range ds.store {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func (ds *DataStore) Get(key string) ([]*DataItem, bool) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
