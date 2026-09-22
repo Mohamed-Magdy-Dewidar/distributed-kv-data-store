@@ -6,7 +6,7 @@ import (
 	"distributed-kv-datastore/internal/store"
 )
 
-const testNumBuckets = 16
+const testNumBuckets = 16 // satisfies 4^k (k=2)
 
 func TestIdenticalDataProducesIdenticalTrees(t *testing.T) {
 	dsA := store.NewDataStore("node-1")
@@ -21,12 +21,12 @@ func TestIdenticalDataProducesIdenticalTrees(t *testing.T) {
 	treeA := Build(dsA, testNumBuckets)
 	treeB := Build(dsB, testNumBuckets)
 
-	if treeA.Root != treeB.Root {
-		t.Fatalf("expected identical root hashes for identical data, got %x vs %x", treeA.Root, treeB.Root)
+	if treeA.Nodes[0] != treeB.Nodes[0] {
+		t.Fatalf("expected identical root hashes for identical data, got %x vs %x", treeA.Nodes[0], treeB.Nodes[0])
 	}
-	for i := 0; i < testNumBuckets; i++ {
-		if treeA.BucketHashes[i] != treeB.BucketHashes[i] {
-			t.Errorf("bucket %d: hashes differ despite identical data", i)
+	for i := range treeA.Nodes {
+		if treeA.Nodes[i] != treeB.Nodes[i] {
+			t.Errorf("node index %d: hashes differ despite identical data", i)
 		}
 	}
 }
@@ -47,7 +47,7 @@ func TestSingleChangedKeyOnlyAffectsItsOwnBucket(t *testing.T) {
 	treeA := Build(dsA, testNumBuckets)
 	treeB := Build(dsB, testNumBuckets)
 
-	if treeA.Root == treeB.Root {
+	if treeA.Nodes[0] == treeB.Nodes[0] {
 		t.Fatal("expected root hashes to differ after changing one key")
 	}
 
@@ -62,9 +62,66 @@ func TestSingleChangedKeyOnlyAffectsItsOwnBucket(t *testing.T) {
 		if i == changedBucket {
 			continue
 		}
-		if treeA.BucketHashes[i] != treeB.BucketHashes[i] {
-			t.Errorf("bucket %d: expected to stay identical, but it changed too", i)
+		idx := leafIndex(i, testNumBuckets)
+		if treeA.Nodes[idx] != treeB.Nodes[idx] {
+			t.Errorf("bucket %d: expected leaf hash to stay identical, but it changed too", i)
 		}
+	}
+}
+
+// TestTwoDivergentLeavesInDifferentSubtreesAreBothFound is the case the
+// flat-tree tests couldn't exercise: it forces DivergentBuckets to recurse
+// into BOTH children of the root (not just one), proving the walk doesn't
+// stop after finding the first mismatch and correctly explores every
+// subtree whose hash disagrees, independently.
+func TestTwoDivergentLeavesInDifferentSubtreesAreBothFound(t *testing.T) {
+	dsA := store.NewDataStore("node-1")
+	dsB := store.NewDataStore("node-1")
+
+	for i := 0; i < 30; i++ {
+		key := keyN(i)
+		dsA.Put(key, "value-"+key, nil)
+		dsB.Put(key, "value-"+key, nil)
+	}
+
+	// Find two keys whose buckets land in different halves of the tree
+	// (bucket index < testNumBuckets/2 vs >= testNumBuckets/2), so their
+	// divergence is guaranteed to require recursing into both of the
+	// root's children, not just one.
+	var keyLow, keyHigh string
+	for i := 0; i < 1000; i++ {
+		k := keyN(1000 + i)
+		b := bucketFor(k, testNumBuckets)
+		if b < testNumBuckets/2 && keyLow == "" {
+			keyLow = k
+		}
+		if b >= testNumBuckets/2 && keyHigh == "" {
+			keyHigh = k
+		}
+		if keyLow != "" && keyHigh != "" {
+			break
+		}
+	}
+	if keyLow == "" || keyHigh == "" {
+		t.Fatal("failed to find probe keys in both halves of the bucket space")
+	}
+
+	dsB.Put(keyLow, "changed-low", nil)
+	dsB.Put(keyHigh, "changed-high", nil)
+
+	treeA := Build(dsA, testNumBuckets)
+	treeB := Build(dsB, testNumBuckets)
+
+	diverged := DivergentBuckets(treeA, treeB)
+	wantLow := bucketFor(keyLow, testNumBuckets)
+	wantHigh := bucketFor(keyHigh, testNumBuckets)
+
+	if len(diverged) != 2 {
+		t.Fatalf("expected exactly 2 divergent buckets, got %v", diverged)
+	}
+	got := map[int]bool{diverged[0]: true, diverged[1]: true}
+	if !got[wantLow] || !got[wantHigh] {
+		t.Fatalf("expected buckets {%d, %d} to diverge, got %v", wantLow, wantHigh, diverged)
 	}
 }
 
@@ -81,6 +138,52 @@ func TestDivergentBucketsEmptyForIdenticalTrees(t *testing.T) {
 	if diverged := DivergentBuckets(treeA, treeB); len(diverged) != 0 {
 		t.Errorf("expected no divergent buckets, got %v", diverged)
 	}
+}
+
+func TestDivergentBucketsPanicsOnMismatchedNumBuckets(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic when comparing trees with different NumBuckets")
+		}
+	}()
+
+	dsA := store.NewDataStore("node-1")
+	dsA.Put("foo", "bar", nil)
+
+	treeA := Build(dsA, 16)
+	treeB := Build(dsA, 4) // valid on its own (4 = 4^1), just mismatched with treeA
+
+	DivergentBuckets(treeA, treeB)
+}
+
+func TestValidateBucketCountAcceptsPowersOfFour(t *testing.T) {
+	for _, n := range []int{1, 4, 16, 64, 256} {
+		if err := validateBucketCount(n); err != nil {
+			t.Errorf("expected %d to be valid (4^k), got error: %v", n, err)
+		}
+	}
+}
+
+func TestValidateBucketCountRejectsNonPowersOfFour(t *testing.T) {
+	// 8 and 32 are powers of 2 but NOT powers of 4 (odd exponent) — the
+	// specific case this project's constraint is meant to catch, distinct
+	// from just "not a power of 2" (e.g. 15, 0, -1).
+	for _, n := range []int{0, -1, 3, 8, 15, 32} {
+		if err := validateBucketCount(n); err == nil {
+			t.Errorf("expected %d to be rejected, got no error", n)
+		}
+	}
+}
+
+func TestBuildPanicsOnInvalidBucketCount(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected Build to panic on an invalid numBuckets")
+		}
+	}()
+
+	ds := store.NewDataStore("node-1")
+	Build(ds, 8) // power of 2, but not power of 4 — should be rejected
 }
 
 func TestBucketForIsDeterministic(t *testing.T) {
