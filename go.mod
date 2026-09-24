@@ -8,6 +8,9 @@ require (
 )
 
 require (
+	github.com/bits-and-blooms/bitset v1.24.2 // indirect
+	github.com/bits-and-blooms/bloom/v3 v3.7.1 // indirect
+	github.com/google/btree v1.1.3 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
