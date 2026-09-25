@@ -42,6 +42,7 @@ type SSTable struct {
 	Path   string
 	MinKey string
 	MaxKey string
+	Size   int64 // total on-disk size in bytes; used by compaction's size tiering
 	index  []indexEntry
 	filter *bloom.BloomFilter
 }
@@ -174,6 +175,17 @@ func writeFooter(f *os.File, bloomStart, indexStart int64) error {
 // Publication is atomic: fully written and fsynced under a temporary
 // name, then renamed into place.
 func Write(dir string, entries []memtable.Entry) (*SSTable, error) {
+	return WriteWithID(dir, fmt.Sprintf("sst_%d", time.Now().UnixNano()), entries)
+}
+
+// WriteWithID is Write with a caller-chosen ID instead of a generated one.
+// Compaction uses it so its output sorts into the same position (among
+// live IDs, which the engine orders lexicographically on restart) as the
+// run of SSTables it replaces, rather than as the newest file.
+func WriteWithID(dir, id string, entries []memtable.Entry) (*SSTable, error) {
+	if id == "" || filepath.Base(id) != id {
+		return nil, fmt.Errorf("sstable: invalid id %q", id)
+	}
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("sstable: cannot write an empty SSTable")
 	}
@@ -181,7 +193,6 @@ func Write(dir string, entries []memtable.Entry) (*SSTable, error) {
 		return nil, fmt.Errorf("sstable: entries must be sorted by key")
 	}
 
-	id := fmt.Sprintf("sst_%d", time.Now().UnixNano())
 	tmpPath := filepath.Join(dir, id+".tmp")
 	finalPath := filepath.Join(dir, id+".sst")
 
@@ -220,6 +231,7 @@ func writeAndPublish(f *os.File, id, tmpPath, finalPath string, entries []memtab
 		return nil, fmt.Errorf("sstable: write index: %w", err)
 	}
 
+	size := indexStart + int64(len(indexBytes)) + 16 // + 16-byte footer
 	if err := writeFooter(f, bloomStart, indexStart); err != nil {
 		return nil, fmt.Errorf("sstable: write footer: %w", err)
 	}
@@ -238,6 +250,7 @@ func writeAndPublish(f *os.File, id, tmpPath, finalPath string, entries []memtab
 		Path:   finalPath,
 		MinKey: entries[0].Key,
 		MaxKey: entries[len(entries)-1].Key,
+		Size:   size,
 		index:  index,
 		filter: filter,
 	}, nil
@@ -299,6 +312,7 @@ func Open(path string) (*SSTable, error) {
 		Path:   path,
 		MinKey: index[0].Key,
 		MaxKey: index[len(index)-1].Key,
+		Size:   stat.Size(),
 		index:  index,
 		filter: filter,
 	}, nil

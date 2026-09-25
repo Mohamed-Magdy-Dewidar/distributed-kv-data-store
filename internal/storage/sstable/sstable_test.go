@@ -1,6 +1,7 @@
 package sstable
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -342,5 +343,35 @@ func TestGetReturnsOneOfMultipleSiblingsAsConvenienceWrapper(t *testing.T) {
 	}
 	if !found || item == nil {
 		t.Fatal("expected Get to return one sibling, not fail")
+	}
+}
+
+func TestSizeMatchesFileOnDiskAfterWriteAndOpen(t *testing.T) {
+	dir := t.TempDir()
+	sst, err := WriteWithID(dir, "sst_custom", []memtable.Entry{
+		sampleEntry("alpha", "1"),
+		sampleEntry("bravo", "2"),
+	})
+	if err != nil {
+		t.Fatalf("WriteWithID failed: %v", err)
+	}
+	if sst.ID != "sst_custom" || sst.Path != filepath.Join(dir, "sst_custom.sst") {
+		t.Fatalf("expected caller-chosen id to be used, got ID=%q Path=%q", sst.ID, sst.Path)
+	}
+
+	stat, err := os.Stat(sst.Path)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if sst.Size != stat.Size() {
+		t.Errorf("Write reported Size=%d, file on disk is %d bytes", sst.Size, stat.Size())
+	}
+
+	reopened, err := Open(sst.Path)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	if reopened.Size != stat.Size() {
+		t.Errorf("Open reported Size=%d, file on disk is %d bytes", reopened.Size, stat.Size())
 	}
 }
