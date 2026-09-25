@@ -305,3 +305,38 @@ func TestGetAllReturnsACopy(t *testing.T) {
 		t.Fatal("mutating GetAll's result must not change the table")
 	}
 }
+
+func TestReplaceInstallsVerbatimAndRemovesOnEmpty(t *testing.T) {
+	m := New(1 << 20)
+	m.Put("k", itemWithClock("newer", map[string]uint32{"node-1": 2}))
+
+	// Replace skips Resolve: a causally older version goes in as-is.
+	older := itemWithClock("older", map[string]uint32{"node-1": 1})
+	m.Replace("k", []*model.DataItem{older})
+	if items, _ := m.GetAll("k"); !reflect.DeepEqual(values(items), []any{"older"}) {
+		t.Fatalf("expected [older] verbatim, got %v", values(items))
+	}
+	if want := estimatedSize("k", older); m.sizeSoFar != want {
+		t.Errorf("expected sizeSoFar %d after Replace, got %d", want, m.sizeSoFar)
+	}
+
+	m.Replace("k", nil)
+	if _, found := m.GetAll("k"); found || m.Len() != 0 || m.sizeSoFar != 0 {
+		t.Fatalf("expected Replace(nil) to remove the key entirely, got found=%v Len=%d size=%d", found, m.Len(), m.sizeSoFar)
+	}
+	m.Replace("never-existed", nil) // must be harmless
+	if m.Len() != 0 || m.sizeSoFar != 0 {
+		t.Errorf("expected removing an absent key to change nothing, got Len=%d size=%d", m.Len(), m.sizeSoFar)
+	}
+}
+
+func TestKeysReturnsSortedKeys(t *testing.T) {
+	m := New(1 << 20)
+	m.Put("b", sampleItem("2"))
+	m.Put("a", sampleItem("1"))
+	m.Put("b", itemWithClock("sibling", map[string]uint32{"node-2": 1}))
+
+	if keys := m.Keys(); !reflect.DeepEqual(keys, []string{"a", "b"}) {
+		t.Fatalf("expected [a b], got %v", keys)
+	}
+}

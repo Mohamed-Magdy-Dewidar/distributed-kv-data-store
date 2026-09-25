@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"distributed-kv-datastore/internal/storage/manifest"
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
+	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
@@ -849,5 +851,118 @@ func TestFailedFlushPutsBackEverySibling(t *testing.T) {
 	}
 	if items, found, err := sstables[0].GetAll("k"); err != nil || !found || !reflect.DeepEqual(values(items), want) {
 		t.Fatalf("expected the retried sstable to hold every sibling %v, got found=%v %v err=%v", want, found, values(items), err)
+	}
+}
+
+// TestRestoreReplacesVerbatimWhileWriteIsInActiveMemtable is the rollback
+// path working as intended: the undone write never left the active
+// memtable, including when the previous versions live in an SSTable.
+func TestRestoreReplacesVerbatimWhileWriteIsInActiveMemtable(t *testing.T) {
+	e, err := Open(t.TempDir(), 200)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer e.Close()
+
+	big := strings.Repeat("x", 200)
+	if err := e.Put("k", itemWithClock(big, map[string]uint32{"node-1": 1})); err != nil { // flushed to an SSTable
+		t.Fatalf("Put failed: %v", err)
+	}
+	e.WaitForPendingFlushes()
+	prev, _, err := e.GetAll("k")
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+
+	if err := e.Put("k", itemWithClock("undo-me", map[string]uint32{"node-1": 2})); err != nil { // stays in active
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := e.Restore("k", prev); err != nil {
+		t.Fatalf("expected Restore to succeed, got %v", err)
+	}
+	if items, _, _ := e.GetAll("k"); !reflect.DeepEqual(values(items), []any{big}) {
+		t.Fatalf("expected the SSTable's version back, got %v", values(items))
+	}
+
+	// Restoring "no versions" undoes a first write. Fresh engine: the
+	// restore above left the active memtable over its threshold, so any
+	// further Put here would freeze it.
+	e, err = Open(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer e.Close()
+	if err := e.Put("fresh", itemWithClock("undo-me", map[string]uint32{"node-1": 1})); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := e.Restore("fresh", nil); err != nil {
+		t.Fatalf("expected Restore(nil) to succeed, got %v", err)
+	}
+	if _, found, _ := e.GetAll("fresh"); found {
+		t.Fatal("expected Restore(nil) to remove the key")
+	}
+}
+
+// TestRestoreReportsIncompleteWhenWriteWasFlushed: a write that crossed
+// the threshold is frozen and flushed before the rollback runs. Restore
+// can't remove it from the SSTable and must say so, not silently succeed.
+func TestRestoreReportsIncompleteWhenWriteWasFlushed(t *testing.T) {
+	e, err := Open(t.TempDir(), 200)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer e.Close()
+
+	prev := []*model.DataItem{itemWithClock("committed", map[string]uint32{"node-1": 1})}
+	if err := e.Put("k", prev[0]); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	big := strings.Repeat("x", 200)
+	if err := e.Put("k", itemWithClock(big, map[string]uint32{"node-1": 2})); err != nil { // crosses: frozen with prev
+		t.Fatalf("Put failed: %v", err)
+	}
+	e.WaitForPendingFlushes()
+
+	err = e.Restore("k", prev)
+	if !errors.Is(err, store.ErrRestoreIncomplete) {
+		t.Fatalf("expected ErrRestoreIncomplete, got %v", err)
+	}
+	if items, _, _ := e.GetAll("k"); !reflect.DeepEqual(values(items), []any{big}) {
+		t.Fatalf("expected the flushed write to still be visible, got %v", values(items))
+	}
+
+	// Same for undoing a first write that got flushed.
+	if err := e.Put("fresh", itemWithClock(big, map[string]uint32{"node-1": 1})); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	e.WaitForPendingFlushes()
+	if err := e.Restore("fresh", nil); !errors.Is(err, store.ErrRestoreIncomplete) {
+		t.Fatalf("expected ErrRestoreIncomplete for a flushed first write, got %v", err)
+	}
+}
+
+func TestKeysCoversEveryLayerOnce(t *testing.T) {
+	e, err := Open(t.TempDir(), 200)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer e.Close()
+
+	big := strings.Repeat("x", 200)
+	for _, p := range []struct{ key, value string }{
+		{"on-disk", big},   // flushed
+		{"both", big},      // flushed
+		{"both", "newer"},  // and in active
+		{"in-memory", "v"}, // active only
+	} {
+		if err := e.Put(p.key, sampleItem(p.value)); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+		e.WaitForPendingFlushes()
+	}
+
+	keys, err := e.Keys()
+	if want := []string{"both", "in-memory", "on-disk"}; err != nil || !reflect.DeepEqual(keys, want) {
+		t.Fatalf("expected %v (sorted, deduplicated), got %v err=%v", want, keys, err)
 	}
 }

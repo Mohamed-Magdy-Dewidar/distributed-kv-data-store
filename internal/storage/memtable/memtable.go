@@ -145,6 +145,36 @@ func (m *MemTable) PutBackOlder(entries []Entry) {
 	}
 }
 
+// Replace installs items as key's sibling set verbatim — no Resolve, no
+// merging — or removes key entirely when items is empty. It exists only
+// for StorageEngine.Restore's rollback path; every ordinary write must go
+// through Put so causality is respected. items must be newest first.
+func (m *MemTable) Replace(key string, items []*model.DataItem) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	old := m.current(key)
+	if len(items) == 0 {
+		m.tree.Delete(&entry{key: key})
+		m.sizeSoFar -= setSize(key, old)
+		return
+	}
+	m.replace(key, old, append([]*model.DataItem(nil), items...))
+}
+
+// Keys returns every key currently held, in sorted order.
+func (m *MemTable) Keys() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	keys := make([]string, 0, m.tree.Len())
+	m.tree.Ascend(func(i btree.Item) bool {
+		keys = append(keys, i.(*entry).key)
+		return true
+	})
+	return keys
+}
+
 // GetAll returns every sibling version currently held for key, newest
 // first. The returned slice is the caller's own copy.
 func (m *MemTable) GetAll(key string) ([]*model.DataItem, bool) {

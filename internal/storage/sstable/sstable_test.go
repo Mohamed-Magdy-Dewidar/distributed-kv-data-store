@@ -375,3 +375,18 @@ func TestSizeMatchesFileOnDiskAfterWriteAndOpen(t *testing.T) {
 		t.Errorf("Open reported Size=%d, file on disk is %d bytes", reopened.Size, stat.Size())
 	}
 }
+
+func TestKeysReturnsDistinctSortedKeys(t *testing.T) {
+	sst, err := Write(t.TempDir(), []memtable.Entry{
+		sampleEntry("alpha", "1"),
+		sampleEntry("bravo", "sibling-1"),
+		sampleEntry("bravo", "sibling-2"),
+		sampleEntry("charlie", "3"),
+	})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	if keys := sst.Keys(); len(keys) != 3 || keys[0] != "alpha" || keys[1] != "bravo" || keys[2] != "charlie" {
+		t.Fatalf("expected [alpha bravo charlie], got %v", keys)
+	}
+}

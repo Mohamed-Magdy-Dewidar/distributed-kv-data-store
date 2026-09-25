@@ -15,8 +15,13 @@ import (
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
 	"distributed-kv-datastore/internal/storage/wal"
+	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/versioning"
 )
+
+// StorageEngine is DataStore's durable backend. This check is the only
+// reason this package imports internal/store; store never imports engine.
+var _ store.Persister = (*StorageEngine)(nil)
 
 // StorageEngine orchestrates WAL, MemTable(s), SSTables, and the Manifest
 // for one node's local storage. Every layer holds sibling sets, not single
@@ -230,6 +235,12 @@ func (e *StorageEngine) GetAll(key string) ([]*model.DataItem, bool, error) {
 	sstables := e.sstables // slice header copy; safe, existing elements are never mutated
 	e.mu.RUnlock()
 
+	return mergeLayers(key, active, flushing, sstables)
+}
+
+// mergeLayers is GetAll's fold over one consistent snapshot of the layers.
+// Callers must keep sstables' files from being deleted (hold e.filesMu).
+func mergeLayers(key string, active, flushing *memtable.MemTable, sstables []*sstable.SSTable) ([]*model.DataItem, bool, error) {
 	var merged []*model.DataItem
 	if items, found := active.GetAll(key); found {
 		merged = versioning.MergeSiblings(merged, items)
@@ -251,6 +262,101 @@ func (e *StorageEngine) GetAll(key string) ([]*model.DataItem, bool, error) {
 	}
 
 	return merged, len(merged) > 0, nil
+}
+
+// Keys returns every distinct key held in any layer — active memtable,
+// in-flight frozen memtable, and every SSTable — in sorted order,
+// tombstoned keys included (the same visibility as GetAll). It reads only
+// in-memory state (memtables and SSTable indexes), never disk; the error
+// is part of store.Persister's contract and is currently always nil.
+func (e *StorageEngine) Keys() ([]string, error) {
+	e.mu.RLock()
+	active := e.active
+	flushing := e.flushing
+	sstables := e.sstables
+	e.mu.RUnlock()
+
+	seen := make(map[string]bool)
+	add := func(keys []string) {
+		for _, k := range keys {
+			seen[k] = true
+		}
+	}
+	add(active.Keys())
+	if flushing != nil {
+		add(flushing.Keys())
+	}
+	for _, sst := range sstables {
+		add(sst.Keys())
+	}
+
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
+// Restore replaces key's sibling set in the active memtable with items
+// verbatim (items newest first; nil/empty removes the key from the active
+// memtable).
+//
+// ROLLBACK ONLY. It exists solely so DataStore.RestoreVersions can undo a
+// local write whose quorum write failed (see Node.Put in
+// internal/node/node.go). It deliberately skips versioning.Resolve, so it
+// must never be used for ordinary writes — that's what Put is for.
+//
+// Known limitations, both accepted:
+//   - It is not written to the WAL, and does not undo anything already in
+//     it. A crash after a rollback replays the rolled-back write on
+//     restart. Rollback has never been WAL-aware in this codebase.
+//   - It can only change the active memtable. If the write being rolled
+//     back was already frozen for flushing (the Put that wrote it, or any
+//     concurrent Put, crossed the memtable threshold) or already flushed,
+//     GetAll still merges it back in. Restore detects this rather than
+//     silently succeeding: after replacing, it re-runs GetAll's fold and,
+//     unless the result is exactly items, returns an error wrapping
+//     store.ErrRestoreIncomplete. The replacement is kept either way.
+//
+// The replace and the check happen atomically under e.mu (with filesMu
+// held so compaction can't delete a file being read), so a concurrent Put
+// can't make the check pass or fail spuriously. That means Puts wait
+// while the check reads any SSTable holding key — acceptable for a
+// rollback path.
+func (e *StorageEngine) Restore(key string, items []*model.DataItem) error {
+	e.filesMu.RLock()
+	defer e.filesMu.RUnlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.active.Replace(key, items)
+
+	visible, _, err := mergeLayers(key, e.active, e.flushing, e.sstables)
+	if err != nil {
+		return fmt.Errorf("engine: verify restore of key %q: %w", key, err)
+	}
+	if !sameVersions(visible, items) {
+		return fmt.Errorf("engine: restore of key %q: %w", key, store.ErrRestoreIncomplete)
+	}
+	return nil
+}
+
+// sameVersions reports whether a and b hold the identical *DataItem
+// pointers in the same order. mergeLayers starts from the active
+// memtable's set and keeps those pointers unless another layer's version
+// supersedes one or survives beside them, so pointer identity is exactly
+// "no other layer changed the answer".
+func sameVersions(a, b []*model.DataItem) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // WaitForPendingFlushes blocks until every currently in-flight background

@@ -361,6 +361,18 @@ func (s *SSTable) GetAll(key string) ([]*model.DataItem, bool, error) {
 	return items, true, nil
 }
 
+// Keys returns every distinct key in this SSTable, in sorted order. It
+// reads only the in-memory index, never the file.
+func (s *SSTable) Keys() []string {
+	keys := make([]string, 0, len(s.index))
+	for _, ie := range s.index {
+		if len(keys) == 0 || keys[len(keys)-1] != ie.Key { // index is sorted; siblings repeat a key
+			keys = append(keys, ie.Key)
+		}
+	}
+	return keys
+}
+
 // Get is a convenience wrapper for the common case of a key with exactly
 // one version. If the key has multiple sibling versions, it returns the
 // first one found — callers that need to correctly handle unresolved
