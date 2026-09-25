@@ -17,13 +17,14 @@ import (
 	"distributed-kv-datastore/internal/store"
 )
 
-// Engine orchestrates WAL, MemTable(s), SSTables, and the Manifest for one
-// node's local storage. Get is single-value-per-key: it returns the
-// newest version it finds and does NOT surface siblings; that logic lives
-// in store.DataStore/resolve(). Compaction does merge versions causally
-// (via store.MergeSiblings), so a compacted SSTable can hold siblings, of
-// which Get returns the first. Wiring DataStore to use Engine as its
-// backing store is a separate future integration step.
+// StorageEngine orchestrates WAL, MemTable(s), SSTables, and the Manifest
+// for one node's local storage. Get is single-value-per-key: it returns
+// the newest version it finds and does NOT surface siblings; that logic
+// lives in store.DataStore/resolve(). Compaction does merge versions
+// causally (via store.MergeSiblings), so a compacted SSTable can hold
+// siblings, of which Get returns the first. Wiring DataStore to use
+// StorageEngine as its backing store is a separate future integration
+// step.
 //
 // Known limitations, documented deliberately rather than over-built:
 //   - Only one flush runs at a time. If a new Put crosses the memtable
@@ -41,12 +42,12 @@ import (
 //     already superseded by the version it arrived after, so compaction
 //     correctly drops it; it's Get's arrival-order answer before
 //     compaction that is wrong in that case. Resolving versions causally
-//     in Engine.Get (the deferred multi-sibling follow-up) removes the
-//     discrepancy.
+//     in StorageEngine.Get (the deferred multi-sibling follow-up) removes
+//     the discrepancy.
 //   - .sst files left behind by a failed flush or compaction (written but
 //     never registered, or unregistered but not yet deleted) are never
 //     loaded, but are also never cleaned up.
-type Engine struct {
+type StorageEngine struct {
 	mu       sync.RWMutex
 	active   *memtable.MemTable
 	flushing *memtable.MemTable // non-nil only while a flush is in progress
@@ -73,11 +74,11 @@ type Engine struct {
 	filesMu sync.RWMutex
 }
 
-// Open creates or opens an Engine rooted at dataDir: replays the WAL to
-// reconstruct the active memtable, then loads every SSTable the Manifest
-// records as live. On any error, every resource already opened is closed
-// before returning.
-func Open(dataDir string, maxMemtableBytes int) (_ *Engine, err error) {
+// Open creates or opens a StorageEngine rooted at dataDir: replays the
+// WAL to reconstruct the active memtable, then loads every SSTable the
+// Manifest records as live. On any error, every resource already opened
+// is closed before returning.
+func Open(dataDir string, maxMemtableBytes int) (_ *StorageEngine, err error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("engine: create data dir %s: %w", dataDir, err)
 	}
@@ -102,7 +103,7 @@ func Open(dataDir string, maxMemtableBytes int) (_ *Engine, err error) {
 		}
 	}()
 
-	e := &Engine{
+	e := &StorageEngine{
 		active:   memtable.New(maxMemtableBytes),
 		wal:      w,
 		manifest: mf,
@@ -130,7 +131,7 @@ func Open(dataDir string, maxMemtableBytes int) (_ *Engine, err error) {
 // which could not distinguish "every .sst file physically present" from
 // "every SSTable that's actually current" once compaction can leave
 // obsolete files behind across a crash.
-func (e *Engine) loadLiveSSTables() error {
+func (e *StorageEngine) loadLiveSSTables() error {
 	ids := e.manifest.LiveIDs()
 	sort.Strings(ids) // IDs embed a nanosecond timestamp: lexicographic == chronological
 
@@ -147,7 +148,7 @@ func (e *Engine) loadLiveSSTables() error {
 
 // Put durably writes key/item: WAL append+fsync first, then the in-memory
 // insert — the WAL append is the true point of durability.
-func (e *Engine) Put(key string, item *store.DataItem) error {
+func (e *StorageEngine) Put(key string, item *store.DataItem) error {
 	if err := e.wal.Append(wal.Entry{Key: key, Item: item}); err != nil {
 		return fmt.Errorf("engine: wal append for key %q: %w", key, err)
 	}
@@ -180,7 +181,7 @@ func (e *Engine) Put(key string, item *store.DataItem) error {
 // are newer) so they stay visible to Get and are retried by the next
 // flush. Flush errors are not otherwise reported; the data also remains
 // recoverable from the WAL on restart.
-func (e *Engine) flush(frozen *memtable.MemTable) {
+func (e *StorageEngine) flush(frozen *memtable.MemTable) {
 	defer e.flushWG.Done()
 
 	entries := frozen.Snapshot() // read-only: frozen stays queryable throughout the write below
@@ -210,7 +211,7 @@ func (e *Engine) flush(frozen *memtable.MemTable) {
 // guaranteed the file itself is fully, safely on disk. If the Manifest
 // write fails, the .sst file is left behind as a harmless orphan: never
 // registered as live, so never loaded on restart.
-func (e *Engine) writeAndRegister(entries []memtable.Entry) (*sstable.SSTable, error) {
+func (e *StorageEngine) writeAndRegister(entries []memtable.Entry) (*sstable.SSTable, error) {
 	sst, err := sstable.Write(e.dataDir, entries)
 	if err != nil {
 		return nil, err
@@ -224,7 +225,7 @@ func (e *Engine) writeAndRegister(entries []memtable.Entry) (*sstable.SSTable, e
 // Get checks the active memtable, then the in-flight frozen memtable (if
 // any), then every SSTable newest-to-oldest (each of which cheaply rules
 // itself out via a range check and Bloom filter before touching disk).
-func (e *Engine) Get(key string) (*store.DataItem, bool, error) {
+func (e *StorageEngine) Get(key string) (*store.DataItem, bool, error) {
 	e.filesMu.RLock()
 	defer e.filesMu.RUnlock()
 
@@ -258,7 +259,7 @@ func (e *Engine) Get(key string) (*store.DataItem, bool, error) {
 
 // WaitForPendingFlushes blocks until every currently in-flight background
 // flush completes. Intended for tests and graceful shutdown.
-func (e *Engine) WaitForPendingFlushes() {
+func (e *StorageEngine) WaitForPendingFlushes() {
 	e.flushWG.Wait()
 }
 
@@ -283,7 +284,7 @@ func (e *Engine) WaitForPendingFlushes() {
 // Merging and writing happen without e.mu, like flush: sources are
 // immutable and only Compact removes them, so they can't change
 // underneath it. Only the swap holds e.mu.
-func (e *Engine) Compact() error {
+func (e *StorageEngine) Compact() error {
 	e.compactMu.Lock()
 	defer e.compactMu.Unlock()
 	if e.closed {
@@ -355,7 +356,7 @@ func (e *Engine) Compact() error {
 // name behind (e.g. registered but its sources never removed), so keep
 // extending the suffix until the name is free; each extension still sorts
 // after the one before it.
-func (e *Engine) compactedID(newestSourceID string) string {
+func (e *StorageEngine) compactedID(newestSourceID string) string {
 	id := newestSourceID + "_c"
 	for {
 		if _, err := os.Stat(filepath.Join(e.dataDir, id+".sst")); os.IsNotExist(err) {
@@ -396,7 +397,7 @@ func replaceRun(sstables, run []*sstable.SSTable, merged *sstable.SSTable) ([]*s
 // flush errors: every failure path leaves data intact and correctly
 // ordered, and the next tick simply tries again. Cancel ctx before or
 // after Close; once Close has run, ticks are no-ops.
-func (e *Engine) StartCompactionLoop(ctx context.Context, interval time.Duration) {
+func (e *StorageEngine) StartCompactionLoop(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		defer ticker.Stop()
@@ -411,7 +412,7 @@ func (e *Engine) StartCompactionLoop(ctx context.Context, interval time.Duration
 	}()
 }
 
-func (e *Engine) Close() error {
+func (e *StorageEngine) Close() error {
 	e.WaitForPendingFlushes()
 
 	e.compactMu.Lock() // waits out any in-progress compaction

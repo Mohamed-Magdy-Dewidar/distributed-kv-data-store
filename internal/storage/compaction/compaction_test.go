@@ -160,9 +160,9 @@ func TestMergePreservesGenuineConcurrentSiblings(t *testing.T) {
 }
 
 func TestMergeEqualClocksKeepNewestSource(t *testing.T) {
-	// Engine overwrites don't have to advance the vector clock, so two
-	// versions of a key can carry Equal clocks. Merge's contract is that
-	// sources come newest first, so the newest write wins the tie.
+	// StorageEngine overwrites don't have to advance the vector clock, so
+	// two versions of a key can carry Equal clocks. Merge's contract is
+	// that sources come newest first, so the newest write wins the tie.
 	vc := clockOf(map[string]uint32{"node-1": 1})
 	older := writeSST(t, memtable.Entry{Key: "k", Item: itemWithClock("older", vc, "node-1")})
 	newer := writeSST(t, memtable.Entry{Key: "k", Item: itemWithClock("newer", clockOf(vc.Snapshot()), "node-1")})
@@ -224,7 +224,7 @@ func TestSelectTierReturnsNilBelowMinTierSize(t *testing.T) {
 }
 
 func TestSelectTierIdentifiesQualifyingTier(t *testing.T) {
-	// Newest first, as Engine orders them: minTierSize fresh small files,
+	// Newest first, as StorageEngine orders them: minTierSize fresh small files,
 	// then one older, much larger (already-compacted-sized) file.
 	var small []*sstable.SSTable
 	for i := 0; i < minTierSize; i++ {

@@ -31,17 +31,17 @@ func tierOf(size int64) int {
 }
 
 // SelectTierForCompaction returns the SSTables to compact next, or nil if
-// nothing qualifies. sstables must be ordered newest first (Engine's
-// order), and the result keeps that order.
+// nothing qualifies. sstables must be ordered newest first
+// (StorageEngine's order), and the result keeps that order.
 //
 // A candidate is a maximal run of *adjacent* SSTables (in age order) that
 // share a size tier and number at least minTierSize. Adjacency is required
-// for correctness, not tidiness: Engine.Get resolves a key by the newest
-// SSTable containing it, so merging same-tier files A and C while skipping
-// B (between them in age, but in a different tier) would put the merged
-// result on the wrong side of B for at least one of them — either hiding
-// B's newer values behind C's older ones, or hiding A's newer values
-// behind B's. A contiguous run can be replaced in place by its merge
+// for correctness, not tidiness: StorageEngine.Get resolves a key by the
+// newest SSTable containing it, so merging same-tier files A and C while
+// skipping B (between them in age, but in a different tier) would put the
+// merged result on the wrong side of B for at least one of them — either
+// hiding B's newer values behind C's older ones, or hiding A's newer
+// values behind B's. A contiguous run can be replaced in place by its merge
 // without changing what any Get returns.
 //
 // If several runs qualify, the longest wins (it removes the most files);
@@ -88,11 +88,11 @@ func SelectTierForCompaction(sstables []*sstable.SSTable) ([]*sstable.SSTable, e
 // surviving set in any order (a version dominated by an already-dropped
 // one is also dominated by whatever dropped it) with one exception:
 // versions with Equal vector clocks, where resolve keeps whichever it saw
-// first. Engine writes aren't required to advance the clock, so Equal
-// clocks are normal for overwrites — newest-first order makes the most
-// recent write win those ties, matching what Engine.Get returned before
-// compaction. It also keeps the newest surviving sibling first, which is
-// the one sstable.Get (and so Engine.Get) returns.
+// first. StorageEngine writes aren't required to advance the clock, so
+// Equal clocks are normal for overwrites — newest-first order makes the
+// most recent write win those ties, matching what StorageEngine.Get
+// returned before compaction. It also keeps the newest surviving sibling
+// first, which is the one sstable.Get (and so StorageEngine.Get) returns.
 //
 // With no sources, Merge returns an empty result and a nil error.
 func Merge(sources []*sstable.SSTable) ([]memtable.Entry, error) {

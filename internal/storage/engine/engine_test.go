@@ -99,7 +99,7 @@ func TestFlushMakesDataAvailableFromSSTableAfterMemtableIsCleared(t *testing.T) 
 }
 
 func TestGetFindsDataInFlushingMemtableDuringFlushWindow(t *testing.T) {
-	// This directly tests the property discussed before writing Engine:
+	// This directly tests the property discussed before writing StorageEngine:
 	// data must remain visible via the frozen memtable for the whole
 	// flush duration, not just before/after it.
 	e, err := Open(t.TempDir(), 10)
@@ -254,7 +254,7 @@ func TestOrphanedSSTableNotRegisteredInManifestIsIgnoredOnRestart(t *testing.T) 
 	}
 
 	// Manually write a well-formed .sst file directly, bypassing
-	// Engine/Manifest entirely — as if a flush's sstable.Write succeeded
+	// StorageEngine/Manifest entirely — as if a flush's sstable.Write succeeded
 	// but the process crashed before manifest.Add ever ran.
 	orphan, err := sstable.Write(dir, []memtable.Entry{
 		{Key: "orphaned-key", Item: sampleItem("should-not-be-visible")},
