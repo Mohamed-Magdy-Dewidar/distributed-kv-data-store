@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/memtable"
-	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
@@ -15,7 +15,7 @@ func sampleEntry(key string, value any) memtable.Entry {
 	vc.Increment("node-1")
 	return memtable.Entry{
 		Key: key,
-		Item: &store.DataItem{
+		Item: &model.DataItem{
 			Value:         value,
 			VectorClock:   vc,
 			LastUpdatedBy: "node-1",
@@ -145,7 +145,7 @@ func TestVectorClockRoundTrips(t *testing.T) {
 
 	entry := memtable.Entry{
 		Key: "foo",
-		Item: &store.DataItem{
+		Item: &model.DataItem{
 			Value:         "bar",
 			VectorClock:   vc,
 			LastUpdatedBy: "node-1",
@@ -293,8 +293,8 @@ func TestGetAllReturnsMultipleSiblingsForSameKey(t *testing.T) {
 	// Two genuinely concurrent siblings for the same key, written
 	// adjacently since Write requires sorted input and both share a key.
 	entries := []memtable.Entry{
-		{Key: "contested", Item: &store.DataItem{Value: "from-node-1", VectorClock: vcA, LastUpdatedBy: "node-1"}},
-		{Key: "contested", Item: &store.DataItem{Value: "from-node-2", VectorClock: vcB, LastUpdatedBy: "node-2"}},
+		{Key: "contested", Item: &model.DataItem{Value: "from-node-1", VectorClock: vcA, LastUpdatedBy: "node-1"}},
+		{Key: "contested", Item: &model.DataItem{Value: "from-node-2", VectorClock: vcB, LastUpdatedBy: "node-2"}},
 		sampleEntry("zzz-other-key", "unrelated"),
 	}
 
@@ -328,8 +328,8 @@ func TestGetReturnsOneOfMultipleSiblingsAsConvenienceWrapper(t *testing.T) {
 	vcB.Increment("node-2")
 
 	entries := []memtable.Entry{
-		{Key: "contested", Item: &store.DataItem{Value: "a", VectorClock: vcA, LastUpdatedBy: "node-1"}},
-		{Key: "contested", Item: &store.DataItem{Value: "b", VectorClock: vcB, LastUpdatedBy: "node-2"}},
+		{Key: "contested", Item: &model.DataItem{Value: "a", VectorClock: vcA, LastUpdatedBy: "node-1"}},
+		{Key: "contested", Item: &model.DataItem{Value: "b", VectorClock: vcB, LastUpdatedBy: "node-2"}},
 	}
 
 	sst, err := Write(dir, entries)

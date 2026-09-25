@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync"
 
-	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/model"
 )
 
 // headerSize is the fixed-size prefix before every record's payload:
@@ -20,7 +20,7 @@ const headerSize = 8
 // the same DataItem type the rest of the system already operates on.
 type Entry struct {
 	Key  string
-	Item *store.DataItem
+	Item *model.DataItem
 }
 
 // WAL is an append-only, crash-safe log file. Every Append fsyncs before

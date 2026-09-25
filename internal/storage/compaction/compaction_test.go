@@ -4,14 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
-	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
-func itemWithClock(value any, vc *vectorclock.VectorClock, by string) *store.DataItem {
-	return &store.DataItem{Value: value, VectorClock: vc, LastUpdatedBy: by}
+func itemWithClock(value any, vc *vectorclock.VectorClock, by string) *model.DataItem {
+	return &model.DataItem{Value: value, VectorClock: vc, LastUpdatedBy: by}
 }
 
 func clockOf(counts map[string]uint32) *vectorclock.VectorClock {
@@ -101,7 +101,7 @@ func TestMergePreservesTombstone(t *testing.T) {
 	deleted.Increment("node-1")
 
 	valueSrc := writeSST(t, memtable.Entry{Key: "k", Item: itemWithClock("alive", written, "node-1")})
-	tombSrc := writeSST(t, memtable.Entry{Key: "k", Item: &store.DataItem{
+	tombSrc := writeSST(t, memtable.Entry{Key: "k", Item: &model.DataItem{
 		VectorClock:   deleted,
 		LastUpdatedBy: "node-1",
 		IsDeleted:     true,

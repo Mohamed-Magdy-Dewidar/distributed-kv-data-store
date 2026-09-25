@@ -4,14 +4,14 @@ import (
 	"sync"
 	"testing"
 
-	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
-func sampleItem(value any) *store.DataItem {
+func sampleItem(value any) *model.DataItem {
 	vc := vectorclock.New()
 	vc.Increment("node-1")
-	return &store.DataItem{
+	return &model.DataItem{
 		Value:         value,
 		VectorClock:   vc,
 		LastUpdatedBy: "node-1",

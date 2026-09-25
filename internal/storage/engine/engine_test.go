@@ -10,17 +10,17 @@ import (
 	"testing"
 	"time"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/manifest"
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
-	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
-func sampleItem(value any) *store.DataItem {
+func sampleItem(value any) *model.DataItem {
 	vc := vectorclock.New()
 	vc.Increment("node-1")
-	return &store.DataItem{
+	return &model.DataItem{
 		Value:         value,
 		VectorClock:   vc,
 		LastUpdatedBy: "node-1",
@@ -358,8 +358,8 @@ func TestFailedManifestAddDoesNotStallFutureFlushes(t *testing.T) {
 	}
 }
 
-func itemWithClock(value any, counts map[string]uint32) *store.DataItem {
-	return &store.DataItem{
+func itemWithClock(value any, counts map[string]uint32) *model.DataItem {
+	return &model.DataItem{
 		Value:         value,
 		VectorClock:   vectorclock.FromSnapshot(counts),
 		LastUpdatedBy: "node-1",
@@ -379,7 +379,7 @@ func TestCompactMergesFlushedSSTablesAndDropsSupersededVersions(t *testing.T) {
 	// version to drop, not just distinct keys to concatenate.
 	puts := []struct {
 		key  string
-		item *store.DataItem
+		item *model.DataItem
 	}{
 		{"k0", itemWithClock("k0-v1", map[string]uint32{"node-1": 1})},
 		{"k1", sampleItem("value-k1")},

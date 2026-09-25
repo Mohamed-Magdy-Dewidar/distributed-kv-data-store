@@ -1,13 +1,16 @@
 package store
 
-import "distributed-kv-datastore/internal/vectorclock"
+import (
+	"distributed-kv-datastore/internal/model"
+	"distributed-kv-datastore/internal/vectorclock"
+)
 
 // resolve folds an incoming write against the existing version set for a
 // key. This is the Dynamo-style sibling logic: an incoming write can
 // supersede existing items, be superseded by them, be a duplicate, or
 // survive alongside them as a genuine concurrent sibling.
-func resolve(existing []*DataItem, incoming *DataItem) []*DataItem {
-	var survivors []*DataItem
+func resolve(existing []*model.DataItem, incoming *model.DataItem) []*model.DataItem {
+	var survivors []*model.DataItem
 	incomingSurvives := true
 
 	for _, item := range existing {
@@ -34,7 +37,7 @@ func resolve(existing []*DataItem, incoming *DataItem) []*DataItem {
 // unionVectorClock computes the causal union across a sibling set — the
 // vector clock a client's next write should build on to dominate all of
 // them at once.
-func unionVectorClock(items []*DataItem) map[string]uint32 {
+func unionVectorClock(items []*model.DataItem) map[string]uint32 {
 	union := make(map[string]uint32)
 	for _, item := range items {
 		for node, version := range item.VectorClock.Snapshot() {
@@ -50,7 +53,7 @@ func unionVectorClock(items []*DataItem) map[string]uint32 {
 // using the same conflict-resolution logic as a local Put. Used by a
 // Coordinator merging FetchItem responses from several peers during a
 // quorum read.
-func MergeSiblings(a, b []*DataItem) []*DataItem {
+func MergeSiblings(a, b []*model.DataItem) []*model.DataItem {
 	merged := a
 	for _, item := range b {
 		merged = resolve(merged, item)

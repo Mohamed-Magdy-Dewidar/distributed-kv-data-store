@@ -15,8 +15,8 @@ import (
 
 	"github.com/bits-and-blooms/bloom/v3"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/memtable"
-	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
@@ -76,7 +76,7 @@ func fromRecord(r record) (memtable.Entry, error) {
 	}
 	return memtable.Entry{
 		Key: r.Key,
-		Item: &store.DataItem{
+		Item: &model.DataItem{
 			Value:         value,
 			VectorClock:   vectorclock.FromSnapshot(r.VectorClock),
 			LastUpdatedBy: r.LastUpdatedBy,
@@ -323,7 +323,7 @@ func Open(path string) (*SSTable, error) {
 // compaction merging genuinely conflicting writes — can legitimately
 // have more than one). A cheap range check and Bloom filter test happen
 // first, entirely in memory, before any disk I/O.
-func (s *SSTable) GetAll(key string) ([]*store.DataItem, bool, error) {
+func (s *SSTable) GetAll(key string) ([]*model.DataItem, bool, error) {
 	if key < s.MinKey || key > s.MaxKey {
 		return nil, false, nil
 	}
@@ -349,7 +349,7 @@ func (s *SSTable) GetAll(key string) ([]*store.DataItem, bool, error) {
 	}
 	defer f.Close()
 
-	items := make([]*store.DataItem, 0, end-start)
+	items := make([]*model.DataItem, 0, end-start)
 	for i := start; i < end; i++ {
 		entry, err := decodeRecordAt(f, s.index[i].Offset)
 		if err != nil {
@@ -365,7 +365,7 @@ func (s *SSTable) GetAll(key string) ([]*store.DataItem, bool, error) {
 // one version. If the key has multiple sibling versions, it returns the
 // first one found — callers that need to correctly handle unresolved
 // siblings must use GetAll instead.
-func (s *SSTable) Get(key string) (*store.DataItem, bool, error) {
+func (s *SSTable) Get(key string) (*model.DataItem, bool, error) {
 	items, found, err := s.GetAll(key)
 	if err != nil || !found || len(items) == 0 {
 		return nil, found, err

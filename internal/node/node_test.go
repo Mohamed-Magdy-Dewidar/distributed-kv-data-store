@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/rpc"
-	"distributed-kv-datastore/internal/store"
 )
 
 func startTestNode(t *testing.T, id, address string, neighbors map[string]string) *Node {
@@ -84,7 +84,7 @@ func TestReplicationConvergesBothDirections(t *testing.T) {
 			len(finalNode1), len(finalNode2))
 	}
 
-	valuesOf := func(items []*store.DataItem) map[string]bool {
+	valuesOf := func(items []*model.DataItem) map[string]bool {
 		set := make(map[string]bool)
 		for _, it := range items {
 			set[it.Value.(string)] = true

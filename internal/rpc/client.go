@@ -8,8 +8,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"distributed-kv-datastore/internal/merkle"
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/rpc/pb"
-	"distributed-kv-datastore/internal/store"
 )
 
 // Client wraps a gRPC connection to one peer's KVReplication service.
@@ -33,7 +33,7 @@ func (c *Client) Close() error {
 }
 
 // FetchItem retrieves the sibling set this peer currently holds for key.
-func (c *Client) FetchItem(ctx context.Context, key string) ([]*store.DataItem, bool, error) {
+func (c *Client) FetchItem(ctx context.Context, key string) ([]*model.DataItem, bool, error) {
 	resp, err := c.stub.FetchItem(ctx, &pb.FetchItemRequest{Key: key})
 	if err != nil {
 		return nil, false, err
@@ -42,7 +42,7 @@ func (c *Client) FetchItem(ctx context.Context, key string) ([]*store.DataItem, 
 		return nil, false, nil
 	}
 
-	items := make([]*store.DataItem, 0, len(resp.Items))
+	items := make([]*model.DataItem, 0, len(resp.Items))
 	for _, pi := range resp.Items {
 		item, err := fromProtoDataItem(pi)
 		if err != nil {
@@ -55,7 +55,7 @@ func (c *Client) FetchItem(ctx context.Context, key string) ([]*store.DataItem, 
 
 // Replicate sends one or more sibling items to this peer for key, in a
 // single round-trip.
-func (c *Client) Replicate(ctx context.Context, key string, items []*store.DataItem) error {
+func (c *Client) Replicate(ctx context.Context, key string, items []*model.DataItem) error {
 	protoItems := make([]*pb.DataItem, 0, len(items))
 	for _, item := range items {
 		protoItem, err := toProtoDataItem(item)

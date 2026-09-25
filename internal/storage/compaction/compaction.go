@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
 	"distributed-kv-datastore/internal/store"
@@ -96,7 +97,7 @@ func SelectTierForCompaction(sstables []*sstable.SSTable) ([]*sstable.SSTable, e
 //
 // With no sources, Merge returns an empty result and a nil error.
 func Merge(sources []*sstable.SSTable) ([]memtable.Entry, error) {
-	byKey := make(map[string][]*store.DataItem)
+	byKey := make(map[string][]*model.DataItem)
 
 	for _, src := range sources {
 		entries, err := src.All()
@@ -104,7 +105,7 @@ func Merge(sources []*sstable.SSTable) ([]memtable.Entry, error) {
 			return nil, fmt.Errorf("compaction: read %s: %w", src.Path, err)
 		}
 		for _, e := range entries {
-			byKey[e.Key] = store.MergeSiblings(byKey[e.Key], []*store.DataItem{e.Item})
+			byKey[e.Key] = store.MergeSiblings(byKey[e.Key], []*model.DataItem{e.Item})
 		}
 	}
 

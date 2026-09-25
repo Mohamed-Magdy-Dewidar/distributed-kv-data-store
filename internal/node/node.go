@@ -8,6 +8,7 @@ import (
 
 	"distributed-kv-datastore/internal/hashring"
 	"distributed-kv-datastore/internal/merkle"
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/rpc"
 	"distributed-kv-datastore/internal/store"
 )
@@ -102,8 +103,8 @@ type replicateResult struct {
 func (n *Node) Put(ctx context.Context, key string, value any, context map[string]uint32) error {
 	isReplica, peers := n.isReplicaFor(key)
 
-	var prevVersions []*store.DataItem
-	var item *store.DataItem
+	var prevVersions []*model.DataItem
+	var item *model.DataItem
 	if isReplica {
 		prevVersions, _ = n.Store.Get(key)
 		item = n.Store.Put(key, value, context)
@@ -126,7 +127,7 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 	results := make(chan replicateResult, len(peers))
 	for _, peerID := range peers {
 		go func(peerID string) {
-			err := n.Replicate(ctx, peerID, key, []*store.DataItem{item})
+			err := n.Replicate(ctx, peerID, key, []*model.DataItem{item})
 			results <- replicateResult{peerID: peerID, err: err}
 		}(peerID)
 	}
@@ -174,7 +175,7 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 
 type fetchResult struct {
 	peerID string
-	items  []*store.DataItem
+	items  []*model.DataItem
 	err    error
 }
 
@@ -183,10 +184,10 @@ type fetchResult struct {
 //
 // When n is NOT one of key's replicas, it never had a local copy to merge
 // in, and peers is the full N-node preference list — see isReplicaFor.
-func (n *Node) Get(ctx context.Context, key string) ([]*store.DataItem, error) {
+func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 	isReplica, peers := n.isReplicaFor(key)
 
-	var merged []*store.DataItem
+	var merged []*model.DataItem
 	totalNodes := len(peers)
 	responses := 0
 	if isReplica {
@@ -264,7 +265,7 @@ func (n *Node) getOrDialClient(peerID string) (*rpc.Client, error) {
 	return client, nil
 }
 
-func (n *Node) FetchItem(ctx context.Context, peerID string, key string) ([]*store.DataItem, bool, error) {
+func (n *Node) FetchItem(ctx context.Context, peerID string, key string) ([]*model.DataItem, bool, error) {
 	client, err := n.getOrDialClient(peerID)
 	if err != nil {
 		return nil, false, err
@@ -275,7 +276,7 @@ func (n *Node) FetchItem(ctx context.Context, peerID string, key string) ([]*sto
 const antiEntropyNumBuckets = 16
 
 // Replicate now forwards a sibling set, matching Client.Replicate's widened signature.
-func (n *Node) Replicate(ctx context.Context, peerID string, key string, items []*store.DataItem) error {
+func (n *Node) Replicate(ctx context.Context, peerID string, key string, items []*model.DataItem) error {
 	client, err := n.getOrDialClient(peerID)
 	if err != nil {
 		return err
@@ -378,7 +379,7 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 // contains either the exact same *DataItem pointers as one input (nothing
 // changed) or a genuinely different set (resolve() dropped or added
 // something), so pointer equality is sufficient.
-func itemSetsEqual(a, b []*store.DataItem) bool {
+func itemSetsEqual(a, b []*model.DataItem) bool {
 	if len(a) != len(b) {
 		return false
 	}

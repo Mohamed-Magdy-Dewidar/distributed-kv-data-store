@@ -6,13 +6,13 @@ import (
 
 	"github.com/google/btree"
 
-	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/model"
 )
 
 // entry is the btree.Item wrapping a key and its current DataItem.
 type entry struct {
 	key  string
-	item *store.DataItem
+	item *model.DataItem
 }
 
 func (e *entry) Less(than btree.Item) bool {
@@ -24,7 +24,7 @@ func (e *entry) Less(than btree.Item) bool {
 // `any`, so it's marshaled the same way the rest of this project already
 // serializes DataItem.Value (see internal/rpc/convert.go) rather than
 // assuming any particular concrete type.
-func estimatedSize(key string, item *store.DataItem) int {
+func estimatedSize(key string, item *model.DataItem) int {
 	valueBytes, err := json.Marshal(item.Value)
 	if err != nil {
 		// A value that can't be marshaled is a real problem elsewhere in
@@ -56,7 +56,7 @@ func New(maxBytes int) *MemTable {
 
 // Put inserts or overwrites key's entry. Returns true if the table has now
 // reached or exceeded maxBytes and should be flushed.
-func (m *MemTable) Put(key string, item *store.DataItem) bool {
+func (m *MemTable) Put(key string, item *model.DataItem) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -73,7 +73,7 @@ func (m *MemTable) Put(key string, item *store.DataItem) bool {
 }
 
 // Get returns the current item for key, if present.
-func (m *MemTable) Get(key string) (*store.DataItem, bool) {
+func (m *MemTable) Get(key string) (*model.DataItem, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -89,7 +89,7 @@ func (m *MemTable) Get(key string) (*store.DataItem, bool) {
 // btree.Item wrapper type.
 type Entry struct {
 	Key  string
-	Item *store.DataItem
+	Item *model.DataItem
 }
 
 // SnapshotAndClear freezes the current contents (returned in sorted key

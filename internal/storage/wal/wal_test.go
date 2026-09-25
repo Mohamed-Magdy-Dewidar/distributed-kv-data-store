@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
@@ -19,7 +19,7 @@ func sampleEntry(key, value string) Entry {
 	vc.Increment("node-1")
 	return Entry{
 		Key: key,
-		Item: &store.DataItem{
+		Item: &model.DataItem{
 			Value:         value,
 			VectorClock:   vc,
 			LastUpdatedBy: "node-1",

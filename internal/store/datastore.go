@@ -3,26 +3,20 @@ package store
 import (
 	"sync"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
-type DataItem struct {
-	Value         any
-	VectorClock   *vectorclock.VectorClock
-	LastUpdatedBy string
-	IsDeleted     bool
-}
-
 type DataStore struct {
 	id    string
-	store map[string][]*DataItem
+	store map[string][]*model.DataItem
 	mu    sync.Mutex
 }
 
 func NewDataStore(id string) *DataStore {
 	return &DataStore{
 		id:    id,
-		store: make(map[string][]*DataItem),
+		store: make(map[string][]*model.DataItem),
 	}
 }
 
@@ -40,7 +34,7 @@ func (ds *DataStore) Keys() []string {
 	return keys
 }
 
-func (ds *DataStore) Get(key string) ([]*DataItem, bool) {
+func (ds *DataStore) Get(key string) ([]*model.DataItem, bool) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -51,7 +45,7 @@ func (ds *DataStore) Get(key string) ([]*DataItem, bool) {
 	return items, len(items) > 0
 }
 
-func (ds *DataStore) GetLiveItems(key string) ([]*DataItem, bool) {
+func (ds *DataStore) GetLiveItems(key string) ([]*model.DataItem, bool) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -60,7 +54,7 @@ func (ds *DataStore) GetLiveItems(key string) ([]*DataItem, bool) {
 		return nil, false
 	}
 
-	var aliveItems []*DataItem
+	var aliveItems []*model.DataItem
 	for _, item := range items {
 		if !item.IsDeleted {
 			aliveItems = append(aliveItems, item)
@@ -68,7 +62,7 @@ func (ds *DataStore) GetLiveItems(key string) ([]*DataItem, bool) {
 	}
 	return aliveItems, len(aliveItems) > 0
 }
-func (ds *DataStore) Put(key string, value any, context map[string]uint32) *DataItem {
+func (ds *DataStore) Put(key string, value any, context map[string]uint32) *model.DataItem {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -79,14 +73,14 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *Data
 		base = unionVectorClock(existing)
 	}
 
-	incoming := &DataItem{
+	incoming := &model.DataItem{
 		Value:         value,
 		VectorClock:   vectorclock.BuildFromContext(base, ds.id),
 		LastUpdatedBy: ds.id,
 	}
 
 	if !ok {
-		ds.store[key] = []*DataItem{incoming}
+		ds.store[key] = []*model.DataItem{incoming}
 		return incoming
 	}
 	ds.store[key] = resolve(existing, incoming)
@@ -98,7 +92,7 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *Data
 // writing it into the store. For a coordinator that isn't itself one of
 // key's replicas: it still needs to hand replicas a properly versioned
 // item, but must not end up holding a local copy of its own.
-func (ds *DataStore) BuildItem(key string, value any, context map[string]uint32) *DataItem {
+func (ds *DataStore) BuildItem(key string, value any, context map[string]uint32) *model.DataItem {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -109,7 +103,7 @@ func (ds *DataStore) BuildItem(key string, value any, context map[string]uint32)
 		}
 	}
 
-	return &DataItem{
+	return &model.DataItem{
 		Value:         value,
 		VectorClock:   vectorclock.BuildFromContext(base, ds.id),
 		LastUpdatedBy: ds.id,
@@ -132,7 +126,7 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 		base = unionVectorClock(existing)
 	}
 
-	tombstone := &DataItem{
+	tombstone := &model.DataItem{
 		Value:         nil,
 		VectorClock:   vectorclock.BuildFromContext(base, ds.id),
 		LastUpdatedBy: ds.id,
@@ -149,7 +143,7 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 // semantic delete — so it must not itself be recorded as a new version. A
 // nil/empty items removes the key entirely, restoring "no prior write"
 // rather than leaving behind an empty-but-present slice.
-func (ds *DataStore) RestoreVersions(key string, items []*DataItem) {
+func (ds *DataStore) RestoreVersions(key string, items []*model.DataItem) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -164,7 +158,7 @@ func (ds *DataStore) RestoreVersions(key string, items []*DataItem) {
 // the same conflict-resolution path a local Put uses. This owns its own
 // locking, so a caller (Node.Replicate) never has to reach into DataStore
 // internals directly — the encapsulation the old direct field access broke.
-func (ds *DataStore) MergeReplicated(key string, item *DataItem) {
+func (ds *DataStore) MergeReplicated(key string, item *model.DataItem) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/vectorclock"
 	"sync"
 	"testing"
@@ -111,20 +112,20 @@ func TestConcurrentWritersSameNodeSerialize(t *testing.T) {
 
 func TestResolveHandConstructedSiblings(t *testing.T) {
 	base := map[string]uint32{"node-1": 1, "node-2": 1}
-	itemA := &DataItem{Value: "value-from-node-1", VectorClock: vectorclock.BuildFromContext(base, "node-1")}
-	itemB := &DataItem{Value: "value-from-node-2", VectorClock: vectorclock.BuildFromContext(base, "node-2")}
+	itemA := &model.DataItem{Value: "value-from-node-1", VectorClock: vectorclock.BuildFromContext(base, "node-1")}
+	itemB := &model.DataItem{Value: "value-from-node-2", VectorClock: vectorclock.BuildFromContext(base, "node-2")}
 
 	if rel := itemA.VectorClock.Compare(itemB.VectorClock); rel != vectorclock.Concurrent {
 		t.Fatalf("expected Concurrent, got %v", rel)
 	}
 
-	siblings := resolve([]*DataItem{itemA}, itemB)
+	siblings := resolve([]*model.DataItem{itemA}, itemB)
 	if len(siblings) != 2 {
 		t.Fatalf("expected 2 siblings, got %d", len(siblings))
 	}
 
 	mergedContext := unionVectorClock(siblings)
-	resolved := &DataItem{Value: "client-merged-value", VectorClock: vectorclock.BuildFromContext(mergedContext, "node-1")}
+	resolved := &model.DataItem{Value: "client-merged-value", VectorClock: vectorclock.BuildFromContext(mergedContext, "node-1")}
 	final := resolve(siblings, resolved)
 
 	if len(final) != 1 {
@@ -142,11 +143,11 @@ func TestMergeReplicatedCreatesSiblingsOnGenuineConflict(t *testing.T) {
 	ds := NewDataStore("node-2")
 	base := map[string]uint32{"node-1": 1, "node-2": 1}
 
-	ds.store["foo"] = []*DataItem{
+	ds.store["foo"] = []*model.DataItem{
 		{Value: "local-value", VectorClock: vectorclock.BuildFromContext(base, "node-2")},
 	}
 
-	incoming := &DataItem{
+	incoming := &model.DataItem{
 		Value:       "remote-value",
 		VectorClock: vectorclock.BuildFromContext(base, "node-1"),
 	}

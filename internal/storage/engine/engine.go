@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/compaction"
 	"distributed-kv-datastore/internal/storage/manifest"
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
 	"distributed-kv-datastore/internal/storage/wal"
-	"distributed-kv-datastore/internal/store"
 )
 
 // StorageEngine orchestrates WAL, MemTable(s), SSTables, and the Manifest
@@ -148,7 +148,7 @@ func (e *StorageEngine) loadLiveSSTables() error {
 
 // Put durably writes key/item: WAL append+fsync first, then the in-memory
 // insert — the WAL append is the true point of durability.
-func (e *StorageEngine) Put(key string, item *store.DataItem) error {
+func (e *StorageEngine) Put(key string, item *model.DataItem) error {
 	if err := e.wal.Append(wal.Entry{Key: key, Item: item}); err != nil {
 		return fmt.Errorf("engine: wal append for key %q: %w", key, err)
 	}
@@ -225,7 +225,7 @@ func (e *StorageEngine) writeAndRegister(entries []memtable.Entry) (*sstable.SST
 // Get checks the active memtable, then the in-flight frozen memtable (if
 // any), then every SSTable newest-to-oldest (each of which cheaply rules
 // itself out via a range check and Bloom filter before touching disk).
-func (e *StorageEngine) Get(key string) (*store.DataItem, bool, error) {
+func (e *StorageEngine) Get(key string) (*model.DataItem, bool, error) {
 	e.filesMu.RLock()
 	defer e.filesMu.RUnlock()
 

@@ -8,6 +8,7 @@ import (
 	"math/bits"
 	"sort"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/store"
 )
 
@@ -65,7 +66,7 @@ func BucketFor(key string, numBuckets int) int {
 // single DataItem — Value, sorted VectorClock, LastUpdatedBy, IsDeleted —
 // so two replicas with matching values but divergent causal histories are
 // still correctly flagged as out of sync.
-func canonicalItemString(item *store.DataItem) string {
+func canonicalItemString(item *model.DataItem) string {
 	valueBytes, err := json.Marshal(item.Value)
 	if err != nil {
 		panic(fmt.Sprintf("merkle: failed to marshal item value: %v", err))
