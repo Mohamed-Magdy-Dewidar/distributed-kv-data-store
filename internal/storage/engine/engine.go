@@ -21,7 +21,7 @@ import (
 // for one node's local storage. Get is single-value-per-key: it returns
 // the newest version it finds and does NOT surface siblings; that logic
 // lives in store.DataStore/resolve(). Compaction does merge versions
-// causally (via store.MergeSiblings), so a compacted SSTable can hold
+// causally (via versioning.MergeSiblings), so a compacted SSTable can hold
 // siblings, of which Get returns the first. Wiring DataStore to use
 // StorageEngine as its backing store is a separate future integration
 // step.
@@ -35,7 +35,7 @@ import (
 //     memtables; that's more complexity than this phase needs.
 //   - Get orders versions by arrival, compaction by causality. Before
 //     compaction, Get returns whichever version reached this engine last;
-//     after, the merged file keeps whatever store.MergeSiblings keeps. The
+//     after, the merged file keeps whatever versioning.MergeSiblings keeps. The
 //     two agree unless a later-arriving write carries a vector clock that
 //     is Before an earlier-arriving one's (e.g. a stale version delivered
 //     late by replication or anti-entropy). That write is causally older,

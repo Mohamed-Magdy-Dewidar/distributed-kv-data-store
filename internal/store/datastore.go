@@ -5,6 +5,7 @@ import (
 
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/vectorclock"
+	"distributed-kv-datastore/internal/versioning"
 )
 
 type DataStore struct {
@@ -70,7 +71,7 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *mode
 
 	base := context
 	if base == nil && ok {
-		base = unionVectorClock(existing)
+		base = versioning.UnionVectorClock(existing)
 	}
 
 	incoming := &model.DataItem{
@@ -83,7 +84,7 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *mode
 		ds.store[key] = []*model.DataItem{incoming}
 		return incoming
 	}
-	ds.store[key] = resolve(existing, incoming)
+	ds.store[key] = versioning.Resolve(existing, incoming)
 	return incoming
 }
 
@@ -99,7 +100,7 @@ func (ds *DataStore) BuildItem(key string, value any, context map[string]uint32)
 	base := context
 	if base == nil {
 		if existing, ok := ds.store[key]; ok {
-			base = unionVectorClock(existing)
+			base = versioning.UnionVectorClock(existing)
 		}
 	}
 
@@ -123,7 +124,7 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 
 	base := context
 	if base == nil {
-		base = unionVectorClock(existing)
+		base = versioning.UnionVectorClock(existing)
 	}
 
 	tombstone := &model.DataItem{
@@ -133,7 +134,7 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 		IsDeleted:     true,
 	}
 
-	ds.store[key] = resolve(existing, tombstone)
+	ds.store[key] = versioning.Resolve(existing, tombstone)
 	return true, "Key deleted"
 }
 
@@ -163,5 +164,5 @@ func (ds *DataStore) MergeReplicated(key string, item *model.DataItem) {
 	defer ds.mu.Unlock()
 
 	existing := ds.store[key]
-	ds.store[key] = resolve(existing, item)
+	ds.store[key] = versioning.Resolve(existing, item)
 }

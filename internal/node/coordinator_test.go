@@ -162,7 +162,7 @@ func TestGetQuorumMetDespiteOneNodeDown(t *testing.T) {
 // to their local Store (bypassing Node.Put/Replicate entirely — the same
 // way TestReplicationCreatesSiblingsNaturally simulates concurrent writes
 // on a partitioned cluster). Get from node-1 must fan out over the real
-// network to both peers and, via store.MergeSiblings, surface both values
+// network to both peers and, via versioning.MergeSiblings, surface both values
 // as siblings — proving the merge works across an actual RPC fan-out, not
 // just against in-memory data.
 func TestGetSurfacesGenuineSiblingConflictsAcrossNodes(t *testing.T) {

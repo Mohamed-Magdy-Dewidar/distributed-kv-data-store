@@ -11,6 +11,7 @@ import (
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/rpc"
 	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/versioning"
 )
 
 // defaultVirtualNodesPerPhysical is kept at 150 (not bumped to something
@@ -224,7 +225,7 @@ func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 				failures++
 			} else {
 				responses++
-				merged = store.MergeSiblings(merged, res.items)
+				merged = versioning.MergeSiblings(merged, res.items)
 			}
 
 			if responses >= needed {
@@ -331,7 +332,7 @@ func (n *Node) RunAntiEntropy(ctx context.Context, peerID string) error {
 
 // reconcileBucket reconciles a single divergent bucket: for every key
 // either side holds in that bucket, it fetches both sides' sibling sets,
-// merges them via store.MergeSiblings, and pushes the merged result back to
+// merges them via versioning.MergeSiblings, and pushes the merged result back to
 // whichever side differs from it.
 func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.Client, bucketIdx int) error {
 	localKeys := make(map[string]bool)
@@ -361,7 +362,7 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 			return fmt.Errorf("fetch %q from %q: %w", key, peerID, err)
 		}
 
-		merged := store.MergeSiblings(localItems, remoteItems)
+		merged := versioning.MergeSiblings(localItems, remoteItems)
 
 		if !itemSetsEqual(merged, localItems) {
 			n.Store.RestoreVersions(key, merged)

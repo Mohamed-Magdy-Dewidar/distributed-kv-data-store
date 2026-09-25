@@ -7,7 +7,7 @@ import (
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
-	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/versioning"
 )
 
 // minTierSize is the smallest number of SSTables in a size tier that
@@ -73,11 +73,11 @@ func SelectTierForCompaction(sstables []*sstable.SSTable) ([]*sstable.SSTable, e
 }
 
 // Merge reads every entry from all of sources, resolves multi-version
-// keys via store.MergeSiblings (never naive last-write-wins — mirrors
+// keys via versioning.MergeSiblings (never naive last-write-wins — mirrors
 // internal/node/node.go's reconcileBucket pattern), and returns the
 // result sorted by key, ready for sstable.Write. A key present in only
 // one source passes through unchanged. A key present in multiple
-// sources is folded pairwise through store.MergeSiblings; the result
+// sources is folded pairwise through versioning.MergeSiblings; the result
 // may still hold multiple *DataItem values for that key if they are
 // genuinely Concurrent siblings — compaction does not force resolution,
 // only merges what the existing causality logic can merge. Tombstones
@@ -105,7 +105,7 @@ func Merge(sources []*sstable.SSTable) ([]memtable.Entry, error) {
 			return nil, fmt.Errorf("compaction: read %s: %w", src.Path, err)
 		}
 		for _, e := range entries {
-			byKey[e.Key] = store.MergeSiblings(byKey[e.Key], []*model.DataItem{e.Item})
+			byKey[e.Key] = versioning.MergeSiblings(byKey[e.Key], []*model.DataItem{e.Item})
 		}
 	}
 
