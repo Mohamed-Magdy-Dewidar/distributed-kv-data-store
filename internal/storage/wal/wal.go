@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"distributed-kv-datastore/internal/model"
+	"distributed-kv-datastore/internal/vectorclock"
 )
 
 // headerSize is the fixed-size prefix before every record's payload:
@@ -21,6 +22,47 @@ const headerSize = 8
 type Entry struct {
 	Key  string
 	Item *model.DataItem
+}
+
+// record is Entry's on-disk form. VectorClock's fields are unexported, so
+// json.Marshal of an Entry would write every clock as {} — the clock is
+// stored as its Snapshot map instead, as sstable's record does.
+type record struct {
+	Key           string
+	Value         json.RawMessage
+	VectorClock   map[string]uint32
+	LastUpdatedBy string
+	IsDeleted     bool
+}
+
+func toRecord(e Entry) (record, error) {
+	valueBytes, err := json.Marshal(e.Item.Value)
+	if err != nil {
+		return record{}, fmt.Errorf("wal: marshal value for key %q: %w", e.Key, err)
+	}
+	return record{
+		Key:           e.Key,
+		Value:         valueBytes,
+		VectorClock:   e.Item.VectorClock.Snapshot(),
+		LastUpdatedBy: e.Item.LastUpdatedBy,
+		IsDeleted:     e.Item.IsDeleted,
+	}, nil
+}
+
+func fromRecord(r record) (Entry, error) {
+	var value any
+	if err := json.Unmarshal(r.Value, &value); err != nil {
+		return Entry{}, fmt.Errorf("wal: unmarshal value for key %q: %w", r.Key, err)
+	}
+	return Entry{
+		Key: r.Key,
+		Item: &model.DataItem{
+			Value:         value,
+			VectorClock:   vectorclock.FromSnapshot(r.VectorClock),
+			LastUpdatedBy: r.LastUpdatedBy,
+			IsDeleted:     r.IsDeleted,
+		},
+	}, nil
 }
 
 // WAL is an append-only, crash-safe log file. Every Append fsyncs before
@@ -48,9 +90,13 @@ func (w *WAL) Append(entry Entry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	payload, err := json.Marshal(entry)
+	rec, err := toRecord(entry)
 	if err != nil {
-		return fmt.Errorf("wal: marshal entry for key %q: %w", entry.Key, err)
+		return err
+	}
+	payload, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("wal: marshal record for key %q: %w", entry.Key, err)
 	}
 
 	checksum := crc32.ChecksumIEEE(payload)
@@ -132,8 +178,12 @@ func (w *WAL) Replay() ([]Entry, error) {
 			break
 		}
 
-		var entry Entry
-		if err := json.Unmarshal(payload, &entry); err != nil {
+		var rec record
+		if err := json.Unmarshal(payload, &rec); err != nil {
+			break
+		}
+		entry, err := fromRecord(rec)
+		if err != nil {
 			break
 		}
 

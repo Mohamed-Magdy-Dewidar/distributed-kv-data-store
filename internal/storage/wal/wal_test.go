@@ -3,10 +3,12 @@ package wal
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/vectorclock"
+	"distributed-kv-datastore/internal/versioning"
 )
 
 func tempWALPath(t *testing.T) string {
@@ -199,5 +201,118 @@ func TestAppendAfterReplayContinuesCorrectly(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Key != "foo" || got[1].Key != "bar" {
 		t.Fatalf("expected [foo, bar] after Append-Replay-Append-Replay, got %v", got)
+	}
+}
+
+// TestVectorClockSurvivesRoundTrip: a real, multi-node clock must come
+// back exactly from a reopened WAL. Before record/toRecord, json.Marshal
+// couldn't see into VectorClock's unexported fields and wrote every clock
+// as {}.
+func TestVectorClockSurvivesRoundTrip(t *testing.T) {
+	path := tempWALPath(t)
+	want := map[string]uint32{"node-1": 2, "node-2": 1}
+
+	w1, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	if err := w1.Append(Entry{Key: "foo", Item: &model.DataItem{
+		Value:         "bar",
+		VectorClock:   vectorclock.FromSnapshot(want),
+		LastUpdatedBy: "node-2",
+		IsDeleted:     true,
+	}}); err != nil {
+		t.Fatalf("Append failed: %v", err)
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	w2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-Open failed: %v", err)
+	}
+	defer w2.Close()
+	got, err := w2.Replay()
+	if err != nil {
+		t.Fatalf("Replay failed: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(got))
+	}
+
+	item := got[0].Item
+	if snap := item.VectorClock.Snapshot(); !reflect.DeepEqual(snap, want) {
+		t.Errorf("expected clock %v after replay, got %v", want, snap)
+	}
+	if item.Value != "bar" || item.LastUpdatedBy != "node-2" || !item.IsDeleted {
+		t.Errorf("expected every other field to survive too, got %+v", item)
+	}
+}
+
+// TestReplayOfSameKeyWritesPreservesFinalState is the regression test for
+// the failure this bug caused: several writes to one key, each causally
+// newer than the last, then a concurrent one. With clocks lost, every
+// replayed version compared Equal and merging kept only the first write.
+// Folding the replayed entries with versioning.MergeSiblings — the same
+// rule the memtable applies on replay — must give the true final state.
+func TestReplayOfSameKeyWritesPreservesFinalState(t *testing.T) {
+	path := tempWALPath(t)
+
+	writes := []struct {
+		value string
+		clock map[string]uint32
+	}{
+		{"v1", map[string]uint32{"node-1": 1}},
+		{"v2", map[string]uint32{"node-1": 2}},
+		{"v3", map[string]uint32{"node-1": 3}},
+		{"concurrent", map[string]uint32{"node-1": 2, "node-2": 1}}, // hasn't seen v3
+	}
+
+	w1, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	for _, wr := range writes {
+		if err := w1.Append(Entry{Key: "k", Item: &model.DataItem{
+			Value:         wr.value,
+			VectorClock:   vectorclock.FromSnapshot(wr.clock),
+			LastUpdatedBy: "node-1",
+		}}); err != nil {
+			t.Fatalf("Append(%s) failed: %v", wr.value, err)
+		}
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	w2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-Open failed: %v", err)
+	}
+	defer w2.Close()
+	got, err := w2.Replay()
+	if err != nil {
+		t.Fatalf("Replay failed: %v", err)
+	}
+	if len(got) != len(writes) {
+		t.Fatalf("expected %d entries, got %d", len(writes), len(got))
+	}
+	for i, wr := range writes {
+		if snap := got[i].Item.VectorClock.Snapshot(); got[i].Item.Value != wr.value || !reflect.DeepEqual(snap, wr.clock) {
+			t.Errorf("entry %d: expected %s %v, got %v %v", i, wr.value, wr.clock, got[i].Item.Value, snap)
+		}
+	}
+
+	var state []*model.DataItem
+	for _, e := range got {
+		state = versioning.MergeSiblings(state, []*model.DataItem{e.Item})
+	}
+	var values []any
+	for _, item := range state {
+		values = append(values, item.Value)
+	}
+	if want := []any{"v3", "concurrent"}; !reflect.DeepEqual(values, want) {
+		t.Fatalf("expected replayed final state %v (v1 and v2 superseded), got %v", want, values)
 	}
 }
