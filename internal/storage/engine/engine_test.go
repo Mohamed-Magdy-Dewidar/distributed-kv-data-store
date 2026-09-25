@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -38,12 +39,12 @@ func TestPutThenGetFromActiveMemtable(t *testing.T) {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	item, found, err := e.Get("foo")
+	items, found, err := e.GetAll("foo")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if !found || item.Value != "bar" {
-		t.Fatalf("expected foo=bar, got found=%v value=%v", found, item.Value)
+	if !found || items[0].Value != "bar" {
+		t.Fatalf("expected foo=bar, got found=%v value=%v", found, items)
 	}
 }
 
@@ -54,7 +55,7 @@ func TestGetMissingKey(t *testing.T) {
 	}
 	defer e.Close()
 
-	_, found, err := e.Get("does-not-exist")
+	_, found, err := e.GetAll("does-not-exist")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -89,12 +90,12 @@ func TestFlushMakesDataAvailableFromSSTableAfterMemtableIsCleared(t *testing.T) 
 		t.Error("expected flushing to be nil after flush completes")
 	}
 
-	item, found, err := e.Get("foo")
+	items, found, err := e.GetAll("foo")
 	if err != nil {
 		t.Fatalf("Get after flush failed: %v", err)
 	}
-	if !found || item.Value != "bar" {
-		t.Fatalf("expected foo=bar from sstable after flush, got found=%v value=%v", found, item.Value)
+	if !found || items[0].Value != "bar" {
+		t.Fatalf("expected foo=bar from sstable after flush, got found=%v value=%v", found, items)
 	}
 }
 
@@ -116,12 +117,12 @@ func TestGetFindsDataInFlushingMemtableDuringFlushWindow(t *testing.T) {
 	// the value whether it lands in active, flushing, or (once the flush
 	// finishes) an sstable. Any of these outcomes is correct; what must
 	// never happen is "not found."
-	item, found, err := e.Get("foo")
+	items, found, err := e.GetAll("foo")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if !found || item.Value != "bar" {
-		t.Fatalf("expected foo=bar to be visible during/around the flush window, got found=%v value=%v", found, item.Value)
+	if !found || items[0].Value != "bar" {
+		t.Fatalf("expected foo=bar to be visible during/around the flush window, got found=%v value=%v", found, items)
 	}
 
 	e.WaitForPendingFlushes() // clean up before test ends
@@ -144,12 +145,12 @@ func TestOverwriteReturnsNewestValueAcrossMemtableAndSSTable(t *testing.T) {
 	}
 	// "second" is in the (new) active memtable, not yet flushed.
 
-	item, found, err := e.Get("foo")
+	items, found, err := e.GetAll("foo")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if !found || item.Value != "second" {
-		t.Fatalf("expected the newest value 'second' (from memtable, checked before sstables), got found=%v value=%v", found, item.Value)
+	if !found || items[0].Value != "second" {
+		t.Fatalf("expected the newest value 'second' (from memtable, checked before sstables), got found=%v value=%v", found, items)
 	}
 }
 
@@ -180,20 +181,20 @@ func TestReopenAfterCrashRecoversFromWALAndSSTables(t *testing.T) {
 	}
 	defer e2.Close()
 
-	item1, found1, err := e2.Get("flushed-key")
+	items1, found1, err := e2.GetAll("flushed-key")
 	if err != nil {
 		t.Fatalf("Get(flushed-key) failed: %v", err)
 	}
-	if !found1 || item1.Value != "on-disk" {
-		t.Fatalf("expected flushed-key to survive via sstable, got found=%v value=%v", found1, item1.Value)
+	if !found1 || items1[0].Value != "on-disk" {
+		t.Fatalf("expected flushed-key to survive via sstable, got found=%v value=%v", found1, items1)
 	}
 
-	item2, found2, err := e2.Get("unflushed-key")
+	items2, found2, err := e2.GetAll("unflushed-key")
 	if err != nil {
 		t.Fatalf("Get(unflushed-key) failed: %v", err)
 	}
-	if !found2 || item2.Value != "in-wal-only" {
-		t.Fatalf("expected unflushed-key to survive via WAL replay, got found=%v value=%v", found2, item2.Value)
+	if !found2 || items2[0].Value != "in-wal-only" {
+		t.Fatalf("expected unflushed-key to survive via WAL replay, got found=%v value=%v", found2, items2)
 	}
 }
 
@@ -220,7 +221,7 @@ func TestBloomFilterAvoidsFalseHitsAcrossMultipleSSTables(t *testing.T) {
 		t.Fatalf("expected multiple sstables from repeated small flushes, got %d", sstCount)
 	}
 
-	_, found, err := e.Get("definitely-never-written")
+	_, found, err := e.GetAll("definitely-never-written")
 	if err != nil {
 		t.Fatalf("Get for a genuinely absent key failed: %v", err)
 	}
@@ -231,9 +232,9 @@ func TestBloomFilterAvoidsFalseHitsAcrossMultipleSSTables(t *testing.T) {
 	// Confirm every real key across every sstable is still findable.
 	for i := 0; i < 5; i++ {
 		key := string(rune('a' + i))
-		item, found, err := e.Get(key)
-		if err != nil || !found || item.Value != "value-"+key {
-			t.Errorf("key %q: expected value-%s, got found=%v value=%v err=%v", key, key, found, item, err)
+		items, found, err := e.GetAll(key)
+		if err != nil || !found || items[0].Value != "value-"+key {
+			t.Errorf("key %q: expected value-%s, got found=%v value=%v err=%v", key, key, found, items, err)
 		}
 	}
 }
@@ -270,7 +271,7 @@ func TestOrphanedSSTableNotRegisteredInManifestIsIgnoredOnRestart(t *testing.T) 
 	}
 	defer e2.Close()
 
-	_, found, err := e2.Get("orphaned-key")
+	_, found, err := e2.GetAll("orphaned-key")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -317,8 +318,8 @@ func TestFailedManifestAddDoesNotStallFutureFlushes(t *testing.T) {
 	if len(onDisk) != 1 {
 		t.Fatalf("expected exactly 1 orphaned .sst file from the failed flush, got %d", len(onDisk))
 	}
-	if item, found, err := e.Get("first"); err != nil || !found || item.Value != "v1" {
-		t.Fatalf("expected first=v1 to stay visible after the failed flush, got found=%v item=%v err=%v", found, item, err)
+	if items, found, err := e.GetAll("first"); err != nil || !found || items[0].Value != "v1" {
+		t.Fatalf("expected first=v1 to stay visible after the failed flush, got found=%v item=%v err=%v", found, items, err)
 	}
 
 	// Restore a working manifest. No flush is in flight (we waited above),
@@ -418,9 +419,9 @@ func TestCompactMergesFlushedSSTablesAndDropsSupersededVersions(t *testing.T) {
 
 	want := map[string]string{"k0": "k0-v2", "k1": "value-k1", "k2": "value-k2", "k3": "value-k3"}
 	for key, value := range want {
-		item, found, err := e.Get(key)
-		if err != nil || !found || item.Value != value {
-			t.Errorf("Get(%s) after compaction: expected %s, got found=%v item=%v err=%v", key, value, found, item, err)
+		items, found, err := e.GetAll(key)
+		if err != nil || !found || items[0].Value != value {
+			t.Errorf("Get(%s) after compaction: expected %s, got found=%v item=%v err=%v", key, value, found, items, err)
 		}
 	}
 
@@ -570,9 +571,9 @@ func TestCompactionLoopCompactsInBackground(t *testing.T) {
 
 	for i := 0; i < 4; i++ {
 		key := string(rune('a' + i))
-		item, found, err := e.Get(key)
-		if err != nil || !found || item.Value != "value-"+key {
-			t.Errorf("Get(%s) after background compaction: got found=%v item=%v err=%v", key, found, item, err)
+		items, found, err := e.GetAll(key)
+		if err != nil || !found || items[0].Value != "value-"+key {
+			t.Errorf("Get(%s) after background compaction: got found=%v item=%v err=%v", key, found, items, err)
 		}
 	}
 }
@@ -608,9 +609,9 @@ func TestGetDuringCompactionNeverFails(t *testing.T) {
 				default:
 				}
 				for _, key := range keys {
-					item, found, err := e.Get(key)
-					if err == nil && (!found || item.Value != "value-"+key) {
-						err = fmt.Errorf("Get(%s): found=%v item=%v", key, found, item)
+					items, found, err := e.GetAll(key)
+					if err == nil && (!found || items[0].Value != "value-"+key) {
+						err = fmt.Errorf("Get(%s): found=%v item=%v", key, found, items)
 					}
 					if err != nil {
 						select {
@@ -702,5 +703,151 @@ func TestCompactWaitsForInFlightReadersBeforeDeletingFiles(t *testing.T) {
 		if _, err := os.Stat(old.Path); !os.IsNotExist(err) {
 			t.Errorf("expected %s to be deleted once the reader finished, stat err=%v", old.Path, err)
 		}
+	}
+}
+
+func values(items []*model.DataItem) []any {
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.Value)
+	}
+	return out
+}
+
+// TestGetAllReturnsConcurrentSiblingsInActiveMemtable: two Concurrent
+// writes that never leave the active memtable must both be returned.
+func TestGetAllReturnsConcurrentSiblingsInActiveMemtable(t *testing.T) {
+	e, err := Open(t.TempDir(), 1<<20) // large threshold: nothing flushes
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer e.Close()
+
+	for _, item := range []*model.DataItem{
+		itemWithClock("from-node-1", map[string]uint32{"node-1": 1}),
+		itemWithClock("from-node-2", map[string]uint32{"node-2": 1}),
+	} {
+		if err := e.Put("k", item); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+	}
+
+	items, found, err := e.GetAll("k")
+	if want := []any{"from-node-2", "from-node-1"}; err != nil || !found || !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected both siblings newest first %v, got found=%v %v err=%v", want, found, values(items), err)
+	}
+}
+
+// TestGetAllMergesSiblingsSplitAcrossSSTableAndMemtable: a version in the
+// active memtable doesn't hide a Concurrent one in an older SSTable, but a
+// later write that has seen both supersedes both, across layers.
+func TestGetAllMergesSiblingsSplitAcrossSSTableAndMemtable(t *testing.T) {
+	e, err := Open(t.TempDir(), 200)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer e.Close()
+
+	big := strings.Repeat("x", 200) // alone crosses the 200-byte threshold
+	if err := e.Put("k", itemWithClock(big, map[string]uint32{"node-1": 1})); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	e.WaitForPendingFlushes()
+	if err := e.Put("k", itemWithClock("from-node-2", map[string]uint32{"node-2": 1})); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	// Confirm the setup really split the siblings across layers.
+	e.mu.RLock()
+	sstables := e.sstables
+	active := e.active
+	e.mu.RUnlock()
+	if len(sstables) != 1 {
+		t.Fatalf("test setup: expected 1 sstable, got %d", len(sstables))
+	}
+	if onDisk, _, _ := sstables[0].GetAll("k"); !reflect.DeepEqual(values(onDisk), []any{big}) {
+		t.Fatalf("test setup: expected the sstable to hold only the node-1 version, got %v", values(onDisk))
+	}
+	if inMemory, _ := active.GetAll("k"); !reflect.DeepEqual(values(inMemory), []any{"from-node-2"}) {
+		t.Fatalf("test setup: expected the memtable to hold only the node-2 version, got %v", values(inMemory))
+	}
+
+	items, found, err := e.GetAll("k")
+	if want := []any{"from-node-2", big}; err != nil || !found || !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected both siblings, memtable's first, got found=%v %v err=%v", found, values(items), err)
+	}
+
+	// A write that has seen both siblings supersedes the one on disk too.
+	if err := e.Put("k", itemWithClock("resolved", map[string]uint32{"node-1": 1, "node-2": 2})); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	items, found, err = e.GetAll("k")
+	if want := []any{"resolved"}; err != nil || !found || !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected only %v after a resolving write, got found=%v %v err=%v", want, found, values(items), err)
+	}
+}
+
+// TestFailedFlushPutsBackEverySibling: when a flush fails, every sibling
+// of every key in the frozen memtable must come back — the old put-back
+// loop restored only the first version per key — and the retry flush must
+// write all of them.
+func TestFailedFlushPutsBackEverySibling(t *testing.T) {
+	dir := t.TempDir()
+	e, err := Open(dir, 200)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer e.Close()
+
+	if err := e.manifest.Close(); err != nil { // the next flush's manifest.Add fails
+		t.Fatalf("closing manifest failed: %v", err)
+	}
+
+	big := strings.Repeat("x", 200)
+	if err := e.Put("k", itemWithClock("from-node-1", map[string]uint32{"node-1": 1})); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := e.Put("k", itemWithClock(big, map[string]uint32{"node-2": 1})); err != nil { // crosses: flush, which fails
+		t.Fatalf("Put failed: %v", err)
+	}
+	e.WaitForPendingFlushes()
+
+	e.mu.RLock()
+	flushingNil := e.flushing == nil
+	sstCount := len(e.sstables)
+	active := e.active
+	e.mu.RUnlock()
+	if !flushingNil || sstCount != 0 {
+		t.Fatalf("test setup: expected a failed flush (flushing cleared, no sstables), got flushingNil=%v sstables=%d", flushingNil, sstCount)
+	}
+
+	want := []any{big, "from-node-1"}
+	if items, _ := active.GetAll("k"); !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected every sibling put back into the active memtable %v, got %v", want, values(items))
+	}
+	if items, found, err := e.GetAll("k"); err != nil || !found || !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected GetAll to still return %v, got found=%v %v err=%v", want, found, values(items), err)
+	}
+
+	mf, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopening manifest failed: %v", err)
+	}
+	e.manifest = mf
+
+	// The put-back siblings already exceed the threshold, so any Put flushes.
+	if err := e.Put("other", itemWithClock("v", map[string]uint32{"node-1": 1})); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	e.WaitForPendingFlushes()
+
+	e.mu.RLock()
+	sstables := e.sstables
+	e.mu.RUnlock()
+	if len(sstables) != 1 {
+		t.Fatalf("expected the retry flush to produce 1 sstable, got %d", len(sstables))
+	}
+	if items, found, err := sstables[0].GetAll("k"); err != nil || !found || !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected the retried sstable to hold every sibling %v, got found=%v %v err=%v", want, found, values(items), err)
 	}
 }

@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"reflect"
 	"sync"
 	"testing"
 
@@ -22,18 +23,18 @@ func TestPutThenGet(t *testing.T) {
 	m := New(1 << 20) // 1MB, won't trigger flush in this test
 	m.Put("foo", sampleItem("bar"))
 
-	item, found := m.Get("foo")
+	items, found := m.GetAll("foo")
 	if !found {
 		t.Fatal("expected to find foo")
 	}
-	if item.Value != "bar" {
-		t.Errorf("expected value 'bar', got %v", item.Value)
+	if items[0].Value != "bar" {
+		t.Errorf("expected value 'bar', got %v", items)
 	}
 }
 
 func TestGetMissingKey(t *testing.T) {
 	m := New(1 << 20)
-	_, found := m.Get("does-not-exist")
+	_, found := m.GetAll("does-not-exist")
 	if found {
 		t.Error("expected not found")
 	}
@@ -52,9 +53,9 @@ func TestPutWithNonStringValueDoesNotPanic(t *testing.T) {
 	}()
 
 	m.Put("count", sampleItem(42))
-	item, found := m.Get("count")
-	if !found || item.Value != 42 {
-		t.Fatalf("expected to retrieve int value 42, got found=%v value=%v", found, item.Value)
+	items, found := m.GetAll("count")
+	if !found || items[0].Value != 42 {
+		t.Fatalf("expected to retrieve int value 42, got found=%v value=%v", found, items)
 	}
 }
 
@@ -126,13 +127,13 @@ func TestSnapshotAndClearResetsTable(t *testing.T) {
 	if m.Len() != 0 {
 		t.Errorf("expected empty table after SnapshotAndClear, got Len=%d", m.Len())
 	}
-	if _, found := m.Get("foo"); found {
+	if _, found := m.GetAll("foo"); found {
 		t.Error("expected foo to be gone after SnapshotAndClear")
 	}
 
 	// The table must immediately accept new writes after clearing.
 	m.Put("new-key", sampleItem("new-value"))
-	if _, found := m.Get("new-key"); !found {
+	if _, found := m.GetAll("new-key"); !found {
 		t.Error("expected table to accept writes immediately after SnapshotAndClear")
 	}
 }
@@ -158,9 +159,149 @@ func TestConcurrentPutAndGetDoesNotRace(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := string(rune('a' + i%26))
-			m.Get(key)
+			m.GetAll(key)
 		}(i)
 	}
 
 	wg.Wait()
+}
+
+func itemWithClock(value any, counts map[string]uint32) *model.DataItem {
+	return &model.DataItem{
+		Value:         value,
+		VectorClock:   vectorclock.FromSnapshot(counts),
+		LastUpdatedBy: "node-1",
+	}
+}
+
+func values(items []*model.DataItem) []any {
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.Value)
+	}
+	return out
+}
+
+// TestConcurrentWritesBothSurviveNewestFirst is the bug this package used
+// to have: a Concurrent write overwrote the sibling already in the table.
+// Both must survive, newest first, in GetAll and in Snapshot, and both
+// must count toward the flush threshold.
+func TestConcurrentWritesBothSurviveNewestFirst(t *testing.T) {
+	m := New(1 << 20)
+	fromNode1 := itemWithClock("from-node-1", map[string]uint32{"node-1": 1})
+	fromNode2 := itemWithClock("from-node-2", map[string]uint32{"node-2": 1})
+	m.Put("k", fromNode1)
+	m.Put("k", fromNode2)
+
+	items, found := m.GetAll("k")
+	if want := []any{"from-node-2", "from-node-1"}; !found || !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected both siblings newest first %v, got found=%v %v", want, found, values(items))
+	}
+	if m.Len() != 1 {
+		t.Errorf("expected 1 key holding 2 siblings, got Len=%d", m.Len())
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 2 || snap[0].Key != "k" || snap[1].Key != "k" ||
+		snap[0].Item != fromNode2 || snap[1].Item != fromNode1 {
+		t.Fatalf("expected Snapshot to hold one Entry per sibling, newest first, got %+v", snap)
+	}
+
+	if want := estimatedSize("k", fromNode1) + estimatedSize("k", fromNode2); m.sizeSoFar != want {
+		t.Errorf("expected sizeSoFar to count both siblings (%d), got %d", want, m.sizeSoFar)
+	}
+}
+
+func TestPutDropsSupersededSiblingsAndTheirSize(t *testing.T) {
+	m := New(1 << 20)
+	m.Put("k", itemWithClock("from-node-1", map[string]uint32{"node-1": 1}))
+	m.Put("k", itemWithClock("from-node-2", map[string]uint32{"node-2": 1}))
+
+	// A write that has seen both siblings supersedes both.
+	resolved := itemWithClock("resolved", map[string]uint32{"node-1": 2, "node-2": 1})
+	m.Put("k", resolved)
+
+	items, _ := m.GetAll("k")
+	if want := []any{"resolved"}; !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected only %v, got %v", want, values(items))
+	}
+	if want := estimatedSize("k", resolved); m.sizeSoFar != want {
+		t.Errorf("expected sizeSoFar to drop the superseded siblings (%d), got %d", want, m.sizeSoFar)
+	}
+}
+
+func TestPutOfCausallyOlderVersionIsDropped(t *testing.T) {
+	m := New(1 << 20)
+	m.Put("k", itemWithClock("new", map[string]uint32{"node-1": 2}))
+	m.Put("k", itemWithClock("stale", map[string]uint32{"node-1": 1})) // e.g. delivered late by anti-entropy
+
+	items, _ := m.GetAll("k")
+	if want := []any{"new"}; !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected the stale write to be dropped, leaving %v, got %v", want, values(items))
+	}
+}
+
+// TestPutBackOlderFoldsEverySiblingBehindExistingVersions mirrors a failed
+// flush: every sibling from the frozen table comes back, behind the
+// (newer) versions the active table already holds.
+func TestPutBackOlderFoldsEverySiblingBehindExistingVersions(t *testing.T) {
+	frozen := New(1 << 20)
+	frozen.Put("k", itemWithClock("frozen-node-1", map[string]uint32{"node-1": 1}))
+	frozen.Put("k", itemWithClock("frozen-node-2", map[string]uint32{"node-2": 1}))
+	frozen.Put("only-frozen", itemWithClock("x", map[string]uint32{"node-1": 1}))
+
+	active := New(1 << 20)
+	activeItem := itemWithClock("active-node-3", map[string]uint32{"node-3": 1}) // Concurrent with both frozen siblings
+	active.Put("k", activeItem)
+
+	entries := frozen.Snapshot()
+	active.PutBackOlder(entries)
+
+	items, _ := active.GetAll("k")
+	if want := []any{"active-node-3", "frozen-node-2", "frozen-node-1"}; !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected every sibling back, behind active's own, newest first: %v, got %v", want, values(items))
+	}
+	if items, found := active.GetAll("only-frozen"); !found || len(items) != 1 {
+		t.Fatalf("expected a key only the frozen table held to come back, got found=%v %v", found, values(items))
+	}
+
+	want := estimatedSize("k", activeItem)
+	for _, e := range entries {
+		want += estimatedSize(e.Key, e.Item)
+	}
+	if active.sizeSoFar != want {
+		t.Errorf("expected sizeSoFar %d after putting everything back, got %d", want, active.sizeSoFar)
+	}
+}
+
+// TestPutBackOlderKeepsNewerVersionOnTiesAndDominance: the older versions
+// go second in the fold, so an Equal-clock tie keeps the newer version
+// already here and a dominated older version is dropped — the same answer
+// StorageEngine.GetAll gave while they sat in separate tables.
+func TestPutBackOlderKeepsNewerVersionOnTiesAndDominance(t *testing.T) {
+	active := New(1 << 20)
+	active.Put("k", itemWithClock("newer", map[string]uint32{"node-1": 2}))
+
+	active.PutBackOlder([]Entry{
+		{Key: "k", Item: itemWithClock("equal-but-older", map[string]uint32{"node-1": 2})},
+		{Key: "k", Item: itemWithClock("dominated", map[string]uint32{"node-1": 1})},
+	})
+
+	items, _ := active.GetAll("k")
+	if want := []any{"newer"}; !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected only %v to survive, got %v", want, values(items))
+	}
+}
+
+func TestGetAllReturnsACopy(t *testing.T) {
+	m := New(1 << 20)
+	m.Put("k", itemWithClock("v", map[string]uint32{"node-1": 1}))
+
+	items, _ := m.GetAll("k")
+	items[0] = nil
+
+	again, _ := m.GetAll("k")
+	if again[0] == nil {
+		t.Fatal("mutating GetAll's result must not change the table")
+	}
 }

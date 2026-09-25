@@ -15,16 +15,16 @@ import (
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
 	"distributed-kv-datastore/internal/storage/wal"
+	"distributed-kv-datastore/internal/versioning"
 )
 
 // StorageEngine orchestrates WAL, MemTable(s), SSTables, and the Manifest
-// for one node's local storage. Get is single-value-per-key: it returns
-// the newest version it finds and does NOT surface siblings; that logic
-// lives in store.DataStore/resolve(). Compaction does merge versions
-// causally (via versioning.MergeSiblings), so a compacted SSTable can hold
-// siblings, of which Get returns the first. Wiring DataStore to use
-// StorageEngine as its backing store is a separate future integration
-// step.
+// for one node's local storage. Every layer holds sibling sets, not single
+// values: the memtable merges writes with versioning.Resolve, compaction
+// merges SSTables with versioning.MergeSiblings, and GetAll folds all
+// layers together the same way, returning every surviving sibling newest
+// first. Wiring DataStore to use StorageEngine as its backing store is a
+// separate future integration step.
 //
 // Known limitations, documented deliberately rather than over-built:
 //   - Only one flush runs at a time. If a new Put crosses the memtable
@@ -33,17 +33,11 @@ import (
 //     maxBytes temporarily, rather than losing track of the in-flight
 //     frozen memtable. A real system would queue multiple immutable
 //     memtables; that's more complexity than this phase needs.
-//   - Get orders versions by arrival, compaction by causality. Before
-//     compaction, Get returns whichever version reached this engine last;
-//     after, the merged file keeps whatever versioning.MergeSiblings keeps. The
-//     two agree unless a later-arriving write carries a vector clock that
-//     is Before an earlier-arriving one's (e.g. a stale version delivered
-//     late by replication or anti-entropy). That write is causally older,
-//     already superseded by the version it arrived after, so compaction
-//     correctly drops it; it's Get's arrival-order answer before
-//     compaction that is wrong in that case. Resolving versions causally
-//     in StorageEngine.Get (the deferred multi-sibling follow-up) removes
-//     the discrepancy.
+//   - GetAll can't stop at the first layer holding the key: an older
+//     SSTable may hold a sibling Concurrent with a newer layer's version.
+//     It reads every SSTable whose range and Bloom filter admit the key,
+//     so a key spread across many files costs one read per file until
+//     compaction folds them together.
 //   - .sst files left behind by a failed flush or compaction (written but
 //     never registered, or unregistered but not yet deleted) are never
 //     loaded, but are also never cleaned up.
@@ -170,17 +164,17 @@ func (e *StorageEngine) Put(key string, item *model.DataItem) error {
 }
 
 // flush writes frozen's contents to a new SSTable in the background and
-// registers it in the Manifest. frozen remains fully queryable via Get for
+// registers it in the Manifest. frozen remains fully queryable via GetAll for
 // the entire duration of this call — it is only detached from e.flushing
-// (and thus stops being consulted by Get) once its data is reachable some
+// (and thus stops being consulted by GetAll) once its data is reachable some
 // other way.
 //
 // e.flushing is cleared on every exit path, so one failed flush never
-// stops later flushes. On failure, frozen's entries are merged back into
-// the active memtable (skipping keys active already holds, since those
-// are newer) so they stay visible to Get and are retried by the next
-// flush. Flush errors are not otherwise reported; the data also remains
-// recoverable from the WAL on restart.
+// stops later flushes. On failure, every one of frozen's versions is
+// merged back into the active memtable behind active's own (all newer)
+// versions via PutBackOlder, so GetAll's answer doesn't change and the
+// next flush retries them. Flush errors are not otherwise reported; the
+// data also remains recoverable from the WAL on restart.
 func (e *StorageEngine) flush(frozen *memtable.MemTable) {
 	defer e.flushWG.Done()
 
@@ -192,11 +186,7 @@ func (e *StorageEngine) flush(frozen *memtable.MemTable) {
 	defer e.mu.Unlock()
 
 	if err != nil {
-		for _, entry := range entries {
-			if _, found := e.active.Get(entry.Key); !found {
-				e.active.Put(entry.Key, entry.Item) // ignore threshold signal: the next Put triggers the retry
-			}
-		}
+		e.active.PutBackOlder(entries) // no threshold signal: the next Put triggers the retry
 	} else {
 		e.sstables = append([]*sstable.SSTable{sst}, e.sstables...) // newest first
 	}
@@ -222,10 +212,15 @@ func (e *StorageEngine) writeAndRegister(entries []memtable.Entry) (*sstable.SST
 	return sst, nil
 }
 
-// Get checks the active memtable, then the in-flight frozen memtable (if
-// any), then every SSTable newest-to-oldest (each of which cheaply rules
-// itself out via a range check and Bloom filter before touching disk).
-func (e *StorageEngine) Get(key string) (*model.DataItem, bool, error) {
+// GetAll returns every sibling version stored for key, newest first. It
+// folds the active memtable, then the in-flight frozen memtable (if any),
+// then every SSTable newest-to-oldest (each of which cheaply rules itself
+// out via a range check and Bloom filter before touching disk) together
+// with versioning.MergeSiblings, newest layer first — the same fold
+// compaction.Merge uses — so a version superseded by a newer layer is
+// dropped and a Concurrent one survives. Tombstones are returned like any
+// other version, as sstable.GetAll does.
+func (e *StorageEngine) GetAll(key string) ([]*model.DataItem, bool, error) {
 	e.filesMu.RLock()
 	defer e.filesMu.RUnlock()
 
@@ -235,26 +230,27 @@ func (e *StorageEngine) Get(key string) (*model.DataItem, bool, error) {
 	sstables := e.sstables // slice header copy; safe, existing elements are never mutated
 	e.mu.RUnlock()
 
-	if item, found := active.Get(key); found {
-		return item, true, nil
+	var merged []*model.DataItem
+	if items, found := active.GetAll(key); found {
+		merged = versioning.MergeSiblings(merged, items)
 	}
 	if flushing != nil {
-		if item, found := flushing.Get(key); found {
-			return item, true, nil
+		if items, found := flushing.GetAll(key); found {
+			merged = versioning.MergeSiblings(merged, items)
 		}
 	}
 
 	for _, sst := range sstables {
-		item, found, err := sst.Get(key)
+		items, found, err := sst.GetAll(key)
 		if err != nil {
 			return nil, false, fmt.Errorf("engine: read sstable %s: %w", sst.Path, err)
 		}
 		if found {
-			return item, true, nil
+			merged = versioning.MergeSiblings(merged, items)
 		}
 	}
 
-	return nil, false, nil
+	return merged, len(merged) > 0, nil
 }
 
 // WaitForPendingFlushes blocks until every currently in-flight background
