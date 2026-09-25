@@ -7,23 +7,20 @@ import (
 	"sort"
 	"sync"
 
+	"distributed-kv-datastore/internal/storage/manifest"
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/storage/sstable"
 	"distributed-kv-datastore/internal/storage/wal"
 	"distributed-kv-datastore/internal/store"
 )
 
-// Engine orchestrates WAL, MemTable(s), and SSTables for one node's local
-// storage. This is a single-value-per-key engine — it does NOT perform
-// sibling/vector-clock conflict resolution; that logic lives in
-// store.DataStore/resolve(). Wiring DataStore to use Engine as its
+// Engine orchestrates WAL, MemTable(s), SSTables, and the Manifest for one
+// node's local storage. This is a single-value-per-key engine — it does
+// NOT perform sibling/vector-clock conflict resolution; that logic lives
+// in store.DataStore/resolve(). Wiring DataStore to use Engine as its
 // backing store is a separate future integration step.
 //
 // Known limitations, documented deliberately rather than over-built:
-//   - No Manifest yet: existing SSTables are discovered via a directory
-//     glob on startup, sorted by filename (which embeds a nanosecond
-//     timestamp). A crash mid-compaction could leave orphaned files this
-//     engine has no way to detect — acceptable for now, fixed later.
 //   - Only one flush runs at a time. If a new Put crosses the memtable
 //     size threshold while a previous flush is still in progress, the
 //     swap is skipped and the active memtable is allowed to grow past
@@ -37,6 +34,7 @@ type Engine struct {
 	sstables []*sstable.SSTable // newest first
 
 	wal      *wal.WAL
+	manifest *manifest.Manifest
 	dataDir  string
 	maxBytes int
 
@@ -44,9 +42,10 @@ type Engine struct {
 }
 
 // Open creates or opens an Engine rooted at dataDir: replays the WAL to
-// reconstruct the active memtable, then loads any existing SSTables from
-// disk.
-func Open(dataDir string, maxMemtableBytes int) (*Engine, error) {
+// reconstruct the active memtable, then loads every SSTable the Manifest
+// records as live. On any error, every resource already opened is closed
+// before returning.
+func Open(dataDir string, maxMemtableBytes int) (_ *Engine, err error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("engine: create data dir %s: %w", dataDir, err)
 	}
@@ -55,10 +54,26 @@ func Open(dataDir string, maxMemtableBytes int) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: open wal: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			w.Close()
+		}
+	}()
+
+	mf, err := manifest.Open(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("engine: open manifest: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			mf.Close()
+		}
+	}()
 
 	e := &Engine{
 		active:   memtable.New(maxMemtableBytes),
 		wal:      w,
+		manifest: mf,
 		dataDir:  dataDir,
 		maxBytes: maxMemtableBytes,
 	}
@@ -71,24 +86,27 @@ func Open(dataDir string, maxMemtableBytes int) (*Engine, error) {
 		e.active.Put(entry.Key, entry.Item) // ignore threshold signal on replay: don't auto-flush during startup
 	}
 
-	if err := e.loadExistingSSTables(); err != nil {
+	if err := e.loadLiveSSTables(); err != nil {
 		return nil, err
 	}
 
 	return e, nil
 }
 
-func (e *Engine) loadExistingSSTables() error {
-	matches, err := filepath.Glob(filepath.Join(e.dataDir, "*.sst"))
-	if err != nil {
-		return fmt.Errorf("engine: glob sstables: %w", err)
-	}
-	sort.Strings(matches) // filenames embed a nanosecond timestamp: lexicographic == chronological
+// loadLiveSSTables opens exactly the SSTable files the Manifest says are
+// currently live — replacing the earlier filepath.Glob-based discovery,
+// which could not distinguish "every .sst file physically present" from
+// "every SSTable that's actually current" once compaction can leave
+// obsolete files behind across a crash.
+func (e *Engine) loadLiveSSTables() error {
+	ids := e.manifest.LiveIDs()
+	sort.Strings(ids) // IDs embed a nanosecond timestamp: lexicographic == chronological
 
-	for i := len(matches) - 1; i >= 0; i-- { // newest first
-		sst, err := sstable.Open(matches[i])
+	for i := len(ids) - 1; i >= 0; i-- { // newest first
+		path := filepath.Join(e.dataDir, ids[i]+".sst")
+		sst, err := sstable.Open(path)
 		if err != nil {
-			return fmt.Errorf("engine: open existing sstable %s: %w", matches[i], err)
+			return fmt.Errorf("engine: open live sstable %s (id %s): %w", path, ids[i], err)
 		}
 		e.sstables = append(e.sstables, sst)
 	}
@@ -118,30 +136,57 @@ func (e *Engine) Put(key string, item *store.DataItem) error {
 	return nil
 }
 
-// flush writes frozen's contents to a new SSTable in the background.
-// frozen remains fully queryable via Get for the entire duration of this
-// call — it is only detached from e.flushing (and thus stops being
-// consulted by Get) after the new SSTable is safely registered.
+// flush writes frozen's contents to a new SSTable in the background and
+// registers it in the Manifest. frozen remains fully queryable via Get for
+// the entire duration of this call — it is only detached from e.flushing
+// (and thus stops being consulted by Get) once its data is reachable some
+// other way.
+//
+// e.flushing is cleared on every exit path, so one failed flush never
+// stops later flushes. On failure, frozen's entries are merged back into
+// the active memtable (skipping keys active already holds, since those
+// are newer) so they stay visible to Get and are retried by the next
+// flush. Flush errors are not otherwise reported; the data also remains
+// recoverable from the WAL on restart.
 func (e *Engine) flush(frozen *memtable.MemTable) {
 	defer e.flushWG.Done()
 
 	entries := frozen.Snapshot() // read-only: frozen stays queryable throughout the write below
 
-	sst, err := sstable.Write(e.dataDir, entries)
-	if err != nil {
-		// Documented limitation: flush errors are not retried. The data
-		// remains safely recoverable from the WAL on the next restart,
-		// so nothing is lost — but this memtable's data won't reach an
-		// SSTable until a future successful flush is triggered.
-		return
-	}
+	sst, err := e.writeAndRegister(entries)
 
 	e.mu.Lock()
-	e.sstables = append([]*sstable.SSTable{sst}, e.sstables...) // newest first
+	defer e.mu.Unlock()
+
+	if err != nil {
+		for _, entry := range entries {
+			if _, found := e.active.Get(entry.Key); !found {
+				e.active.Put(entry.Key, entry.Item) // ignore threshold signal: the next Put triggers the retry
+			}
+		}
+	} else {
+		e.sstables = append([]*sstable.SSTable{sst}, e.sstables...) // newest first
+	}
 	if e.flushing == frozen {
 		e.flushing = nil
 	}
-	e.mu.Unlock()
+}
+
+// writeAndRegister writes entries to a new SSTable, then durably records
+// it as live. The Manifest write is the durable "this file is now live"
+// fact — it must happen after sstable.Write's atomic rename has already
+// guaranteed the file itself is fully, safely on disk. If the Manifest
+// write fails, the .sst file is left behind as a harmless orphan: never
+// registered as live, so never loaded on restart.
+func (e *Engine) writeAndRegister(entries []memtable.Entry) (*sstable.SSTable, error) {
+	sst, err := sstable.Write(e.dataDir, entries)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.manifest.Add(sst.ID); err != nil {
+		return nil, err
+	}
+	return sst, nil
 }
 
 // Get checks the active memtable, then the in-flight frozen memtable (if
@@ -184,5 +229,8 @@ func (e *Engine) WaitForPendingFlushes() {
 
 func (e *Engine) Close() error {
 	e.WaitForPendingFlushes()
+	if err := e.manifest.Close(); err != nil {
+		return err
+	}
 	return e.wal.Close()
 }

@@ -1,8 +1,12 @@
 package engine
 
 import (
+	"path/filepath"
 	"testing"
 
+	"distributed-kv-datastore/internal/storage/manifest"
+	"distributed-kv-datastore/internal/storage/memtable"
+	"distributed-kv-datastore/internal/storage/sstable"
 	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/vectorclock"
 )
@@ -224,6 +228,126 @@ func TestBloomFilterAvoidsFalseHitsAcrossMultipleSSTables(t *testing.T) {
 		item, found, err := e.Get(key)
 		if err != nil || !found || item.Value != "value-"+key {
 			t.Errorf("key %q: expected value-%s, got found=%v value=%v err=%v", key, key, found, item, err)
+		}
+	}
+}
+
+func TestOrphanedSSTableNotRegisteredInManifestIsIgnoredOnRestart(t *testing.T) {
+	// Simulates the exact crash scenario Manifest exists to handle: an
+	// .sst file physically present on disk, but never durably registered
+	// as live. A Glob-based engine would incorrectly load it; a
+	// Manifest-based one must not.
+	dir := t.TempDir()
+
+	e1, err := Open(dir, 1<<20) // large threshold: nothing auto-flushes
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	if err := e1.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Manually write a well-formed .sst file directly, bypassing
+	// Engine/Manifest entirely — as if a flush's sstable.Write succeeded
+	// but the process crashed before manifest.Add ever ran.
+	orphan, err := sstable.Write(dir, []memtable.Entry{
+		{Key: "orphaned-key", Item: sampleItem("should-not-be-visible")},
+	})
+	if err != nil {
+		t.Fatalf("failed to write orphan sstable: %v", err)
+	}
+	_ = orphan
+
+	e2, err := Open(dir, 1<<20)
+	if err != nil {
+		t.Fatalf("re-Open failed: %v", err)
+	}
+	defer e2.Close()
+
+	_, found, err := e2.Get("orphaned-key")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if found {
+		t.Error("expected the orphaned (never-registered-in-manifest) sstable to be ignored")
+	}
+}
+
+func TestFailedManifestAddDoesNotStallFutureFlushes(t *testing.T) {
+	dir := t.TempDir()
+	e, err := Open(dir, 10)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer e.Close()
+
+	// Close the manifest's file out from under the engine: the next
+	// flush's sstable.Write succeeds, but its manifest.Add fails.
+	if err := e.manifest.Close(); err != nil {
+		t.Fatalf("closing manifest failed: %v", err)
+	}
+
+	if err := e.Put("first", sampleItem("v1")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	e.WaitForPendingFlushes()
+
+	e.mu.RLock()
+	flushingNil := e.flushing == nil
+	sstCount := len(e.sstables)
+	e.mu.RUnlock()
+	if !flushingNil {
+		t.Fatal("expected flushing to be cleared even though manifest.Add failed")
+	}
+	if sstCount != 0 {
+		t.Fatalf("expected the unregistered sstable not to be published, got %d sstables", sstCount)
+	}
+	// The .sst file exists on disk, so sstable.Write succeeded: the failure
+	// that kept it unpublished was manifest.Add's, not Write's.
+	onDisk, err := filepath.Glob(filepath.Join(dir, "*.sst"))
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if len(onDisk) != 1 {
+		t.Fatalf("expected exactly 1 orphaned .sst file from the failed flush, got %d", len(onDisk))
+	}
+	if item, found, err := e.Get("first"); err != nil || !found || item.Value != "v1" {
+		t.Fatalf("expected first=v1 to stay visible after the failed flush, got found=%v item=%v err=%v", found, item, err)
+	}
+
+	// Restore a working manifest. No flush is in flight (we waited above),
+	// and the next flush goroutine starts after this write, so no lock is needed.
+	mf, err := manifest.Open(dir)
+	if err != nil {
+		t.Fatalf("reopening manifest failed: %v", err)
+	}
+	e.manifest = mf
+
+	if err := e.Put("second", sampleItem("v2")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	e.WaitForPendingFlushes()
+
+	e.mu.RLock()
+	flushingNil = e.flushing == nil
+	sstables := e.sstables
+	e.mu.RUnlock()
+	if !flushingNil {
+		t.Fatal("expected flushing to be nil after the retry flush completes")
+	}
+	if len(sstables) != 1 {
+		t.Fatalf("expected a new flush to complete after the earlier failure, got %d sstables", len(sstables))
+	}
+	live := mf.LiveIDs()
+	if len(live) != 1 || live[0] != sstables[0].ID {
+		t.Fatalf("expected manifest to register %s, got %v", sstables[0].ID, live)
+	}
+
+	// Both keys (the retried one and the new one) must now come from the sstable.
+	for key, want := range map[string]string{"first": "v1", "second": "v2"} {
+		item, found, err := sstables[0].Get(key)
+		if err != nil || !found || item.Value != want {
+			t.Errorf("sstable key %q: expected %s, got found=%v item=%v err=%v", key, want, found, item, err)
 		}
 	}
 }

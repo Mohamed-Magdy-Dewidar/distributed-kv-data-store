@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/bits-and-blooms/bloom/v3"
@@ -37,6 +38,7 @@ type indexEntry struct {
 // the range check via a plain string comparison, the filter via a
 // probabilistic membership test — before ever opening it for a real read.
 type SSTable struct {
+	ID     string // base filename without extension, e.g. "sst_1234567890"
 	Path   string
 	MinKey string
 	MaxKey string
@@ -188,7 +190,7 @@ func Write(dir string, entries []memtable.Entry) (*SSTable, error) {
 		return nil, fmt.Errorf("sstable: create %s: %w", tmpPath, err)
 	}
 
-	sst, err := writeAndPublish(f, tmpPath, finalPath, entries)
+	sst, err := writeAndPublish(f, id, tmpPath, finalPath, entries)
 	if err != nil {
 		f.Close()
 		os.Remove(tmpPath)
@@ -197,7 +199,7 @@ func Write(dir string, entries []memtable.Entry) (*SSTable, error) {
 	return sst, nil
 }
 
-func writeAndPublish(f *os.File, tmpPath, finalPath string, entries []memtable.Entry) (*SSTable, error) {
+func writeAndPublish(f *os.File, id, tmpPath, finalPath string, entries []memtable.Entry) (*SSTable, error) {
 	index, bloomStart, err := writeDataSection(f, entries)
 	if err != nil {
 		return nil, err
@@ -232,6 +234,7 @@ func writeAndPublish(f *os.File, tmpPath, finalPath string, entries []memtable.E
 	}
 
 	return &SSTable{
+		ID:     id,
 		Path:   finalPath,
 		MinKey: entries[0].Key,
 		MaxKey: entries[len(entries)-1].Key,
@@ -292,6 +295,7 @@ func Open(path string) (*SSTable, error) {
 	}
 
 	return &SSTable{
+		ID:     strings.TrimSuffix(filepath.Base(path), ".sst"),
 		Path:   path,
 		MinKey: index[0].Key,
 		MaxKey: index[len(index)-1].Key,
