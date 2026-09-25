@@ -26,7 +26,11 @@ func NewServer(ds *store.DataStore) *Server {
 
 // Replicate accepts one or more sibling items from a peer for a single key
 // and merges each into the local store via the same resolve() path a local
-// Put uses.
+// Put uses. If persisting any item fails it returns a gRPC Internal error
+// rather than Accepted: false — rpc.Client.Replicate only reports gRPC
+// errors, so that's what keeps the sender from counting a failed write
+// toward its quorum. Items merged before the failure stay merged: merges
+// are causal and idempotent, so a retry or anti-entropy completes them.
 func (s *Server) Replicate(ctx context.Context, req *pb.ReplicateRequest) (*pb.ReplicateResponse, error) {
 	if len(req.Items) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "items must not be empty")
@@ -37,7 +41,9 @@ func (s *Server) Replicate(ctx context.Context, req *pb.ReplicateRequest) (*pb.R
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid item for key %q: %v", req.Key, err)
 		}
-		s.ds.MergeReplicated(req.Key, item)
+		if err := s.ds.MergeReplicated(req.Key, item); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to persist item for key %q: %v", req.Key, err)
+		}
 	}
 
 	return &pb.ReplicateResponse{Accepted: true}, nil

@@ -27,10 +27,11 @@ import (
 // is logged with the operation, key and underlying error, and the return
 // value says that nothing happened — Put and BuildItem return nil, Get and
 // GetLiveItems return not-found, Delete returns false with a "storage
-// error: ..." message, Keys returns nil. MergeReplicated and
-// RestoreVersions have no return value, so for them the log is the only
-// signal. Callers can't yet tell "not found" from "storage failed" on the
-// read paths.
+// error: ..." message, Keys returns nil, MergeReplicated returns the
+// error (the one method already widened, because an rpc.Server must not
+// acknowledge a replicated write it failed to persist). RestoreVersions
+// has no return value, so for it the log is the only signal. Callers
+// can't yet tell "not found" from "storage failed" on the read paths.
 type DataStore struct {
 	id        string
 	store     map[string][]*model.DataItem // in-memory mode only; nil when persister != nil
@@ -324,19 +325,21 @@ func (ds *DataStore) RestoreVersions(key string, items []*model.DataItem) {
 // the same conflict-resolution path a local Put uses. This owns its own
 // locking, so a caller (Node.Replicate) never has to reach into DataStore
 // internals directly — the encapsulation the old direct field access broke.
-// In persister-backed mode a failed write is logged; there is no other
-// signal yet.
-func (ds *DataStore) MergeReplicated(key string, item *model.DataItem) {
+// It returns an error only in persister-backed mode, when the write could
+// not be persisted (also logged); in-memory mode always returns nil.
+func (ds *DataStore) MergeReplicated(key string, item *model.DataItem) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
 	if ds.persister != nil {
 		if err := ds.persister.Put(key, item); err != nil {
 			log.Printf("store: MergeReplicated %q: persister write failed: %v", key, err)
+			return err
 		}
-		return
+		return nil
 	}
 
 	existing := ds.store[key]
 	ds.store[key] = versioning.Resolve(existing, item)
+	return nil
 }

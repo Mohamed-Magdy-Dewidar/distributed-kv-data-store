@@ -112,6 +112,13 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 	} else {
 		item = n.Store.BuildItem(key, value, context)
 	}
+	// A nil item means the local store couldn't persist the write (or, for
+	// BuildItem, couldn't read the versions it builds on); the store has
+	// logged why. Nothing was written, so there's nothing to roll back, and
+	// a nil item must never be sent to peers.
+	if item == nil {
+		return fmt.Errorf("local write failed for key %q: storage error (see log)", key)
+	}
 
 	totalNodes := len(peers)
 	successes := 0

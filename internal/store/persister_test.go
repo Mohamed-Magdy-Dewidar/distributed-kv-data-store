@@ -130,8 +130,14 @@ func TestBothModesReturnSiblingsInTheSameOrder(t *testing.T) {
 	base := map[string]uint32{"node-1": 1}
 	bothModes(t, "node-1", func(t *testing.T, ds *DataStore) {
 		ds.Put("foo", "first", base)
-		ds.MergeReplicated("foo", &model.DataItem{Value: "second", VectorClock: vectorclock.BuildFromContext(base, "node-2")})
-		ds.MergeReplicated("foo", &model.DataItem{Value: "third", VectorClock: vectorclock.BuildFromContext(base, "node-3")})
+		for _, item := range []*model.DataItem{
+			{Value: "second", VectorClock: vectorclock.BuildFromContext(base, "node-2")},
+			{Value: "third", VectorClock: vectorclock.BuildFromContext(base, "node-3")},
+		} {
+			if err := ds.MergeReplicated("foo", item); err != nil {
+				t.Fatalf("expected MergeReplicated to succeed, got %v", err)
+			}
+		}
 
 		items, _ := ds.Get("foo")
 		if want := []any{"first", "second", "third"}; !reflect.DeepEqual(values(items), want) {
@@ -245,8 +251,10 @@ func TestPersisterErrorsNeverLookLikeSuccess(t *testing.T) {
 	if keys := ds.Keys(); keys != nil {
 		t.Errorf("expected Keys to return nil, got %v", keys)
 	}
-	ds.MergeReplicated("foo", &model.DataItem{Value: "x", VectorClock: vectorclock.New()}) // logged; must not panic
-	ds.RestoreVersions("foo", nil)                                                         // logged; must not panic
+	if err := ds.MergeReplicated("foo", &model.DataItem{Value: "x", VectorClock: vectorclock.New()}); err == nil || !strings.Contains(err.Error(), "disk on fire") {
+		t.Errorf("expected MergeReplicated to return the persister's error, got %v", err)
+	}
+	ds.RestoreVersions("foo", nil) // logged; must not panic
 
 	p.err = nil
 	if items, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"bar"}) {
