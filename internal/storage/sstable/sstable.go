@@ -304,22 +304,29 @@ func Open(path string) (*SSTable, error) {
 	}, nil
 }
 
-// Get looks up key: a cheap range check, then a Bloom filter test (both
-// entirely in-memory, no disk I/O), and only if both pass does it open
-// the file and read the one matching record.
-func (s *SSTable) Get(key string) (*store.DataItem, bool, error) {
+// GetAll looks up key, returning every sibling version stored for it (a
+// key with unresolved Concurrent versions — most commonly the result of
+// compaction merging genuinely conflicting writes — can legitimately
+// have more than one). A cheap range check and Bloom filter test happen
+// first, entirely in memory, before any disk I/O.
+func (s *SSTable) GetAll(key string) ([]*store.DataItem, bool, error) {
 	if key < s.MinKey || key > s.MaxKey {
 		return nil, false, nil
 	}
 	if s.filter != nil && !s.filter.TestString(key) {
-		return nil, false, nil // definitely not here — zero disk I/O
+		return nil, false, nil
 	}
 
-	i := sort.Search(len(s.index), func(i int) bool {
+	start := sort.Search(len(s.index), func(i int) bool {
 		return s.index[i].Key >= key
 	})
-	if i >= len(s.index) || s.index[i].Key != key {
+	if start >= len(s.index) || s.index[start].Key != key {
 		return nil, false, nil // Bloom false positive — real, expected, rare
+	}
+
+	end := start
+	for end < len(s.index) && s.index[end].Key == key {
+		end++
 	}
 
 	f, err := os.Open(s.Path)
@@ -328,11 +335,28 @@ func (s *SSTable) Get(key string) (*store.DataItem, bool, error) {
 	}
 	defer f.Close()
 
-	entry, err := decodeRecordAt(f, s.index[i].Offset)
-	if err != nil {
-		return nil, false, err
+	items := make([]*store.DataItem, 0, end-start)
+	for i := start; i < end; i++ {
+		entry, err := decodeRecordAt(f, s.index[i].Offset)
+		if err != nil {
+			return nil, false, err
+		}
+		items = append(items, entry.Item)
 	}
-	return entry.Item, true, nil
+
+	return items, true, nil
+}
+
+// Get is a convenience wrapper for the common case of a key with exactly
+// one version. If the key has multiple sibling versions, it returns the
+// first one found — callers that need to correctly handle unresolved
+// siblings must use GetAll instead.
+func (s *SSTable) Get(key string) (*store.DataItem, bool, error) {
+	items, found, err := s.GetAll(key)
+	if err != nil || !found || len(items) == 0 {
+		return nil, found, err
+	}
+	return items[0], true, nil
 }
 
 // All reads and returns every entry in sorted order — used by compaction

@@ -280,3 +280,67 @@ func TestNoTmpFileLeftBehindAfterSuccessfulWrite(t *testing.T) {
 		t.Errorf("expected exactly one .sst file at %s, found %v", sst.Path, sstMatches)
 	}
 }
+
+func TestGetAllReturnsMultipleSiblingsForSameKey(t *testing.T) {
+	dir := t.TempDir()
+
+	vcA := vectorclock.New()
+	vcA.Increment("node-1")
+	vcB := vectorclock.New()
+	vcB.Increment("node-2")
+
+	// Two genuinely concurrent siblings for the same key, written
+	// adjacently since Write requires sorted input and both share a key.
+	entries := []memtable.Entry{
+		{Key: "contested", Item: &store.DataItem{Value: "from-node-1", VectorClock: vcA, LastUpdatedBy: "node-1"}},
+		{Key: "contested", Item: &store.DataItem{Value: "from-node-2", VectorClock: vcB, LastUpdatedBy: "node-2"}},
+		sampleEntry("zzz-other-key", "unrelated"),
+	}
+
+	sst, err := Write(dir, entries)
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	items, found, err := sst.GetAll("contested")
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+	if !found || len(items) != 2 {
+		t.Fatalf("expected 2 siblings for 'contested', got found=%v count=%d", found, len(items))
+	}
+
+	values := map[string]bool{}
+	for _, item := range items {
+		values[item.Value.(string)] = true
+	}
+	if !values["from-node-1"] || !values["from-node-2"] {
+		t.Fatalf("expected both sibling values present, got %v", values)
+	}
+}
+
+func TestGetReturnsOneOfMultipleSiblingsAsConvenienceWrapper(t *testing.T) {
+	dir := t.TempDir()
+	vcA := vectorclock.New()
+	vcA.Increment("node-1")
+	vcB := vectorclock.New()
+	vcB.Increment("node-2")
+
+	entries := []memtable.Entry{
+		{Key: "contested", Item: &store.DataItem{Value: "a", VectorClock: vcA, LastUpdatedBy: "node-1"}},
+		{Key: "contested", Item: &store.DataItem{Value: "b", VectorClock: vcB, LastUpdatedBy: "node-2"}},
+	}
+
+	sst, err := Write(dir, entries)
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	item, found, err := sst.Get("contested")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found || item == nil {
+		t.Fatal("expected Get to return one sibling, not fail")
+	}
+}
