@@ -2,7 +2,9 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -107,7 +109,14 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 	var prevVersions []*model.DataItem
 	var item *model.DataItem
 	if isReplica {
-		prevVersions, _ = n.Store.Get(key)
+		// prevVersions is what a failed quorum rolls back to, so a read
+		// failure here must stop the write: rolling back to a nil
+		// prevVersions would delete key's committed versions outright.
+		var err error
+		prevVersions, _, err = n.Store.Get(key)
+		if err != nil {
+			return fmt.Errorf("local read failed for key %q: %w", key, err)
+		}
 		item = n.Store.Put(key, value, context)
 	} else {
 		item = n.Store.BuildItem(key, value, context)
@@ -146,11 +155,16 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 	// means "delete key" — calling it unconditionally in the non-replica
 	// branch would wipe out any unrelated data this node happens to hold
 	// under key from before a ring topology change, which isn't this
-	// failure path's job to touch.
-	rollbackLocalWrite := func() {
-		if isReplica {
-			n.Store.RestoreVersions(key, prevVersions)
+	// failure path's job to touch. A failed rollback is reported alongside
+	// the quorum error: the failed write may still be visible locally.
+	rollbackLocalWrite := func(quorumErr error) error {
+		if !isReplica {
+			return quorumErr
 		}
+		if err := n.Store.RestoreVersions(key, prevVersions); err != nil {
+			return errors.Join(quorumErr, fmt.Errorf("rollback of local write for key %q failed: %w", key, err))
+		}
+		return quorumErr
 	}
 
 	failures := 0
@@ -167,18 +181,16 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 				return nil
 			}
 			if totalNodes-failures < needed {
-				rollbackLocalWrite()
-				return fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
-					key, successes, totalNodes, needed)
+				return rollbackLocalWrite(fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
+					key, successes, totalNodes, needed))
 			}
 		case <-ctx.Done():
 			return fmt.Errorf("put canceled for key %q: %w", key, ctx.Err())
 		}
 	}
 
-	rollbackLocalWrite()
-	return fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
-		key, successes, totalNodes, needed)
+	return rollbackLocalWrite(fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
+		key, successes, totalNodes, needed))
 }
 
 type fetchResult struct {
@@ -192,16 +204,25 @@ type fetchResult struct {
 //
 // When n is NOT one of key's replicas, it never had a local copy to merge
 // in, and peers is the full N-node preference list — see isReplicaFor.
+//
+// A local read error counts as a failed response, exactly like a peer RPC
+// error — never as a "not found" vote toward R.
 func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 	isReplica, peers := n.isReplicaFor(key)
 
 	var merged []*model.DataItem
 	totalNodes := len(peers)
 	responses := 0
+	failures := 0
 	if isReplica {
-		merged, _ = n.Store.Get(key)
 		totalNodes++
-		responses = 1 // the local read above
+		local, _, err := n.Store.Get(key)
+		if err != nil {
+			failures = 1
+		} else {
+			merged = local
+			responses = 1 // the local read above
+		}
 	}
 	needed := n.QuorumConfig.R
 
@@ -224,7 +245,6 @@ func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 		}(peerID)
 	}
 
-	failures := 0
 	for i := 0; i < len(peers); i++ {
 		select {
 		case res := <-results:
@@ -312,7 +332,10 @@ func (n *Node) coReplicantPeers() []string {
 // Merkle tree, fetches the peer's tree, and reconciles only the buckets
 // that diverge.
 func (n *Node) RunAntiEntropy(ctx context.Context, peerID string) error {
-	localTree := merkle.Build(n.Store, antiEntropyNumBuckets)
+	localTree, err := merkle.Build(n.Store, antiEntropyNumBuckets)
+	if err != nil {
+		return fmt.Errorf("build local merkle tree: %w", err)
+	}
 
 	client, err := n.getOrDialClient(peerID)
 	if err != nil {
@@ -341,9 +364,18 @@ func (n *Node) RunAntiEntropy(ctx context.Context, peerID string) error {
 // either side holds in that bucket, it fetches both sides' sibling sets,
 // merges them via versioning.MergeSiblings, and pushes the merged result back to
 // whichever side differs from it.
+//
+// Any local storage error aborts the bucket, just as a remote fetch error
+// does. Carrying on would treat a failed local read as "this node holds
+// nothing here", and RestoreVersions — which bypasses causality — would
+// then overwrite the local versions with the peer's.
 func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.Client, bucketIdx int) error {
+	allLocalKeys, err := n.Store.Keys()
+	if err != nil {
+		return fmt.Errorf("list local keys: %w", err)
+	}
 	localKeys := make(map[string]bool)
-	for _, k := range n.Store.Keys() {
+	for _, k := range allLocalKeys {
 		if merkle.BucketFor(k, antiEntropyNumBuckets) == bucketIdx {
 			localKeys[k] = true
 		}
@@ -363,7 +395,10 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 	}
 
 	for key := range allKeys {
-		localItems, _ := n.Store.Get(key)
+		localItems, _, err := n.Store.Get(key)
+		if err != nil {
+			return fmt.Errorf("read local %q: %w", key, err)
+		}
 		remoteItems, _, err := client.FetchItem(ctx, key)
 		if err != nil {
 			return fmt.Errorf("fetch %q from %q: %w", key, peerID, err)
@@ -372,7 +407,9 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 		merged := versioning.MergeSiblings(localItems, remoteItems)
 
 		if !itemSetsEqual(merged, localItems) {
-			n.Store.RestoreVersions(key, merged)
+			if err := n.Store.RestoreVersions(key, merged); err != nil {
+				return fmt.Errorf("install reconciled %q locally: %w", key, err)
+			}
 		}
 		if !itemSetsEqual(merged, remoteItems) {
 			if err := n.Replicate(ctx, peerID, key, merged); err != nil {
@@ -411,7 +448,9 @@ func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration)
 			select {
 			case <-ticker.C:
 				for _, peerID := range n.coReplicantPeers() {
-					_ = n.RunAntiEntropy(ctx, peerID)
+					if err := n.RunAntiEntropy(ctx, peerID); err != nil {
+						log.Printf("node %s: anti-entropy with %q failed: %v", n.ID, peerID, err)
+					}
 				}
 			case <-ctx.Done():
 				return

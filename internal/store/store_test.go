@@ -11,7 +11,7 @@ func TestBasicPutGet(t *testing.T) {
 	ds := NewDataStore("node-1")
 	ds.Put("foo", "bar", nil)
 
-	items, ok := ds.Get("foo")
+	items, ok, _ := ds.Get("foo")
 	if !ok {
 		t.Fatalf("expected key to exist")
 	}
@@ -32,7 +32,7 @@ func TestSequentialUpdateSameNodeDoesNotCreateSibling(t *testing.T) {
 	ds.Put("foo", "bar", nil)
 	ds.Put("foo", "baz", nil)
 
-	items, _ := ds.Get("foo")
+	items, _, _ := ds.Get("foo")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item after sequential same-node update, got %d — regression in nil-context union logic", len(items))
 	}
@@ -46,7 +46,7 @@ func TestSequentialUpdateSameNodeDoesNotCreateSibling(t *testing.T) {
 
 func TestGetMissingKey(t *testing.T) {
 	ds := NewDataStore("node-1")
-	items, ok := ds.Get("does-not-exist")
+	items, ok, _ := ds.Get("does-not-exist")
 	if ok {
 		t.Errorf("expected ok=false for missing key")
 	}
@@ -64,7 +64,7 @@ func TestDeleteTombstoneVsGetLiveItems(t *testing.T) {
 		t.Fatalf("expected delete to succeed")
 	}
 
-	rawItems, rawOk := ds.Get("foo")
+	rawItems, rawOk, _ := ds.Get("foo")
 	if !rawOk || len(rawItems) != 1 || !rawItems[0].IsDeleted {
 		t.Fatalf("expected raw get to still see 1 tombstoned item, got ok=%v items=%v", rawOk, rawItems)
 	}
@@ -101,7 +101,7 @@ func TestConcurrentWritersSameNodeSerialize(t *testing.T) {
 	}
 	wg.Wait()
 
-	items, _ := ds.Get("counter")
+	items, _, _ := ds.Get("counter")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 surviving item after 50 same-node writers, got %d", len(items))
 	}
@@ -127,7 +127,7 @@ func TestMergeReplicatedCreatesSiblingsOnGenuineConflict(t *testing.T) {
 	}
 	ds.MergeReplicated("foo", incoming)
 
-	items, _ := ds.Get("foo")
+	items, _, _ := ds.Get("foo")
 	if len(items) != 2 {
 		t.Fatalf("expected 2 siblings after MergeReplicated with a genuine concurrent item, got %d", len(items))
 	}

@@ -70,15 +70,15 @@ func TestPersisterBackedDataStoreSurvivesRestart(t *testing.T) {
 	check := func(label string, ds *store.DataStore) {
 		t.Helper()
 		for key, wantValues := range want {
-			items, found := ds.Get(key)
+			items, found, _ := ds.Get(key)
 			if !found || !reflect.DeepEqual(values(items), wantValues) {
 				t.Errorf("%s: Get(%s): expected %v, got found=%v %v", label, key, wantValues, found, values(items))
 			}
 		}
-		if raw, _ := ds.Get("gone"); len(raw) != 1 || !raw[0].IsDeleted {
+		if raw, _, _ := ds.Get("gone"); len(raw) != 1 || !raw[0].IsDeleted {
 			t.Errorf("%s: expected gone to be a tombstone, got %+v", label, raw)
 		}
-		keys := ds.Keys()
+		keys, _ := ds.Keys()
 		sort.Strings(keys)
 		if wantKeys := []string{"big", "conflict", "gone", "plain"}; !reflect.DeepEqual(keys, wantKeys) {
 			t.Errorf("%s: Keys: expected %v, got %v", label, wantKeys, keys)
@@ -111,18 +111,18 @@ func TestRollbackThroughRealEngine(t *testing.T) {
 		defer e.Close()
 
 		ds.Put("k", "committed", nil)
-		prev, _ := ds.Get("k")
+		prev, _, _ := ds.Get("k")
 		ds.Put("k", "failed-quorum", nil)
 		ds.RestoreVersions("k", prev)
 
-		if items, _ := ds.Get("k"); !reflect.DeepEqual(values(items), []any{"committed"}) {
+		if items, _, _ := ds.Get("k"); !reflect.DeepEqual(values(items), []any{"committed"}) {
 			t.Fatalf("expected rollback to restore [committed], got %v", values(items))
 		}
 
-		prevNone, _ := ds.Get("new-key")
+		prevNone, _, _ := ds.Get("new-key")
 		ds.Put("new-key", "failed-quorum", nil)
 		ds.RestoreVersions("new-key", prevNone)
-		if _, found := ds.Get("new-key"); found {
+		if _, found, _ := ds.Get("new-key"); found {
 			t.Fatal("expected rolling back a first write to remove the key")
 		}
 	})
@@ -132,13 +132,13 @@ func TestRollbackThroughRealEngine(t *testing.T) {
 		defer e.Close()
 
 		ds.Put("k", "committed", nil)
-		prev, _ := ds.Get("k")
+		prev, _, _ := ds.Get("k")
 		ds.Put("k", strings.Repeat("x", 200), nil) // crosses the threshold: frozen, then flushed
 		e.WaitForPendingFlushes()
 
 		ds.RestoreVersions("k", prev) // logs ErrRestoreIncomplete; must not panic
 
-		if items, _ := ds.Get("k"); !reflect.DeepEqual(values(items), []any{strings.Repeat("x", 200)}) {
+		if items, _, _ := ds.Get("k"); !reflect.DeepEqual(values(items), []any{strings.Repeat("x", 200)}) {
 			t.Fatalf("expected the flushed write to remain visible (known limitation), got %v", values(items))
 		}
 	})

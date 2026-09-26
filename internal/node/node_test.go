@@ -38,7 +38,7 @@ func TestReplicationCreatesSiblingsNaturally(t *testing.T) {
 	node1.Store.Put("foo", "from-node1", nil)
 	node2.Store.Put("foo", "from-node2", nil)
 
-	node1Items, _ := node1.Store.Get("foo")
+	node1Items, _, _ := node1.Store.Get("foo")
 	if len(node1Items) != 1 {
 		t.Fatalf("expected node1 to have exactly its own item before replication, got %d", len(node1Items))
 	}
@@ -48,7 +48,7 @@ func TestReplicationCreatesSiblingsNaturally(t *testing.T) {
 		t.Fatalf("Replicate failed: %v", err)
 	}
 
-	node2Items, _ := node2.Store.Get("foo")
+	node2Items, _, _ := node2.Store.Get("foo")
 	if len(node2Items) != 2 {
 		t.Fatalf("expected 2 siblings on node2 after replicating a genuine concurrent write, got %d", len(node2Items))
 	}
@@ -65,8 +65,8 @@ func TestReplicationConvergesBothDirections(t *testing.T) {
 	node1.Store.Put("foo", "from-node1", nil)
 	node2.Store.Put("foo", "from-node2", nil)
 
-	node1Items, _ := node1.Store.Get("foo")
-	node2Items, _ := node2.Store.Get("foo")
+	node1Items, _, _ := node1.Store.Get("foo")
+	node2Items, _, _ := node2.Store.Get("foo")
 
 	ctx := context.Background()
 	if err := node1.Replicate(ctx, "node-2", "foo", node1Items[:1]); err != nil {
@@ -76,8 +76,8 @@ func TestReplicationConvergesBothDirections(t *testing.T) {
 		t.Fatalf("node2->node1 Replicate failed: %v", err)
 	}
 
-	finalNode1, _ := node1.Store.Get("foo")
-	finalNode2, _ := node2.Store.Get("foo")
+	finalNode1, _, _ := node1.Store.Get("foo")
+	finalNode2, _, _ := node2.Store.Get("foo")
 
 	if len(finalNode1) != 2 || len(finalNode2) != 2 {
 		t.Fatalf("expected both replicas to converge to 2 siblings, got node1=%d node2=%d",

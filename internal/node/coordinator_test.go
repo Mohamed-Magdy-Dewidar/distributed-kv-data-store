@@ -223,7 +223,7 @@ func TestPutRollsBackLocalWriteWhenQuorumUnreachableFirstWrite(t *testing.T) {
 		t.Fatal("expected Put to fail: W=2 requires 2 nodes, but only the coordinator is up")
 	}
 
-	items, found := nodes["node-1"].Store.Get("foo")
+	items, found, _ := nodes["node-1"].Store.Get("foo")
 	if found || len(items) != 0 {
 		t.Fatalf("expected failed first write to be rolled back (key absent), got found=%v items=%v", found, items)
 	}
@@ -247,7 +247,7 @@ func TestPutRollsBackLocalWriteWhenQuorumUnreachableOverwrite(t *testing.T) {
 	if err := nodes["node-1"].Put(ctx, "foo", "committed", nil); err != nil {
 		t.Fatalf("setup Put failed: %v", err)
 	}
-	before, _ := nodes["node-1"].Store.Get("foo")
+	before, _, _ := nodes["node-1"].Store.Get("foo")
 
 	listeners["node-2"].Stop()
 	listeners["node-3"].Stop()
@@ -256,7 +256,7 @@ func TestPutRollsBackLocalWriteWhenQuorumUnreachableOverwrite(t *testing.T) {
 		t.Fatal("expected Put to fail: W=2 requires 2 nodes, but only the coordinator is up")
 	}
 
-	after, found := nodes["node-1"].Store.Get("foo")
+	after, found, _ := nodes["node-1"].Store.Get("foo")
 	if !found || len(after) != 1 || after[0].Value != "committed" {
 		t.Fatalf("expected rollback to restore exactly the pre-attempt version %v, got found=%v items=%v", before, found, after)
 	}
@@ -287,7 +287,7 @@ func TestPutRollbackDoesNotAccumulateAcrossRepeatedFailures(t *testing.T) {
 		t.Fatal("expected second Put to fail: only the coordinator is up")
 	}
 
-	items, found := nodes["node-1"].Store.Get("foo")
+	items, found, _ := nodes["node-1"].Store.Get("foo")
 	if found || len(items) != 0 {
 		t.Fatalf("expected repeated failed writes to leave no trace (key absent), got found=%v items=%v", found, items)
 	}
@@ -332,12 +332,12 @@ func TestPutGetActAsPureCoordinatorWhenNotAReplica(t *testing.T) {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	if items, found := nodes["node-1"].Store.Get(key); found || len(items) != 0 {
+	if items, found, _ := nodes["node-1"].Store.Get(key); found || len(items) != 0 {
 		t.Fatalf("expected non-replica node-1 to never store %q locally after Put, got found=%v items=%v", key, found, items)
 	}
 
 	for _, replicaID := range nodes["node-1"].Ring.GetPreferenceList(key, 2) {
-		items, found := nodes[replicaID].Store.Get(key)
+		items, found, _ := nodes[replicaID].Store.Get(key)
 		if !found || len(items) != 1 || items[0].Value != "coordinator-only" {
 			t.Fatalf("expected replica %q to hold the coordinated write, got found=%v items=%v", replicaID, found, items)
 		}
@@ -350,7 +350,7 @@ func TestPutGetActAsPureCoordinatorWhenNotAReplica(t *testing.T) {
 	if len(got) != 1 || got[0].Value != "coordinator-only" {
 		t.Fatalf("expected Get to return the coordinated value via fan-out, got %v", got)
 	}
-	if items, found := nodes["node-1"].Store.Get(key); found || len(items) != 0 {
+	if items, found, _ := nodes["node-1"].Store.Get(key); found || len(items) != 0 {
 		t.Fatalf("expected Get to leave no local copy on non-replica node-1, got found=%v items=%v", found, items)
 	}
 }

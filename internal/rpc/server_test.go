@@ -45,7 +45,7 @@ func TestReplicateAcceptsAndStoresOnSuccess(t *testing.T) {
 	if err != nil || !resp.Accepted {
 		t.Fatalf("expected Accepted with no error, got resp=%v err=%v", resp, err)
 	}
-	if items, found := ds.Get("foo"); !found || len(items) != 1 || items[0].Value != "v" {
+	if items, found, _ := ds.Get("foo"); !found || len(items) != 1 || items[0].Value != "v" {
 		t.Fatalf("expected the replicated item to be stored, got found=%v %v", found, items)
 	}
 }
@@ -58,6 +58,55 @@ func TestReplicateReturnsErrorWhenPersistFails(t *testing.T) {
 	resp, err := NewServer(ds).Replicate(context.Background(), replicateRequest(t))
 	if err == nil {
 		t.Fatalf("expected an error when persisting fails, got resp=%v", resp)
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Fatalf("expected codes.Internal, got %v (%v)", code, err)
+	}
+}
+
+// TestFetchItemReportsMissingKeyAsNotFound: a key that genuinely doesn't
+// exist is Found=false with no error — only a failed read is an error.
+func TestFetchItemReportsMissingKeyAsNotFound(t *testing.T) {
+	resp, err := NewServer(store.NewDataStore("node-1")).FetchItem(context.Background(), &pb.FetchItemRequest{Key: "missing"})
+	if err != nil || resp.Found {
+		t.Fatalf("expected Found=false with no error, got resp=%v err=%v", resp, err)
+	}
+}
+
+// TestFetchItemReturnsErrorWhenReadFails: Found=false would count as a
+// legitimate "not found" vote in the caller's read quorum, so a failed
+// read must be a gRPC error, as it is for Replicate.
+func TestFetchItemReturnsErrorWhenReadFails(t *testing.T) {
+	ds := store.NewDataStoreWithPersister("node-1", failingPersister{})
+	resp, err := NewServer(ds).FetchItem(context.Background(), &pb.FetchItemRequest{Key: "foo"})
+	if err == nil {
+		t.Fatalf("expected an error when the read fails, got resp=%v", resp)
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Fatalf("expected codes.Internal, got %v (%v)", code, err)
+	}
+}
+
+// TestGetBucketKeysReturnsErrorWhenKeysFail: an empty key list would tell
+// the peer this node holds nothing in the bucket.
+func TestGetBucketKeysReturnsErrorWhenKeysFail(t *testing.T) {
+	ds := store.NewDataStoreWithPersister("node-1", failingPersister{})
+	resp, err := NewServer(ds).GetBucketKeys(context.Background(), &pb.GetBucketKeysRequest{BucketIndex: 0, NumBuckets: 16})
+	if err == nil {
+		t.Fatalf("expected an error when listing keys fails, got resp=%v", resp)
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Fatalf("expected codes.Internal, got %v (%v)", code, err)
+	}
+}
+
+// TestGetMerkleTreeReturnsErrorWhenBuildFails: a tree built over a store
+// that failed to read would describe it to the peer as empty.
+func TestGetMerkleTreeReturnsErrorWhenBuildFails(t *testing.T) {
+	ds := store.NewDataStoreWithPersister("node-1", failingPersister{})
+	resp, err := NewServer(ds).GetMerkleTree(context.Background(), &pb.GetMerkleTreeRequest{NumBuckets: 16})
+	if err == nil {
+		t.Fatalf("expected an error when building the tree fails, got resp=%v", resp)
 	}
 	if code := status.Code(err); code != codes.Internal {
 		t.Fatalf("expected codes.Internal, got %v (%v)", code, err)

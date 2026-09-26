@@ -52,22 +52,33 @@ func (s *Server) Replicate(ctx context.Context, req *pb.ReplicateRequest) (*pb.R
 // GetMerkleTree builds a fresh merkle tree over the local store's current
 // contents at the requested bucket count and returns it whole — anti-entropy
 // does a bulk fetch of the peer's tree and compares locally rather than
-// recursing over the network one level at a time.
+// recursing over the network one level at a time. If the local store can't
+// be read it returns a gRPC Internal error: a tree built without the data
+// would tell the peer this node holds nothing.
 func (s *Server) GetMerkleTree(ctx context.Context, req *pb.GetMerkleTreeRequest) (*pb.GetMerkleTreeResponse, error) {
-	tree := merkle.Build(s.ds, int(req.NumBuckets))
+	tree, err := merkle.Build(s.ds, int(req.NumBuckets))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to build merkle tree: %v", err)
+	}
 	return toProtoTree(tree), nil
 }
 
 // GetBucketKeys returns the keys this node currently holds that fall into
 // bucketIndex under the same key->bucket mapping merkle.Build uses, so a
 // peer that found this bucket divergent via GetMerkleTree can fetch exactly
-// the keys it needs to reconcile.
+// the keys it needs to reconcile. A failure to list the local keys is a
+// gRPC Internal error, not an empty list.
 func (s *Server) GetBucketKeys(ctx context.Context, req *pb.GetBucketKeysRequest) (*pb.GetBucketKeysResponse, error) {
 	numBuckets := int(req.NumBuckets)
 	bucketIndex := int(req.BucketIndex)
 
+	allKeys, err := s.ds.Keys()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list keys: %v", err)
+	}
+
 	var keys []string
-	for _, k := range s.ds.Keys() {
+	for _, k := range allKeys {
 		if merkle.BucketFor(k, numBuckets) == bucketIndex {
 			keys = append(keys, k)
 		}
@@ -78,12 +89,15 @@ func (s *Server) GetBucketKeys(ctx context.Context, req *pb.GetBucketKeysRequest
 
 // FetchItem returns the full sibling set the local store currently holds
 // for a key. A key that genuinely doesn't exist is not an error — it's
-// reported via Found=false, matching store.DataStore.Get's own (items, bool)
-// contract. A conversion failure partway through, however, is treated as a
-// real error: returning a partial sibling set would silently mislead a
-// caller doing quorum-read merging.
+// reported via Found=false, matching store.DataStore.Get's own found flag.
+// A failed local read, like a conversion failure partway through, is a
+// gRPC Internal error (mirroring Replicate): answering Found=false instead
+// would count as a legitimate "not found" vote in the caller's read quorum.
 func (s *Server) FetchItem(ctx context.Context, req *pb.FetchItemRequest) (*pb.FetchItemResponse, error) {
-	items, found := s.ds.Get(req.Key)
+	items, found, err := s.ds.Get(req.Key)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to read key %q: %v", req.Key, err)
+	}
 	if !found {
 		return &pb.FetchItemResponse{Items: nil, Found: false}, nil
 	}

@@ -89,23 +89,20 @@ func canonicalItemString(item *model.DataItem) string {
 }
 
 // hashBucketContents computes a single hash summarizing everything in one
-// bucket. Keys are processed in sorted order, and each key's sibling set
-// is sorted by its canonical string form, so the result is deterministic
-// regardless of Go's randomized map iteration order.
-func hashBucketContents(ds *store.DataStore, bucketIndex, numBuckets int) Hash {
-	allKeys := ds.Keys()
-
-	var bucketKeys []string
-	for _, k := range allKeys {
-		if BucketFor(k, numBuckets) == bucketIndex {
-			bucketKeys = append(bucketKeys, k)
-		}
-	}
+// bucket, given the keys that fall into it. Keys are processed in sorted
+// order, and each key's sibling set is sorted by its canonical string
+// form, so the result is deterministic regardless of Go's randomized map
+// iteration order. A store read error is returned rather than hashed as
+// if the key were empty.
+func hashBucketContents(ds *store.DataStore, bucketKeys []string) (Hash, error) {
 	sort.Strings(bucketKeys)
 
 	h := sha256.New()
 	for _, key := range bucketKeys {
-		items, _ := ds.Get(key)
+		items, _, err := ds.Get(key)
+		if err != nil {
+			return Hash{}, fmt.Errorf("merkle: read %q: %w", key, err)
+		}
 
 		itemStrings := make([]string, 0, len(items))
 		for _, item := range items {
@@ -123,7 +120,7 @@ func hashBucketContents(ds *store.DataStore, bucketIndex, numBuckets int) Hash {
 
 	var out Hash
 	copy(out[:], h.Sum(nil))
-	return out
+	return out, nil
 }
 
 // combineHashes deterministically combines two child hashes into one
@@ -142,10 +139,23 @@ func combineHashes(left, right Hash) Hash {
 // internal level is built bottom-up by hashing pairs of children, up to
 // the root at Nodes[0]. Panics if numBuckets doesn't satisfy
 // validateBucketCount — a malformed bucket count is a programming error,
-// not a runtime condition callers should need to handle gracefully.
-func Build(ds *store.DataStore, numBuckets int) *Tree {
+// not a runtime condition callers should need to handle gracefully. A
+// store read error, by contrast, is returned: a tree built over a store
+// that failed to read would describe it as empty.
+func Build(ds *store.DataStore, numBuckets int) (*Tree, error) {
 	if err := validateBucketCount(numBuckets); err != nil {
 		panic(err)
+	}
+
+	// One key listing for the whole tree, not one per bucket.
+	allKeys, err := ds.Keys()
+	if err != nil {
+		return nil, fmt.Errorf("merkle: list keys: %w", err)
+	}
+	bucketKeys := make([][]string, numBuckets)
+	for _, k := range allKeys {
+		b := BucketFor(k, numBuckets)
+		bucketKeys[b] = append(bucketKeys[b], k)
 	}
 
 	nodeCount := 2*numBuckets - 1
@@ -153,7 +163,11 @@ func Build(ds *store.DataStore, numBuckets int) *Tree {
 
 	// Leaves first.
 	for b := 0; b < numBuckets; b++ {
-		nodes[leafIndex(b, numBuckets)] = hashBucketContents(ds, b, numBuckets)
+		leaf, err := hashBucketContents(ds, bucketKeys[b])
+		if err != nil {
+			return nil, err
+		}
+		nodes[leafIndex(b, numBuckets)] = leaf
 	}
 
 	// Internal levels, bottom-up. The last internal index is numBuckets-2
@@ -163,7 +177,7 @@ func Build(ds *store.DataStore, numBuckets int) *Tree {
 		nodes[i] = combineHashes(nodes[2*i+1], nodes[2*i+2])
 	}
 
-	return &Tree{NumBuckets: numBuckets, Nodes: nodes}
+	return &Tree{NumBuckets: numBuckets, Nodes: nodes}, nil
 }
 
 // isLeafIndex reports whether nodeIndex refers to a leaf in a tree with

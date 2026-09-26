@@ -1,12 +1,23 @@
 package merkle
 
 import (
+	"errors"
 	"testing"
 
+	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/store"
 )
 
 const testNumBuckets = 16 // satisfies 4^k (k=2)
+
+func mustBuild(t *testing.T, ds *store.DataStore, numBuckets int) *Tree {
+	t.Helper()
+	tree, err := Build(ds, numBuckets)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	return tree
+}
 
 func TestIdenticalDataProducesIdenticalTrees(t *testing.T) {
 	dsA := store.NewDataStore("node-1")
@@ -18,8 +29,8 @@ func TestIdenticalDataProducesIdenticalTrees(t *testing.T) {
 		dsB.Put(key, "value-"+key, nil)
 	}
 
-	treeA := Build(dsA, testNumBuckets)
-	treeB := Build(dsB, testNumBuckets)
+	treeA := mustBuild(t, dsA, testNumBuckets)
+	treeB := mustBuild(t, dsB, testNumBuckets)
 
 	if treeA.Nodes[0] != treeB.Nodes[0] {
 		t.Fatalf("expected identical root hashes for identical data, got %x vs %x", treeA.Nodes[0], treeB.Nodes[0])
@@ -44,8 +55,8 @@ func TestSingleChangedKeyOnlyAffectsItsOwnBucket(t *testing.T) {
 	changedKey := keyN(5)
 	dsB.Put(changedKey, "a-different-value", nil)
 
-	treeA := Build(dsA, testNumBuckets)
-	treeB := Build(dsB, testNumBuckets)
+	treeA := mustBuild(t, dsA, testNumBuckets)
+	treeB := mustBuild(t, dsB, testNumBuckets)
 
 	if treeA.Nodes[0] == treeB.Nodes[0] {
 		t.Fatal("expected root hashes to differ after changing one key")
@@ -109,8 +120,8 @@ func TestTwoDivergentLeavesInDifferentSubtreesAreBothFound(t *testing.T) {
 	dsB.Put(keyLow, "changed-low", nil)
 	dsB.Put(keyHigh, "changed-high", nil)
 
-	treeA := Build(dsA, testNumBuckets)
-	treeB := Build(dsB, testNumBuckets)
+	treeA := mustBuild(t, dsA, testNumBuckets)
+	treeB := mustBuild(t, dsB, testNumBuckets)
 
 	diverged := DivergentBuckets(treeA, treeB)
 	wantLow := BucketFor(keyLow, testNumBuckets)
@@ -132,8 +143,8 @@ func TestDivergentBucketsEmptyForIdenticalTrees(t *testing.T) {
 	dsA.Put("foo", "bar", nil)
 	dsB.Put("foo", "bar", nil)
 
-	treeA := Build(dsA, testNumBuckets)
-	treeB := Build(dsB, testNumBuckets)
+	treeA := mustBuild(t, dsA, testNumBuckets)
+	treeB := mustBuild(t, dsB, testNumBuckets)
 
 	if diverged := DivergentBuckets(treeA, treeB); len(diverged) != 0 {
 		t.Errorf("expected no divergent buckets, got %v", diverged)
@@ -150,8 +161,8 @@ func TestDivergentBucketsPanicsOnMismatchedNumBuckets(t *testing.T) {
 	dsA := store.NewDataStore("node-1")
 	dsA.Put("foo", "bar", nil)
 
-	treeA := Build(dsA, 16)
-	treeB := Build(dsA, 4) // valid on its own (4 = 4^1), just mismatched with treeA
+	treeA := mustBuild(t, dsA, 16)
+	treeB := mustBuild(t, dsA, 4) // valid on its own (4 = 4^1), just mismatched with treeA
 
 	DivergentBuckets(treeA, treeB)
 }
@@ -184,6 +195,39 @@ func TestBuildPanicsOnInvalidBucketCount(t *testing.T) {
 
 	ds := store.NewDataStore("node-1")
 	Build(ds, 8) // power of 2, but not power of 4 — should be rejected
+}
+
+var errDisk = errors.New("disk on fire")
+
+// brokenPersister lists keys (or fails to, when keysErr is set) but fails
+// every read of a key's versions.
+type brokenPersister struct {
+	keys    []string
+	keysErr error
+}
+
+func (brokenPersister) Put(string, *model.DataItem) error { return errDisk }
+func (brokenPersister) GetAll(string) ([]*model.DataItem, bool, error) {
+	return nil, false, errDisk
+}
+func (brokenPersister) Restore(string, []*model.DataItem) error { return errDisk }
+func (p brokenPersister) Keys() ([]string, error)               { return p.keys, p.keysErr }
+
+// TestBuildReturnsStoreErrors: a store read failure — listing keys, or
+// reading one key's versions — must fail Build, not be hashed as if the
+// store (or the key) were empty.
+func TestBuildReturnsStoreErrors(t *testing.T) {
+	for name, p := range map[string]brokenPersister{
+		"keys fail": {keysErr: errDisk},
+		"get fails": {keys: []string{"k"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tree, err := Build(store.NewDataStoreWithPersister("node-1", p), testNumBuckets)
+			if !errors.Is(err, errDisk) {
+				t.Fatalf("expected Build to return the store error, got tree=%v err=%v", tree, err)
+			}
+		})
+	}
 }
 
 func TestBucketForIsDeterministic(t *testing.T) {

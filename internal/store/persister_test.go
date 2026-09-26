@@ -110,14 +110,14 @@ func TestBothModesPutGetAndSequentialUpdate(t *testing.T) {
 		ds.Put("foo", "bar", nil)
 		ds.Put("foo", "baz", nil) // no context: builds on what's there, so it supersedes
 
-		items, found := ds.Get("foo")
+		items, found, _ := ds.Get("foo")
 		if !found || !reflect.DeepEqual(values(items), []any{"baz"}) {
 			t.Fatalf("expected [baz], got found=%v %v", found, values(items))
 		}
 		if vc := items[0].VectorClock.Snapshot(); vc["node-1"] != 2 {
 			t.Errorf("expected vc[node-1]=2, got %v", vc)
 		}
-		if _, found := ds.Get("missing"); found {
+		if _, found, _ := ds.Get("missing"); found {
 			t.Error("expected a missing key to be not found")
 		}
 	})
@@ -139,7 +139,7 @@ func TestBothModesReturnSiblingsInTheSameOrder(t *testing.T) {
 			}
 		}
 
-		items, _ := ds.Get("foo")
+		items, _, _ := ds.Get("foo")
 		if want := []any{"first", "second", "third"}; !reflect.DeepEqual(values(items), want) {
 			t.Fatalf("expected siblings oldest first %v, got %v", want, values(items))
 		}
@@ -160,11 +160,11 @@ func TestBothModesDeleteAndLiveItems(t *testing.T) {
 		if _, found := ds.GetLiveItems("foo"); found {
 			t.Error("expected no live items after Delete")
 		}
-		raw, found := ds.Get("foo")
+		raw, found, _ := ds.Get("foo")
 		if !found || len(raw) != 1 || !raw[0].IsDeleted {
 			t.Fatalf("expected Get to return the tombstone, got found=%v %v", found, raw)
 		}
-		if keys := ds.Keys(); !reflect.DeepEqual(keys, []string{"foo"}) {
+		if keys, _ := ds.Keys(); !reflect.DeepEqual(keys, []string{"foo"}) {
 			t.Errorf("expected Keys to include the tombstoned key, got %v", keys)
 		}
 	})
@@ -178,7 +178,7 @@ func TestBothModesBuildItemUsesUnionClockWithoutWriting(t *testing.T) {
 		if built == nil || built.VectorClock.Snapshot()["node-1"] != 2 {
 			t.Fatalf("expected a version built on the existing clock, got %+v", built)
 		}
-		if items, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"bar"}) {
+		if items, _, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"bar"}) {
 			t.Fatalf("expected BuildItem not to write, got %v", values(items))
 		}
 	})
@@ -187,19 +187,19 @@ func TestBothModesBuildItemUsesUnionClockWithoutWriting(t *testing.T) {
 func TestBothModesRestoreVersionsReplacesOrRemoves(t *testing.T) {
 	bothModes(t, "node-1", func(t *testing.T, ds *DataStore) {
 		ds.Put("foo", "v1", nil)
-		prev, _ := ds.Get("foo")
+		prev, _, _ := ds.Get("foo")
 		ds.Put("foo", "v2", nil)
 
 		ds.RestoreVersions("foo", prev)
-		if items, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"v1"}) {
+		if items, _, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"v1"}) {
 			t.Fatalf("expected rollback to restore [v1], got %v", values(items))
 		}
 
 		ds.RestoreVersions("foo", nil)
-		if _, found := ds.Get("foo"); found {
+		if _, found, _ := ds.Get("foo"); found {
 			t.Fatal("expected RestoreVersions(nil) to remove the key")
 		}
-		if keys := ds.Keys(); len(keys) != 0 {
+		if keys, _ := ds.Keys(); len(keys) != 0 {
 			t.Errorf("expected no keys after removal, got %v", keys)
 		}
 	})
@@ -219,8 +219,10 @@ func TestRestoreVersionsHandsPersisterNewestFirst(t *testing.T) {
 	}
 }
 
-// TestPersisterErrorsNeverLookLikeSuccess: with Decision 3's error-free
-// signatures, every method must still make a failed persist visible.
+// TestPersisterErrorsNeverLookLikeSuccess: every method must make a failed
+// persist visible — Get, Keys, MergeReplicated and RestoreVersions by
+// returning the error (never a not-found or empty result in its place),
+// the rest through their in-band signals.
 func TestPersisterErrorsNeverLookLikeSuccess(t *testing.T) {
 	p := newFakePersister()
 	ds := NewDataStoreWithPersister("node-1", p)
@@ -233,8 +235,8 @@ func TestPersisterErrorsNeverLookLikeSuccess(t *testing.T) {
 	if item := ds.Put("foo", "x", map[string]uint32{"node-1": 5}); item != nil {
 		t.Errorf("expected Put to return nil when the write fails, got %+v", item)
 	}
-	if items, found := ds.Get("foo"); found || items != nil {
-		t.Errorf("expected Get to report not found, got found=%v %v", found, items)
+	if items, found, err := ds.Get("foo"); err == nil || !strings.Contains(err.Error(), "disk on fire") || found || items != nil {
+		t.Errorf("expected Get to return the persister's error, got found=%v %v err=%v", found, items, err)
 	}
 	if items, found := ds.GetLiveItems("foo"); found || items != nil {
 		t.Errorf("expected GetLiveItems to report not found, got found=%v %v", found, items)
@@ -248,16 +250,18 @@ func TestPersisterErrorsNeverLookLikeSuccess(t *testing.T) {
 	if item := ds.BuildItem("foo", "x", map[string]uint32{"node-1": 5}); item == nil {
 		t.Error("expected BuildItem with an explicit context to need no read and succeed")
 	}
-	if keys := ds.Keys(); keys != nil {
-		t.Errorf("expected Keys to return nil, got %v", keys)
+	if keys, err := ds.Keys(); err == nil || !strings.Contains(err.Error(), "disk on fire") || keys != nil {
+		t.Errorf("expected Keys to return the persister's error, got %v err=%v", keys, err)
 	}
 	if err := ds.MergeReplicated("foo", &model.DataItem{Value: "x", VectorClock: vectorclock.New()}); err == nil || !strings.Contains(err.Error(), "disk on fire") {
 		t.Errorf("expected MergeReplicated to return the persister's error, got %v", err)
 	}
-	ds.RestoreVersions("foo", nil) // logged; must not panic
+	if err := ds.RestoreVersions("foo", nil); err == nil || !strings.Contains(err.Error(), "disk on fire") {
+		t.Errorf("expected RestoreVersions to return the persister's error, got %v", err)
+	}
 
 	p.err = nil
-	if items, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"bar"}) {
+	if items, _, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"bar"}) {
 		t.Fatalf("expected the failed calls to have changed nothing, got %v", values(items))
 	}
 
@@ -275,11 +279,33 @@ func (f *failingWritePersister) Put(string, *model.DataItem) error {
 	return errors.New("write failed")
 }
 
-func TestIncompleteRestoreIsLoggedNotFatal(t *testing.T) {
+func TestIncompleteRestoreIsReturned(t *testing.T) {
 	p := newFakePersister()
 	p.restoreErr = fmt.Errorf("engine: restore of key %q: %w", "foo", ErrRestoreIncomplete)
 	ds := NewDataStoreWithPersister("node-1", p)
 	ds.Put("foo", "bar", nil)
 
-	ds.RestoreVersions("foo", nil) // logged as a warning; must not panic
+	if err := ds.RestoreVersions("foo", nil); !errors.Is(err, ErrRestoreIncomplete) {
+		t.Fatalf("expected an error wrapping ErrRestoreIncomplete, got %v", err)
+	}
+}
+
+// TestInMemoryModeNeverReturnsErrors: the widened read signatures only
+// ever carry an error in persister-backed mode.
+func TestInMemoryModeNeverReturnsErrors(t *testing.T) {
+	ds := NewDataStore("node-1")
+	ds.Put("foo", "bar", nil)
+
+	if _, _, err := ds.Get("foo"); err != nil {
+		t.Errorf("Get: unexpected error %v", err)
+	}
+	if _, _, err := ds.Get("missing"); err != nil {
+		t.Errorf("Get of a missing key: unexpected error %v", err)
+	}
+	if _, err := ds.Keys(); err != nil {
+		t.Errorf("Keys: unexpected error %v", err)
+	}
+	if err := ds.RestoreVersions("foo", nil); err != nil {
+		t.Errorf("RestoreVersions: unexpected error %v", err)
+	}
 }

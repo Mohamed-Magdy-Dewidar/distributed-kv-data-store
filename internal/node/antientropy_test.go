@@ -14,7 +14,7 @@ func TestAntiEntropyConvergesAfterMissedReplication(t *testing.T) {
 
 	nodes["node-1"].Store.Put("orphaned-key", "value-from-node-1", nil)
 
-	if items, found := nodes["node-2"].Store.Get("orphaned-key"); found {
+	if items, found, _ := nodes["node-2"].Store.Get("orphaned-key"); found {
 		t.Fatalf("test setup invalid: node-2 should not have the key yet, got %v", items)
 	}
 
@@ -23,7 +23,7 @@ func TestAntiEntropyConvergesAfterMissedReplication(t *testing.T) {
 		t.Fatalf("RunAntiEntropy failed: %v", err)
 	}
 
-	items, found := nodes["node-2"].Store.Get("orphaned-key")
+	items, found, _ := nodes["node-2"].Store.Get("orphaned-key")
 	if !found || len(items) != 1 || items[0].Value != "value-from-node-1" {
 		t.Fatalf("expected node-2 to have converged after anti-entropy, got found=%v items=%v", found, items)
 	}
@@ -48,7 +48,7 @@ func TestAntiEntropyIsIdempotentWhenAlreadyInSync(t *testing.T) {
 		t.Fatalf("second RunAntiEntropy (already in sync) failed: %v", err)
 	}
 
-	items, found := nodes["node-2"].Store.Get("foo")
+	items, found, _ := nodes["node-2"].Store.Get("foo")
 	if !found || len(items) != 1 || items[0].Value != "bar" {
 		t.Fatalf("expected foo=bar on node-2 after convergence, got found=%v items=%v", found, items)
 	}
@@ -69,8 +69,8 @@ func TestAntiEntropyReconcilesGenuineSiblingsFromBothSides(t *testing.T) {
 		t.Fatalf("RunAntiEntropy failed: %v", err)
 	}
 
-	items1, _ := nodes["node-1"].Store.Get("contested-key")
-	items2, _ := nodes["node-2"].Store.Get("contested-key")
+	items1, _, _ := nodes["node-1"].Store.Get("contested-key")
+	items2, _, _ := nodes["node-2"].Store.Get("contested-key")
 
 	if len(items1) != 2 || len(items2) != 2 {
 		t.Fatalf("expected both nodes to hold 2 siblings after reconciling a genuine conflict, got node1=%d node2=%d",

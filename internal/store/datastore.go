@@ -22,16 +22,13 @@ import (
 // first one in memory, but in persister mode the second one wins if the
 // first was already flushed out of the persister's memtable.
 //
-// Persister errors (PLACEHOLDER until these methods return error): none of
-// DataStore's methods can return an error yet, so a failed persister call
-// is logged with the operation, key and underlying error, and the return
-// value says that nothing happened — Put and BuildItem return nil, Get and
-// GetLiveItems return not-found, Delete returns false with a "storage
-// error: ..." message, Keys returns nil, MergeReplicated returns the
-// error (the one method already widened, because an rpc.Server must not
-// acknowledge a replicated write it failed to persist). RestoreVersions
-// has no return value, so for it the log is the only signal. Callers
-// can't yet tell "not found" from "storage failed" on the read paths.
+// Persister errors: every persister failure is logged with the
+// operation, key and underlying error. Get, Keys, MergeReplicated and
+// RestoreVersions return it, so callers can tell "not found" from
+// "storage failed". The rest still signal it in-band: Put and BuildItem
+// return nil, GetLiveItems returns not-found, and Delete returns false
+// with a "storage error: ..." message. In-memory mode never returns an
+// error.
 type DataStore struct {
 	id        string
 	store     map[string][]*model.DataItem // in-memory mode only; nil when persister != nil
@@ -84,7 +81,9 @@ func reversed(items []*model.DataItem) []*model.DataItem {
 // Keys returns every key currently present in the store (including
 // tombstoned keys — same "raw" visibility as Get, not GetLiveItems).
 // Needed by anti-entropy to enumerate what a bucket actually contains.
-func (ds *DataStore) Keys() []string {
+// In persister-backed mode it returns the error if the persister read
+// fails.
+func (ds *DataStore) Keys() ([]string, error) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -92,35 +91,34 @@ func (ds *DataStore) Keys() []string {
 		keys, err := ds.persister.Keys()
 		if err != nil {
 			log.Printf("store: Keys: persister read failed: %v", err)
-			return nil
+			return nil, err
 		}
-		return keys
+		return keys, nil
 	}
 
 	keys := make([]string, 0, len(ds.store))
 	for k := range ds.store {
 		keys = append(keys, k)
 	}
-	return keys
+	return keys, nil
 }
 
-func (ds *DataStore) Get(key string) ([]*model.DataItem, bool) {
+// Get returns every sibling version stored for key, tombstones included.
+// found is false when there are none. In persister-backed mode it returns
+// the error if the persister read fails — never a not-found in its place.
+func (ds *DataStore) Get(key string) ([]*model.DataItem, bool, error) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
 	if ds.persister != nil {
-		items, found, err := ds.load("Get", key)
-		if err != nil {
-			return nil, false
-		}
-		return items, found
+		return ds.load("Get", key)
 	}
 
 	items, exists := ds.store[key]
 	if !exists {
-		return nil, false
+		return nil, false, nil
 	}
-	return items, len(items) > 0
+	return items, len(items) > 0, nil
 }
 
 func (ds *DataStore) GetLiveItems(key string) ([]*model.DataItem, bool) {
@@ -298,8 +296,9 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 // always fully undo the write (see ErrRestoreIncomplete): that case is
 // logged as a warning, and the rolled-back write stays visible on this
 // node, the usual meaning of "a failed write may still have been applied".
-// Any other persister error is logged too; neither is fatal.
-func (ds *DataStore) RestoreVersions(key string, items []*model.DataItem) {
+// Any other persister error is logged too. Either one is returned; in
+// in-memory mode it always returns nil.
+func (ds *DataStore) RestoreVersions(key string, items []*model.DataItem) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -311,14 +310,15 @@ func (ds *DataStore) RestoreVersions(key string, items []*model.DataItem) {
 		case err != nil:
 			log.Printf("store: RestoreVersions %q: persister restore failed: %v", key, err)
 		}
-		return
+		return err
 	}
 
 	if len(items) == 0 {
 		delete(ds.store, key)
-		return
+		return nil
 	}
 	ds.store[key] = items
+	return nil
 }
 
 // MergeReplicated applies an item that arrived from another node through
