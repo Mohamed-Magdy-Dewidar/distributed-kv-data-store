@@ -25,9 +25,9 @@ import (
 // Persister errors: every persister failure is logged with the
 // operation, key and underlying error. Get, Keys, MergeReplicated and
 // RestoreVersions return it, so callers can tell "not found" from
-// "storage failed". The rest still signal it in-band: Put and BuildItem
-// return nil, GetLiveItems returns not-found, and Delete returns false
-// with a "storage error: ..." message. In-memory mode never returns an
+// "storage failed". The rest still signal it in-band: Put returns nil,
+// GetLiveItems returns not-found, and Delete returns false with a
+// "storage error: ..." message. In-memory mode never returns an
 // error.
 type DataStore struct {
 	id        string
@@ -199,40 +199,6 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *mode
 	}
 	ds.store[key] = versioning.Resolve(existing, incoming)
 	return incoming
-}
-
-// BuildItem constructs the DataItem Put would produce for value/context —
-// same vector-clock derivation, same LastUpdatedBy attribution — without
-// writing it into the store. For a coordinator that isn't itself one of
-// key's replicas: it still needs to hand replicas a properly versioned
-// item, but must not end up holding a local copy of its own. In
-// persister-backed mode it returns nil if it needed the existing versions
-// (context is nil) and could not read them — building from an empty base
-// instead would silently produce a version that fails to supersede them.
-func (ds *DataStore) BuildItem(key string, value any, context map[string]uint32) *model.DataItem {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
-	base := context
-	if base == nil {
-		if ds.persister != nil {
-			existing, found, err := ds.load("BuildItem", key)
-			if err != nil {
-				return nil
-			}
-			if found {
-				base = versioning.UnionVectorClock(existing)
-			}
-		} else if existing, ok := ds.store[key]; ok {
-			base = versioning.UnionVectorClock(existing)
-		}
-	}
-
-	return &model.DataItem{
-		Value:         value,
-		VectorClock:   vectorclock.BuildFromContext(base, ds.id),
-		LastUpdatedBy: ds.id,
-	}
 }
 
 // Delete treats deletion as just another write — a tombstoned DataItem

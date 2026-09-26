@@ -473,6 +473,153 @@ func (x *GetBucketKeysResponse) GetKeys() []string {
 	return nil
 }
 
+// VectorContext wraps a client's causal context so its absence is visible
+// on the wire: a nil context ("build on whatever versions exist") and an
+// empty one ("build on nothing") mean different things to Store.Put, and a
+// bare proto3 map can't tell them apart.
+type VectorContext struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       map[string]uint32      `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VectorContext) Reset() {
+	*x = VectorContext{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VectorContext) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VectorContext) ProtoMessage() {}
+
+func (x *VectorContext) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VectorContext.ProtoReflect.Descriptor instead.
+func (*VectorContext) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *VectorContext) GetEntries() map[string]uint32 {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+// CoordinatePutRequest carries a raw client write — value and causal
+// context exactly as the client supplied them, no vector clock built yet —
+// from a node that isn't one of key's replicas to one that is.
+type CoordinatePutRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`     // JSON, same encoding as DataItem.value
+	Context       *VectorContext         `protobuf:"bytes,3,opt,name=context,proto3" json:"context,omitempty"` // unset = nil context
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CoordinatePutRequest) Reset() {
+	*x = CoordinatePutRequest{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoordinatePutRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoordinatePutRequest) ProtoMessage() {}
+
+func (x *CoordinatePutRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoordinatePutRequest.ProtoReflect.Descriptor instead.
+func (*CoordinatePutRequest) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *CoordinatePutRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *CoordinatePutRequest) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *CoordinatePutRequest) GetContext() *VectorContext {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+type CoordinatePutResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CoordinatePutResponse) Reset() {
+	*x = CoordinatePutResponse{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoordinatePutResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoordinatePutResponse) ProtoMessage() {}
+
+func (x *CoordinatePutResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoordinatePutResponse.ProtoReflect.Descriptor instead.
+func (*CoordinatePutResponse) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{11}
+}
+
 var File_internal_rpc_pb_kvstore_proto protoreflect.FileDescriptor
 
 const file_internal_rpc_pb_kvstore_proto_rawDesc = "" +
@@ -509,12 +656,23 @@ const file_internal_rpc_pb_kvstore_proto_rawDesc = "" +
 	"\vnum_buckets\x18\x02 \x01(\x05R\n" +
 	"numBuckets\"+\n" +
 	"\x15GetBucketKeysResponse\x12\x12\n" +
-	"\x04keys\x18\x01 \x03(\tR\x04keys2\xb7\x02\n" +
+	"\x04keys\x18\x01 \x03(\tR\x04keys\"\x8a\x01\n" +
+	"\rVectorContext\x12=\n" +
+	"\aentries\x18\x01 \x03(\v2#.kvstore.VectorContext.EntriesEntryR\aentries\x1a:\n" +
+	"\fEntriesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"p\n" +
+	"\x14CoordinatePutRequest\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\x120\n" +
+	"\acontext\x18\x03 \x01(\v2\x16.kvstore.VectorContextR\acontext\"\x17\n" +
+	"\x15CoordinatePutResponse2\x87\x03\n" +
 	"\rKVReplication\x12B\n" +
 	"\tReplicate\x12\x19.kvstore.ReplicateRequest\x1a\x1a.kvstore.ReplicateResponse\x12B\n" +
 	"\tFetchItem\x12\x19.kvstore.FetchItemRequest\x1a\x1a.kvstore.FetchItemResponse\x12N\n" +
 	"\rGetMerkleTree\x12\x1d.kvstore.GetMerkleTreeRequest\x1a\x1e.kvstore.GetMerkleTreeResponse\x12N\n" +
-	"\rGetBucketKeys\x12\x1d.kvstore.GetBucketKeysRequest\x1a\x1e.kvstore.GetBucketKeysResponseB*Z(distributed-kv-datastore/internal/rpc/pbb\x06proto3"
+	"\rGetBucketKeys\x12\x1d.kvstore.GetBucketKeysRequest\x1a\x1e.kvstore.GetBucketKeysResponse\x12N\n" +
+	"\rCoordinatePut\x12\x1d.kvstore.CoordinatePutRequest\x1a\x1e.kvstore.CoordinatePutResponseB*Z(distributed-kv-datastore/internal/rpc/pbb\x06proto3"
 
 var (
 	file_internal_rpc_pb_kvstore_proto_rawDescOnce sync.Once
@@ -528,7 +686,7 @@ func file_internal_rpc_pb_kvstore_proto_rawDescGZIP() []byte {
 	return file_internal_rpc_pb_kvstore_proto_rawDescData
 }
 
-var file_internal_rpc_pb_kvstore_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_internal_rpc_pb_kvstore_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_internal_rpc_pb_kvstore_proto_goTypes = []any{
 	(*DataItem)(nil),              // 0: kvstore.DataItem
 	(*ReplicateRequest)(nil),      // 1: kvstore.ReplicateRequest
@@ -539,25 +697,33 @@ var file_internal_rpc_pb_kvstore_proto_goTypes = []any{
 	(*GetMerkleTreeResponse)(nil), // 6: kvstore.GetMerkleTreeResponse
 	(*GetBucketKeysRequest)(nil),  // 7: kvstore.GetBucketKeysRequest
 	(*GetBucketKeysResponse)(nil), // 8: kvstore.GetBucketKeysResponse
-	nil,                           // 9: kvstore.DataItem.VectorClockEntry
+	(*VectorContext)(nil),         // 9: kvstore.VectorContext
+	(*CoordinatePutRequest)(nil),  // 10: kvstore.CoordinatePutRequest
+	(*CoordinatePutResponse)(nil), // 11: kvstore.CoordinatePutResponse
+	nil,                           // 12: kvstore.DataItem.VectorClockEntry
+	nil,                           // 13: kvstore.VectorContext.EntriesEntry
 }
 var file_internal_rpc_pb_kvstore_proto_depIdxs = []int32{
-	9, // 0: kvstore.DataItem.vector_clock:type_name -> kvstore.DataItem.VectorClockEntry
-	0, // 1: kvstore.ReplicateRequest.items:type_name -> kvstore.DataItem
-	0, // 2: kvstore.FetchItemResponse.items:type_name -> kvstore.DataItem
-	1, // 3: kvstore.KVReplication.Replicate:input_type -> kvstore.ReplicateRequest
-	3, // 4: kvstore.KVReplication.FetchItem:input_type -> kvstore.FetchItemRequest
-	5, // 5: kvstore.KVReplication.GetMerkleTree:input_type -> kvstore.GetMerkleTreeRequest
-	7, // 6: kvstore.KVReplication.GetBucketKeys:input_type -> kvstore.GetBucketKeysRequest
-	2, // 7: kvstore.KVReplication.Replicate:output_type -> kvstore.ReplicateResponse
-	4, // 8: kvstore.KVReplication.FetchItem:output_type -> kvstore.FetchItemResponse
-	6, // 9: kvstore.KVReplication.GetMerkleTree:output_type -> kvstore.GetMerkleTreeResponse
-	8, // 10: kvstore.KVReplication.GetBucketKeys:output_type -> kvstore.GetBucketKeysResponse
-	7, // [7:11] is the sub-list for method output_type
-	3, // [3:7] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	12, // 0: kvstore.DataItem.vector_clock:type_name -> kvstore.DataItem.VectorClockEntry
+	0,  // 1: kvstore.ReplicateRequest.items:type_name -> kvstore.DataItem
+	0,  // 2: kvstore.FetchItemResponse.items:type_name -> kvstore.DataItem
+	13, // 3: kvstore.VectorContext.entries:type_name -> kvstore.VectorContext.EntriesEntry
+	9,  // 4: kvstore.CoordinatePutRequest.context:type_name -> kvstore.VectorContext
+	1,  // 5: kvstore.KVReplication.Replicate:input_type -> kvstore.ReplicateRequest
+	3,  // 6: kvstore.KVReplication.FetchItem:input_type -> kvstore.FetchItemRequest
+	5,  // 7: kvstore.KVReplication.GetMerkleTree:input_type -> kvstore.GetMerkleTreeRequest
+	7,  // 8: kvstore.KVReplication.GetBucketKeys:input_type -> kvstore.GetBucketKeysRequest
+	10, // 9: kvstore.KVReplication.CoordinatePut:input_type -> kvstore.CoordinatePutRequest
+	2,  // 10: kvstore.KVReplication.Replicate:output_type -> kvstore.ReplicateResponse
+	4,  // 11: kvstore.KVReplication.FetchItem:output_type -> kvstore.FetchItemResponse
+	6,  // 12: kvstore.KVReplication.GetMerkleTree:output_type -> kvstore.GetMerkleTreeResponse
+	8,  // 13: kvstore.KVReplication.GetBucketKeys:output_type -> kvstore.GetBucketKeysResponse
+	11, // 14: kvstore.KVReplication.CoordinatePut:output_type -> kvstore.CoordinatePutResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_internal_rpc_pb_kvstore_proto_init() }
@@ -571,7 +737,7 @@ func file_internal_rpc_pb_kvstore_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_rpc_pb_kvstore_proto_rawDesc), len(file_internal_rpc_pb_kvstore_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

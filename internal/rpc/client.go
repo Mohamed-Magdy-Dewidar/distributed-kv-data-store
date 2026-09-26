@@ -69,6 +69,23 @@ func (c *Client) Replicate(ctx context.Context, key string, items []*model.DataI
 	return err
 }
 
+// CoordinatePut forwards a raw client write — value and context exactly as
+// the client supplied them, nil context included — to this peer, which
+// must be one of key's replicas, to version, replicate and quorum-check.
+func (c *Client) CoordinatePut(ctx context.Context, key string, value any, clientContext map[string]uint32) error {
+	valueBytes, err := marshalValue(value)
+	if err != nil {
+		return fmt.Errorf("convert value for key %q: %w", key, err)
+	}
+
+	req := &pb.CoordinatePutRequest{Key: key, Value: valueBytes}
+	if clientContext != nil {
+		req.Context = &pb.VectorContext{Entries: clientContext}
+	}
+	_, err = c.stub.CoordinatePut(ctx, req)
+	return err
+}
+
 func (c *Client) GetMerkleTree(ctx context.Context, numBuckets int) (*merkle.Tree, error) {
 	resp, err := c.stub.GetMerkleTree(ctx, &pb.GetMerkleTreeRequest{NumBuckets: int32(numBuckets)})
 	if err != nil {

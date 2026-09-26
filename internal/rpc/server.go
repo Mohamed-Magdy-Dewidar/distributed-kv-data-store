@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -11,17 +12,35 @@ import (
 	"distributed-kv-datastore/internal/store"
 )
 
-// Server implements pb.KVReplicationServer, wiring the gRPC-facing
-// Replicate/FetchItem methods to the underlying DataStore. It holds no
-// state of its own beyond a reference to the store — all locking and
-// conflict resolution already live in DataStore/resolve.
-type Server struct {
-	pb.UnimplementedKVReplicationServer
-	ds *store.DataStore
+// ErrNotReplica is returned by a WriteCoordinator asked to coordinate a
+// write for a key it isn't a replica for. It's never forwarded onward: two
+// nodes whose rings disagree must fail the write, not bounce it between
+// themselves.
+var ErrNotReplica = errors.New("not a replica for this key")
+
+// WriteCoordinator coordinates a client write for a key this node
+// replicates: it versions the write once, on itself, then replicates it
+// and waits for the write quorum. node.Node implements it; it's an
+// interface here because node imports rpc, not the other way round.
+type WriteCoordinator interface {
+	CoordinatePut(ctx context.Context, key string, value any, clientContext map[string]uint32) error
 }
 
-func NewServer(ds *store.DataStore) *Server {
-	return &Server{ds: ds}
+// Server implements pb.KVReplicationServer, wiring the gRPC-facing
+// Replicate/FetchItem methods to the underlying DataStore, and
+// CoordinatePut to coord. It holds no state of its own beyond those
+// references — all locking and conflict resolution already live in
+// DataStore/resolve.
+type Server struct {
+	pb.UnimplementedKVReplicationServer
+	ds    *store.DataStore
+	coord WriteCoordinator
+}
+
+// NewServer returns a Server over ds. coord may be nil, in which case
+// CoordinatePut is refused with codes.Unimplemented.
+func NewServer(ds *store.DataStore, coord WriteCoordinator) *Server {
+	return &Server{ds: ds, coord: coord}
 }
 
 // Replicate accepts one or more sibling items from a peer for a single key
@@ -112,4 +131,43 @@ func (s *Server) FetchItem(ctx context.Context, req *pb.FetchItemRequest) (*pb.F
 	}
 
 	return &pb.FetchItemResponse{Items: protoItems, Found: true}, nil
+}
+
+// CoordinatePut runs a raw client write forwarded by a node that isn't one
+// of key's replicas: the value and context arrive exactly as the client
+// supplied them, and s.coord versions the write once, on this node.
+//
+// It never returns codes.Unavailable. The forwarding node fails over to the
+// next replica only on Unavailable — meaning the request never got here —
+// so a write this node received and then failed must not look like one.
+func (s *Server) CoordinatePut(ctx context.Context, req *pb.CoordinatePutRequest) (*pb.CoordinatePutResponse, error) {
+	if s.coord == nil {
+		return nil, status.Error(codes.Unimplemented, "this server does not coordinate writes")
+	}
+	value, err := unmarshalValue(req.Value)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid value for key %q: %v", req.Key, err)
+	}
+
+	// An unset context stays nil ("build on whatever versions exist"); a set
+	// one stays non-nil even when empty ("build on nothing").
+	var clientContext map[string]uint32
+	if req.Context != nil {
+		clientContext = make(map[string]uint32, len(req.Context.Entries))
+		for node, version := range req.Context.Entries {
+			clientContext[node] = version
+		}
+	}
+
+	if err := s.coord.CoordinatePut(ctx, req.Key, value, clientContext); err != nil {
+		switch {
+		case errors.Is(err, ErrNotReplica):
+			return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return nil, status.FromContextError(err).Err()
+		default:
+			return nil, status.Errorf(codes.Internal, "coordinated write for key %q failed: %v", req.Key, err)
+		}
+	}
+	return &pb.CoordinatePutResponse{}, nil
 }

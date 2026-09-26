@@ -205,7 +205,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	listener, err := rpc.Serve(mn.address, mn.node.Store)
+	listener, err := rpc.Serve(mn.address, mn.node.Store, mn.node)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

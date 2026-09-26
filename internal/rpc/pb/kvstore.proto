@@ -48,9 +48,31 @@ message GetBucketKeysResponse {
   repeated string keys = 1;
 }
 
+// VectorContext wraps a client's causal context so its absence is visible
+// on the wire: a nil context ("build on whatever versions exist") and an
+// empty one ("build on nothing") mean different things to Store.Put, and a
+// bare proto3 map can't tell them apart.
+message VectorContext {
+  map<string, uint32> entries = 1;
+}
+
+// CoordinatePutRequest carries a raw client write — value and causal
+// context exactly as the client supplied them, no vector clock built yet —
+// from a node that isn't one of key's replicas to one that is.
+message CoordinatePutRequest {
+  string key = 1;
+  bytes value = 2;           // JSON, same encoding as DataItem.value
+  VectorContext context = 3; // unset = nil context
+}
+
+message CoordinatePutResponse {}
+
 service KVReplication {
   rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
   rpc FetchItem(FetchItemRequest) returns (FetchItemResponse);
   rpc GetMerkleTree(GetMerkleTreeRequest) returns (GetMerkleTreeResponse);
   rpc GetBucketKeys(GetBucketKeysRequest) returns (GetBucketKeysResponse);
+  // CoordinatePut asks a replica to coordinate a client write: version it
+  // once on itself, replicate it, and report whether W was reached.
+  rpc CoordinatePut(CoordinatePutRequest) returns (CoordinatePutResponse);
 }

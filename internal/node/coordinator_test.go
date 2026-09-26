@@ -57,7 +57,7 @@ func startTestCluster(t *testing.T, addrs map[string]string, overrides map[strin
 		}
 
 		n := New(id, addr, replicationFactor, w, r, neighbors)
-		listener, err := rpc.Serve(addr, n.Store)
+		listener, err := rpc.Serve(addr, n.Store, n)
 		if err != nil {
 			t.Fatalf("failed to start server for %s: %v", id, err)
 		}
@@ -307,8 +307,13 @@ func TestPutGetActAsPureCoordinatorWhenNotAReplica(t *testing.T) {
 		"node-2": "localhost:60282",
 		"node-3": "localhost:60283",
 	}
+	// Uniform N=2 on every node, not just node-1: node-1 forwards its write
+	// to a replica, which coordinates with its own N — with N=3 it would
+	// replicate to node-1 too. A real cluster must agree on N anyway.
 	nodes, _ := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {n: 2, w: 2, r: 2},
+		"node-2": {n: 2, w: 2, r: 2},
+		"node-3": {n: 2, w: 2, r: 2},
 	})
 
 	var key string

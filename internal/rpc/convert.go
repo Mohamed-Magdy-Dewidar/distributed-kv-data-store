@@ -10,10 +10,28 @@ import (
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
-func toProtoDataItem(item *model.DataItem) (*pb.DataItem, error) {
-	valueBytes, err := json.Marshal(item.Value)
+// marshalValue and unmarshalValue are the one wire encoding for a stored
+// value, whether it travels inside a DataItem or as a raw client write.
+func marshalValue(value any) ([]byte, error) {
+	valueBytes, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("marshal value: %w", err)
+	}
+	return valueBytes, nil
+}
+
+func unmarshalValue(b []byte) (any, error) {
+	var value any
+	if err := json.Unmarshal(b, &value); err != nil {
+		return nil, fmt.Errorf("unmarshal value: %w", err)
+	}
+	return value, nil
+}
+
+func toProtoDataItem(item *model.DataItem) (*pb.DataItem, error) {
+	valueBytes, err := marshalValue(item.Value)
+	if err != nil {
+		return nil, err
 	}
 
 	return &pb.DataItem{
@@ -25,9 +43,9 @@ func toProtoDataItem(item *model.DataItem) (*pb.DataItem, error) {
 }
 
 func fromProtoDataItem(p *pb.DataItem) (*model.DataItem, error) {
-	var value any
-	if err := json.Unmarshal(p.Value, &value); err != nil {
-		return nil, fmt.Errorf("unmarshal value: %w", err)
+	value, err := unmarshalValue(p.Value)
+	if err != nil {
+		return nil, err
 	}
 
 	return &model.DataItem{

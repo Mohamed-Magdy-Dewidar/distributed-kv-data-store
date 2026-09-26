@@ -170,20 +170,6 @@ func TestBothModesDeleteAndLiveItems(t *testing.T) {
 	})
 }
 
-func TestBothModesBuildItemUsesUnionClockWithoutWriting(t *testing.T) {
-	bothModes(t, "node-1", func(t *testing.T, ds *DataStore) {
-		ds.Put("foo", "bar", nil)
-
-		built := ds.BuildItem("foo", "next", nil)
-		if built == nil || built.VectorClock.Snapshot()["node-1"] != 2 {
-			t.Fatalf("expected a version built on the existing clock, got %+v", built)
-		}
-		if items, _, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"bar"}) {
-			t.Fatalf("expected BuildItem not to write, got %v", values(items))
-		}
-	})
-}
-
 func TestBothModesRestoreVersionsReplacesOrRemoves(t *testing.T) {
 	bothModes(t, "node-1", func(t *testing.T, ds *DataStore) {
 		ds.Put("foo", "v1", nil)
@@ -243,12 +229,6 @@ func TestPersisterErrorsNeverLookLikeSuccess(t *testing.T) {
 	}
 	if ok, msg := ds.Delete("foo", nil); ok || !strings.HasPrefix(msg, "storage error: ") || !strings.Contains(msg, "disk on fire") {
 		t.Errorf("expected Delete to report the storage error, got %v %q", ok, msg)
-	}
-	if item := ds.BuildItem("foo", "x", nil); item != nil {
-		t.Errorf("expected BuildItem to return nil when it can't read the existing clock, got %+v", item)
-	}
-	if item := ds.BuildItem("foo", "x", map[string]uint32{"node-1": 5}); item == nil {
-		t.Error("expected BuildItem with an explicit context to need no read and succeed")
 	}
 	if keys, err := ds.Keys(); err == nil || !strings.Contains(err.Error(), "disk on fire") || keys != nil {
 		t.Errorf("expected Keys to return the persister's error, got %v err=%v", keys, err)

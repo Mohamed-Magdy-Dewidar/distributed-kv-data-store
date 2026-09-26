@@ -139,17 +139,22 @@ func TestPutFailsWithoutReplicatingWhenLocalWriteFails(t *testing.T) {
 	}
 }
 
-// TestCoordinatorPutFailsWithoutReplicatingWhenBuildItemFails: a
-// non-replica coordinator that can't read the versions BuildItem builds
-// on must also fail before fan-out.
-func TestCoordinatorPutFailsWithoutReplicatingWhenBuildItemFails(t *testing.T) {
+// TestNonReplicaPutIgnoresItsOwnBrokenStore: a node that isn't one of
+// key's replicas forwards the write without touching its own store, so a
+// broken local store must not fail the write — and the replicas must end
+// up holding it.
+func TestNonReplicaPutIgnoresItsOwnBrokenStore(t *testing.T) {
 	addrs := map[string]string{
 		"node-1": "localhost:60341",
 		"node-2": "localhost:60342",
 		"node-3": "localhost:60343",
 	}
+	// Uniform N=2 on every node: the replica node-1 forwards to coordinates
+	// with its own N, and a real cluster must agree on N anyway.
 	nodes, _ := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {n: 2, w: 2, r: 2},
+		"node-2": {n: 2, w: 2, r: 2},
+		"node-3": {n: 2, w: 2, r: 2},
 	})
 
 	var key string
@@ -166,13 +171,12 @@ func TestCoordinatorPutFailsWithoutReplicatingWhenBuildItemFails(t *testing.T) {
 	}
 	nodes["node-1"].Store = store.NewDataStoreWithPersister("node-1", failingPersister{})
 
-	err := nodes["node-1"].Put(context.Background(), key, "v", nil)
-	if err == nil || !strings.Contains(err.Error(), "local write failed") {
-		t.Fatalf("expected the coordinator's BuildItem failure to fail Put, got %v", err)
+	if err := nodes["node-1"].Put(context.Background(), key, "v", nil); err != nil {
+		t.Fatalf("expected the forwarded write to succeed despite node-1's broken store, got %v", err)
 	}
 	for _, replicaID := range nodes["node-1"].Ring.GetPreferenceList(key, 2) {
-		if items, found, _ := nodes[replicaID].Store.Get(key); found {
-			t.Fatalf("expected nothing replicated to %s, got %v", replicaID, items)
+		if items, found, _ := nodes[replicaID].Store.Get(key); !found || !reflect.DeepEqual(itemValues(items), []any{"v"}) {
+			t.Fatalf("expected replica %s to hold [v], got found=%v %v", replicaID, found, itemValues(items))
 		}
 	}
 }

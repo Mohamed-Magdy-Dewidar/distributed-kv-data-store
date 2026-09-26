@@ -17,7 +17,7 @@ func startTestNode(t *testing.T, id, address string, neighbors map[string]string
 	// selection anyway (they call Store.Put/Replicate/FetchItem directly).
 	n := New(id, address, 2, 2, 1, neighbors)
 
-	listener, err := rpc.Serve(address, n.Store)
+	listener, err := rpc.Serve(address, n.Store, n)
 	if err != nil {
 		t.Fatalf("failed to start server for %s: %v", id, err)
 	}

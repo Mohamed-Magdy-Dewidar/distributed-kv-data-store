@@ -8,6 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"distributed-kv-datastore/internal/hashring"
 	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/model"
@@ -70,8 +73,8 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node
 // own local copy (length N-1). When n is NOT a replica, self was never in
 // the list to begin with, so the same exclusion loop is a no-op and peers
 // already comes back as the *full* preference list (length N) — exactly
-// who a pure coordinator (one holding no local copy at all) needs to fan
-// out to, since none of them is "self" to skip.
+// the replicas a non-replica forwards a write to, in order (see
+// forwardPut), or fans a read out to (see Get).
 func (n *Node) isReplicaFor(key string) (isReplica bool, peers []string) {
 	preferenceList := n.Ring.GetPreferenceList(key, n.QuorumConfig.N)
 
@@ -91,50 +94,58 @@ type replicateResult struct {
 	err    error
 }
 
-// Put applies value locally (counting as one success toward W) when n is
-// itself one of key's replicas, then fans out to every peer concurrently,
-// returning success as soon as W total acks are collected — or failure as
-// soon as reaching W becomes mathematically impossible, without waiting
-// for every straggler.
+// Put stores value under key with W-quorum durability.
 //
-// When n is NOT one of key's replicas, it acts as a pure coordinator: no
-// local copy is written, peers is the full N-node preference list (see
-// isReplicaFor), and the item it forwards is built via Store.BuildItem —
-// the same vector-clock derivation Store.Put uses, minus the local write —
-// so replicas still receive a properly versioned item without n ever
-// holding a copy itself.
+// When n is one of key's replicas, it coordinates the write itself (see
+// putAsReplica). When it isn't, it forwards the raw write — value and
+// context exactly as the client supplied them — to one of the replicas,
+// which coordinates it instead (see forwardPut). Either way the write is
+// versioned exactly once, by a node that stores it: a vector clock tracks
+// who committed data, never who merely routed a request.
 func (n *Node) Put(ctx context.Context, key string, value any, context map[string]uint32) error {
 	isReplica, peers := n.isReplicaFor(key)
-
-	var prevVersions []*model.DataItem
-	var item *model.DataItem
-	if isReplica {
-		// prevVersions is what a failed quorum rolls back to, so a read
-		// failure here must stop the write: rolling back to a nil
-		// prevVersions would delete key's committed versions outright.
-		var err error
-		prevVersions, _, err = n.Store.Get(key)
-		if err != nil {
-			return fmt.Errorf("local read failed for key %q: %w", key, err)
-		}
-		item = n.Store.Put(key, value, context)
-	} else {
-		item = n.Store.BuildItem(key, value, context)
+	if !isReplica {
+		return n.forwardPut(ctx, key, value, context, peers)
 	}
-	// A nil item means the local store couldn't persist the write (or, for
-	// BuildItem, couldn't read the versions it builds on); the store has
-	// logged why. Nothing was written, so there's nothing to roll back, and
-	// a nil item must never be sent to peers.
+	return n.putAsReplica(ctx, key, value, context, peers)
+}
+
+// CoordinatePut implements rpc.WriteCoordinator: it coordinates a write
+// another node forwarded here. It refuses (rpc.ErrNotReplica) rather than
+// forwarding again when n isn't one of key's replicas — nodes whose rings
+// disagree must fail the write, not bounce it between themselves.
+func (n *Node) CoordinatePut(ctx context.Context, key string, value any, clientContext map[string]uint32) error {
+	isReplica, peers := n.isReplicaFor(key)
+	if !isReplica {
+		return fmt.Errorf("node %s, key %q: %w", n.ID, key, rpc.ErrNotReplica)
+	}
+	return n.putAsReplica(ctx, key, value, clientContext, peers)
+}
+
+// putAsReplica applies value locally (counting as one success toward W) —
+// the one place the write gets its vector clock, incremented on n's own
+// entry — then replicates that versioned item to every peer concurrently,
+// returning success as soon as W total acks are collected, or failure as
+// soon as reaching W becomes mathematically impossible, without waiting
+// for every straggler. peers is key's preference list minus n itself.
+func (n *Node) putAsReplica(ctx context.Context, key string, value any, context map[string]uint32, peers []string) error {
+	// prevVersions is what a failed quorum rolls back to, so a read
+	// failure here must stop the write: rolling back to a nil
+	// prevVersions would delete key's committed versions outright.
+	prevVersions, _, err := n.Store.Get(key)
+	if err != nil {
+		return fmt.Errorf("local read failed for key %q: %w", key, err)
+	}
+	item := n.Store.Put(key, value, context)
+	// A nil item means the local store couldn't persist the write; the
+	// store has logged why. Nothing was written, so there's nothing to roll
+	// back, and a nil item must never be sent to peers.
 	if item == nil {
 		return fmt.Errorf("local write failed for key %q: storage error (see log)", key)
 	}
 
-	totalNodes := len(peers)
-	successes := 0
-	if isReplica {
-		totalNodes++
-		successes = 1 // the local write above
-	}
+	totalNodes := len(peers) + 1
+	successes := 1 // the local write above
 	needed := n.QuorumConfig.W
 
 	if successes >= needed {
@@ -149,18 +160,9 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 		}(peerID)
 	}
 
-	// rollbackLocalWrite is a no-op when n isn't a replica — there is no
-	// local write to undo. Guarding explicitly here (rather than relying
-	// on prevVersions being nil) matters because RestoreVersions(key, nil)
-	// means "delete key" — calling it unconditionally in the non-replica
-	// branch would wipe out any unrelated data this node happens to hold
-	// under key from before a ring topology change, which isn't this
-	// failure path's job to touch. A failed rollback is reported alongside
-	// the quorum error: the failed write may still be visible locally.
+	// A failed rollback is reported alongside the quorum error: the failed
+	// write may still be visible locally.
 	rollbackLocalWrite := func(quorumErr error) error {
-		if !isReplica {
-			return quorumErr
-		}
 		if err := n.Store.RestoreVersions(key, prevVersions); err != nil {
 			return errors.Join(quorumErr, fmt.Errorf("rollback of local write for key %q failed: %w", key, err))
 		}
@@ -191,6 +193,32 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 
 	return rollbackLocalWrite(fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
 		key, successes, totalNodes, needed))
+}
+
+// forwardPut hands a write for a key n doesn't replicate to one of the
+// replicas that do (replicas is key's full preference list), trying them
+// in preference-list order. It moves on to the next replica only when one
+// is Unavailable — the request never reached it. Any other error (a missed
+// quorum, a timeout, a refusal) is returned as-is: that replica may already
+// have applied the write, and retrying elsewhere would version it a second
+// time under a different replica's clock entry.
+func (n *Node) forwardPut(ctx context.Context, key string, value any, clientContext map[string]uint32, replicas []string) error {
+	var unavailable []error
+	for _, replicaID := range replicas {
+		client, err := n.getOrDialClient(replicaID)
+		if err != nil {
+			return fmt.Errorf("forward put for key %q: %w", key, err)
+		}
+		err = client.CoordinatePut(ctx, key, value, clientContext)
+		if err == nil {
+			return nil
+		}
+		if status.Code(err) != codes.Unavailable {
+			return fmt.Errorf("forward put for key %q to replica %q: %w", key, replicaID, err)
+		}
+		unavailable = append(unavailable, fmt.Errorf("replica %q: %w", replicaID, err))
+	}
+	return fmt.Errorf("forward put for key %q: no replica reachable: %w", key, errors.Join(unavailable...))
 }
 
 type fetchResult struct {
