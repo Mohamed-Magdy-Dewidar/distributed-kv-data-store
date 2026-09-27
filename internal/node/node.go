@@ -404,9 +404,11 @@ func (n *Node) Replicate(ctx context.Context, peerID string, key string, items [
 }
 
 // coReplicantPeers returns every configured neighbor as an anti-entropy
-// candidate. This is a deliberate simplification, not a precise
-// "which nodes actually share a preference list with me" calculation — an
-// accepted approximation given the current small, static cluster size.
+// candidate. It doesn't try to narrow that to the neighbors that share a
+// preference list with n: with defaultVirtualNodesPerPhysical virtual
+// nodes each, every pair of nodes shares some keys, so no neighbor would
+// be dropped. Which keys are reconciled with each peer is decided per key,
+// by sharesReplicaSet.
 func (n *Node) coReplicantPeers() []string {
 	seen := make(map[string]bool)
 	for peerID := range n.NeighborAddrs {
@@ -451,10 +453,25 @@ func (n *Node) RunAntiEntropy(ctx context.Context, peerID string) error {
 	return nil
 }
 
+// sharesReplicaSet reports whether both n and peerID are in key's
+// preference list — the only keys anti-entropy may reconcile between them.
+// A key outside it doesn't belong on one side or the other, and copying it
+// there would silently add a replica beyond N that no read ever consults.
+func (n *Node) sharesReplicaSet(key, peerID string) bool {
+	var self, peer bool
+	for _, nodeID := range n.Ring.GetPreferenceList(key, n.QuorumConfig.N) {
+		self = self || nodeID == n.ID
+		peer = peer || nodeID == peerID
+	}
+	return self && peer
+}
+
 // reconcileBucket reconciles a single divergent bucket: for every key
-// either side holds in that bucket, it fetches both sides' sibling sets,
-// merges them via versioning.MergeSiblings, and pushes the merged result back to
-// whichever side differs from it.
+// either side holds in that bucket that both n and peerID replicate (see
+// sharesReplicaSet; any other key is skipped without being fetched), it
+// fetches both sides' sibling sets, merges them via
+// versioning.MergeSiblings, and pushes the merged result back to whichever
+// side differs from it.
 //
 // Any local storage error aborts the bucket, just as a remote fetch error
 // does. Carrying on would treat a failed local read as "this node holds
@@ -479,10 +496,14 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 
 	allKeys := make(map[string]bool, len(localKeys))
 	for k := range localKeys {
-		allKeys[k] = true
+		if n.sharesReplicaSet(k, peerID) {
+			allKeys[k] = true
+		}
 	}
 	for _, k := range remoteKeys {
-		allKeys[k] = true
+		if n.sharesReplicaSet(k, peerID) {
+			allKeys[k] = true
+		}
 	}
 
 	for key := range allKeys {
