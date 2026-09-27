@@ -27,6 +27,10 @@ type managedNode struct {
 type Server struct {
 	mu    sync.Mutex
 	nodes map[string]*managedNode
+
+	// listenersStopped is set by StopListeners; from then on handleStart
+	// refuses to start a listener. Guarded by mu.
+	listenersStopped bool
 }
 
 func NewServer() *Server {
@@ -171,6 +175,31 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// StopListeners stops the gRPC listener of every registered node — the
+// current one, including any the dashboard restarted via handleStart, not
+// just the one each node was registered with — and makes handleStart
+// refuse from then on. Each Stop is a GracefulStop: new RPCs are refused
+// at once and in-flight ones finish before it returns. It's shutdown's
+// "no more inbound writes" step; once it returns, no Replicate or
+// CoordinatePut can reach any node through this dashboard's listeners.
+func (s *Server) StopListeners() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.listenersStopped = true
+	for _, mn := range s.nodes {
+		if mn.listener != nil {
+			mn.listener.Stop()
+			mn.listener = nil
+		}
+	}
+}
+
+// handleStop makes a node unreachable by stopping its gRPC listener. That
+// is all it does: the node itself keeps running, so it still coordinates
+// dashboard requests sent to it and still runs anti-entropy outward (see
+// node.Node.StartAntiEntropyLoop) — it simulates a node others can't
+// reach, not one that has halted.
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -198,6 +227,10 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	mn, ok := s.nodes[id]
 	if !ok {
 		http.Error(w, "unknown node", http.StatusNotFound)
+		return
+	}
+	if s.listenersStopped {
+		http.Error(w, "shutting down", http.StatusServiceUnavailable)
 		return
 	}
 	if mn.listener != nil {

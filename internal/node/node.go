@@ -46,6 +46,15 @@ type Node struct {
 	engine    *engine.StorageEngine // persistent nodes only (NewPersistent); nil in memory
 	closeOnce sync.Once
 	closeErr  error
+
+	// Anti-entropy loops (see StartAntiEntropyLoop). aeWG counts running
+	// loop goroutines — a round runs inline in its loop's goroutine, so
+	// waiting on aeWG waits out any round in progress. Once aeStopped is
+	// set, no new loop starts.
+	aeMu      sync.Mutex
+	aeCancels []context.CancelFunc
+	aeStopped bool
+	aeWG      sync.WaitGroup
 }
 
 // New builds an in-memory Node and seeds its hash ring with itself plus
@@ -89,7 +98,9 @@ func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, d
 	}
 }
 
-// Close releases what n owns: its cached peer connections and, for a
+// Close releases what n owns: it first stops its anti-entropy loops and
+// waits for any round in progress (StopAntiEntropy), so no round can write
+// to a closed engine; then closes its cached peer connections and, for a
 // persistent node, its StorageEngine (which waits for in-flight flushes,
 // stops compaction, and closes the Manifest and WAL). It's safe to call
 // more than once; later calls return the first call's result. It does not
@@ -98,6 +109,8 @@ func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, d
 // errors rather than panicking.
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
+		n.StopAntiEntropy()
+
 		var errs []error
 
 		n.clientsMu.Lock()
@@ -568,18 +581,30 @@ func missingFrom(set, incoming []*model.DataItem) []*model.DataItem {
 }
 
 // StartAntiEntropyLoop runs RunAntiEntropy against every co-replicant peer
-// on a repeating interval until ctx is canceled. Each node's ticker is
-// deliberately independent/unsynchronized from other nodes' tickers, to
-// avoid a thundering-herd effect.
+// on a repeating interval until ctx is canceled or StopAntiEntropy (or
+// Close) is called. Each node's ticker is deliberately
+// independent/unsynchronized from other nodes' tickers, to avoid a
+// thundering-herd effect. It does nothing once StopAntiEntropy has run.
 //
-// NOT YET SAFE TO ENABLE IN cmd/cluster: the loop can't be waited on. Once
-// ctx is canceled, a round already running can still be installing
-// versions after the node's StorageEngine is closed, so shutdown can't
-// order "stop anti-entropy" before "close the node". That needs the loop
-// made joinable first.
+// The loop only depends on n's outbound connections. A node whose gRPC
+// listener is stopped (as the dashboard's "stop" does, to make it
+// unreachable) keeps running anti-entropy outward, pulling from and
+// pushing to its peers: "stopped" means unreachable by others, not paused.
+//
+// NOT YET ENABLED IN cmd/cluster.
 func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
+	n.aeMu.Lock()
+	defer n.aeMu.Unlock()
+	if n.aeStopped {
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	n.aeCancels = append(n.aeCancels, cancel)
+	n.aeWG.Add(1)
+
 	ticker := time.NewTicker(interval)
 	go func() {
+		defer n.aeWG.Done()
 		defer ticker.Stop()
 		for {
 			select {
@@ -594,4 +619,22 @@ func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration)
 			}
 		}
 	}()
+}
+
+// StopAntiEntropy cancels every anti-entropy loop n has started and waits
+// until each has exited, including any round in progress: a round's RPCs
+// fail fast once canceled, and any local install it has already fetched
+// data for completes first. After it returns, anti-entropy makes no more
+// calls into n's store, and StartAntiEntropyLoop does nothing. Safe to call
+// more than once, and when no loop was ever started.
+func (n *Node) StopAntiEntropy() {
+	n.aeMu.Lock()
+	n.aeStopped = true
+	for _, cancel := range n.aeCancels {
+		cancel()
+	}
+	n.aeCancels = nil
+	n.aeMu.Unlock()
+
+	n.aeWG.Wait()
 }

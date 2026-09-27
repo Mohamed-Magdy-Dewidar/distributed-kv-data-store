@@ -49,27 +49,15 @@ func main() {
 	dashboard := httpapi.NewServer()
 
 	var nodes []*node.Node
-	var listeners []*rpc.Listener
 	compactionCtx, stopCompaction := context.WithCancel(context.Background())
 
-	// stopNodes is shutdown's steps 2 and 3: every listener is stopped
-	// before any node closes, so no inbound Replicate/CoordinatePut — from
-	// any node — can reach a closed StorageEngine.
-	stopNodes := func() {
-		for _, listener := range listeners {
-			listener.Stop()
-		}
-		for _, nd := range nodes {
-			if err := nd.Close(); err != nil {
-				log.Printf("closing %s: %v", nd.ID, err)
-			}
-		}
-	}
 	// startupFailed releases what already started, then exits: log.Fatal
-	// alone would skip the cleanup.
+	// alone would skip the cleanup. The HTTP server isn't running yet, and
+	// every listener started so far is registered with the dashboard.
 	startupFailed := func(format string, args ...any) {
-		stopCompaction()
-		stopNodes()
+		if err := shutdownCluster(dashboard, nodes, stopCompaction); err != nil {
+			log.Print(err)
+		}
 		log.Fatalf(format, args...)
 	}
 
@@ -101,7 +89,6 @@ func main() {
 		if err != nil {
 			startupFailed("failed to start %s on %s: %v", id, addr, err)
 		}
-		listeners = append(listeners, listener)
 
 		nd.StartCompactionLoop(compactionCtx, compactionInterval) // no-op in memory
 
@@ -138,16 +125,59 @@ func main() {
 		exitCode = 1
 	}
 
-	// 1. Stop background compaction, then stop taking client requests.
-	stopCompaction()
+	// 1. Stop taking client requests. Shutdown waits for in-flight handlers
+	// — which may still need peers' gRPC listeners to finish a quorum
+	// write — and after it no handleStart can start a new listener.
+	// Accepted residual risk: a handler still running when the timeout
+	// expires keeps running, and a write it makes after step 5 fails with
+	// a clean closed-engine error (not corruption). Handlers use request
+	// timeouts of the same length, so in practice they finish in time.
 	ctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 	if err := httpServer.Shutdown(ctx); err != nil {
 		log.Printf("dashboard shutdown: %v", err)
 	}
 	cancel()
 
-	// 2 and 3. Stop every gRPC listener, then close every node.
-	stopNodes()
+	// 2 to 5.
+	if err := shutdownCluster(dashboard, nodes, stopCompaction); err != nil {
+		log.Print(err)
+	}
 	log.Println("shutdown complete")
 	os.Exit(exitCode)
+}
+
+// shutdownCluster is shutdown's steps 2 to 5, run once nothing can start a
+// new listener (the dashboard's HTTP server is stopped, or never started).
+// Each step must finish before the next begins:
+//
+//  2. Stop every node's current gRPC listener (dashboard.StopListeners).
+//     New Replicate/CoordinatePut RPCs are refused and in-flight ones
+//     finish, so from here no write arrives from outside any node — in
+//     particular no peer's anti-entropy push can reach a node whose loop is
+//     stopped next and whose engine is closed after that.
+//  3. Stop every node's anti-entropy and wait for rounds in progress. Their
+//     remaining RPCs fail fast; installs they already fetched data for
+//     complete while engines are still open. From here nothing inside the
+//     process writes either. Done for all nodes before any is closed.
+//  4. Stop compaction. Its position doesn't matter for safety — engine
+//     Close waits out a compaction in progress — but all background loops
+//     stop here together.
+//  5. Close every node (Close would also run step 3 itself; doing it
+//     explicitly above drains every node before the first engine closes).
+//
+// Close errors are joined into the result; every node is closed regardless.
+func shutdownCluster(dashboard *httpapi.Server, nodes []*node.Node, stopCompaction context.CancelFunc) error {
+	dashboard.StopListeners()
+	for _, nd := range nodes {
+		nd.StopAntiEntropy()
+	}
+	stopCompaction()
+
+	var errs []error
+	for _, nd := range nodes {
+		if err := nd.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("closing %s: %w", nd.ID, err))
+		}
+	}
+	return errors.Join(errs...)
 }
