@@ -3,6 +3,7 @@ package wal
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -17,52 +18,152 @@ import (
 // 4 bytes payload length + 4 bytes CRC32 checksum of the payload.
 const headerSize = 8
 
+// Op says what a WAL entry does when replayed.
+type Op uint8
+
+const (
+	// OpPut merges Item into Key's sibling set (memtable.Put). It is the
+	// zero value, so every record written before Op existed replays as a
+	// put — which is all those records ever were.
+	OpPut Op = iota
+	// OpRestore installs Items as Key's sibling set verbatim
+	// (memtable.Replace): StorageEngine.Restore's rollback.
+	OpRestore
+)
+
 // Entry is one durable record: a single key's write or delete, reusing
-// the same DataItem type the rest of the system already operates on.
+// the same DataItem type the rest of the system already operates on — or,
+// with Op OpRestore, a verbatim replacement of the key's whole sibling set
+// with Items (newest first; empty removes the key entirely). Item is used
+// only by OpPut, Items only by OpRestore.
 type Entry struct {
-	Key  string
-	Item *model.DataItem
+	Op    Op
+	Key   string
+	Item  *model.DataItem
+	Items []*model.DataItem
 }
 
 // record is Entry's on-disk form. VectorClock's fields are unexported, so
 // json.Marshal of an Entry would write every clock as {} — the clock is
 // stored as its Snapshot map instead, as sstable's record does.
+//
+// A put stores its item in the flat fields, and Op and Items are omitted,
+// so put records are byte-for-byte what they were before OpRestore
+// existed. A restore sets Op and Items and leaves the flat fields empty.
+// Binaries from before OpRestore would misread a restore record as a put
+// of a nil value: downgrading across this change is not supported.
 type record struct {
 	Key           string
 	Value         json.RawMessage
 	VectorClock   map[string]uint32
 	LastUpdatedBy string
 	IsDeleted     bool
+	Op            Op           `json:",omitempty"`
+	Items         []itemRecord `json:",omitempty"`
+}
+
+// itemRecord is one DataItem inside a restore record.
+type itemRecord struct {
+	Value         json.RawMessage
+	VectorClock   map[string]uint32
+	LastUpdatedBy string
+	IsDeleted     bool
+}
+
+func toItemRecord(key string, item *model.DataItem) (itemRecord, error) {
+	valueBytes, err := json.Marshal(item.Value)
+	if err != nil {
+		return itemRecord{}, fmt.Errorf("wal: marshal value for key %q: %w", key, err)
+	}
+	return itemRecord{
+		Value:         valueBytes,
+		VectorClock:   item.VectorClock.Snapshot(),
+		LastUpdatedBy: item.LastUpdatedBy,
+		IsDeleted:     item.IsDeleted,
+	}, nil
+}
+
+func fromItemRecord(key string, r itemRecord) (*model.DataItem, error) {
+	var value any
+	if err := json.Unmarshal(r.Value, &value); err != nil {
+		return nil, fmt.Errorf("wal: unmarshal value for key %q: %w", key, err)
+	}
+	return &model.DataItem{
+		Value:         value,
+		VectorClock:   vectorclock.FromSnapshot(r.VectorClock),
+		LastUpdatedBy: r.LastUpdatedBy,
+		IsDeleted:     r.IsDeleted,
+	}, nil
 }
 
 func toRecord(e Entry) (record, error) {
-	valueBytes, err := json.Marshal(e.Item.Value)
-	if err != nil {
-		return record{}, fmt.Errorf("wal: marshal value for key %q: %w", e.Key, err)
+	switch e.Op {
+	case OpPut:
+		ir, err := toItemRecord(e.Key, e.Item)
+		if err != nil {
+			return record{}, err
+		}
+		return record{
+			Key:           e.Key,
+			Value:         ir.Value,
+			VectorClock:   ir.VectorClock,
+			LastUpdatedBy: ir.LastUpdatedBy,
+			IsDeleted:     ir.IsDeleted,
+		}, nil
+	case OpRestore:
+		rec := record{Key: e.Key, Op: OpRestore}
+		for _, item := range e.Items {
+			ir, err := toItemRecord(e.Key, item)
+			if err != nil {
+				return record{}, err
+			}
+			rec.Items = append(rec.Items, ir)
+		}
+		return rec, nil
+	default:
+		return record{}, fmt.Errorf("wal: unknown op %d for key %q", e.Op, e.Key)
 	}
-	return record{
-		Key:           e.Key,
-		Value:         valueBytes,
-		VectorClock:   e.Item.VectorClock.Snapshot(),
-		LastUpdatedBy: e.Item.LastUpdatedBy,
-		IsDeleted:     e.Item.IsDeleted,
-	}, nil
 }
 
 func fromRecord(r record) (Entry, error) {
-	var value any
-	if err := json.Unmarshal(r.Value, &value); err != nil {
-		return Entry{}, fmt.Errorf("wal: unmarshal value for key %q: %w", r.Key, err)
-	}
-	return Entry{
-		Key: r.Key,
-		Item: &model.DataItem{
-			Value:         value,
-			VectorClock:   vectorclock.FromSnapshot(r.VectorClock),
+	switch r.Op {
+	case OpPut:
+		item, err := fromItemRecord(r.Key, itemRecord{
+			Value:         r.Value,
+			VectorClock:   r.VectorClock,
 			LastUpdatedBy: r.LastUpdatedBy,
 			IsDeleted:     r.IsDeleted,
-		},
-	}, nil
+		})
+		if err != nil {
+			return Entry{}, err
+		}
+		return Entry{Key: r.Key, Item: item}, nil
+	case OpRestore:
+		e := Entry{Op: OpRestore, Key: r.Key}
+		for _, ir := range r.Items {
+			item, err := fromItemRecord(r.Key, ir)
+			if err != nil {
+				return Entry{}, err
+			}
+			e.Items = append(e.Items, item)
+		}
+		return e, nil
+	default:
+		return Entry{}, &unknownOpError{op: r.Op, key: r.Key}
+	}
+}
+
+// unknownOpError is a checksum-valid record whose Op this binary doesn't
+// know — most likely written by a newer version. Replay fails on it
+// rather than treating it as a torn tail: truncating there would silently
+// discard it and every durable record after it.
+type unknownOpError struct {
+	op  Op
+	key string
+}
+
+func (e *unknownOpError) Error() string {
+	return fmt.Sprintf("wal: record for key %q has unknown op %d (written by a newer version?)", e.key, e.op)
 }
 
 // WAL is an append-only, crash-safe log file. Every Append fsyncs before
@@ -135,7 +236,9 @@ func (w *WAL) Append(entry Entry) error {
 // payload, or a checksum mismatch), since that is the expected on-disk
 // shape of a process that crashed mid-Append, not a condition to fail on.
 // Any fully-written, checksum-valid records before that point are
-// returned normally.
+// returned normally. The one exception is a checksum-valid record with an
+// unknown Op: that's not a torn write, so Replay returns an error and
+// leaves the file untouched (see unknownOpError).
 //
 // It then truncates the file to the end of the last valid record (and
 // fsyncs), discarding the torn bytes. Without that, the next Append would
@@ -197,6 +300,9 @@ func (w *WAL) Replay() ([]Entry, error) {
 		}
 		entry, err := fromRecord(rec)
 		if err != nil {
+			if _, ok := errors.AsType[*unknownOpError](err); ok {
+				return nil, fmt.Errorf("wal: record at offset %d: %w", validEnd, err)
+			}
 			break
 		}
 

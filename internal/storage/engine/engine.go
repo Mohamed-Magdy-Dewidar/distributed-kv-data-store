@@ -118,8 +118,15 @@ func Open(dataDir string, maxMemtableBytes int) (_ *StorageEngine, err error) {
 		maxBytes: maxMemtableBytes,
 	}
 
+	// Replay in log order: a Restore's verbatim Replace only reproduces
+	// the pre-crash state if it lands between the same Puts it did then.
 	for _, entry := range entries {
-		e.active.Put(entry.Key, entry.Item) // ignore threshold signal on replay: don't auto-flush during startup
+		switch entry.Op {
+		case wal.OpRestore:
+			e.active.Replace(entry.Key, entry.Items)
+		default: // wal.OpPut; OpenLog already rejected unknown ops
+			e.active.Put(entry.Key, entry.Item) // ignore threshold signal on replay: don't auto-flush during startup
+		}
 	}
 
 	if err := e.loadLiveSSTables(); err != nil {
@@ -149,9 +156,9 @@ func (e *StorageEngine) loadLiveSSTables() error {
 	return nil
 }
 
-// testHookAfterWALAppend, when set, runs inside Put between the WAL append
-// and the memtable insert. Tests only: it lets one force the interleaving
-// writeMu exists to rule out. Always nil in production.
+// testHookAfterWALAppend, when set, runs inside Put and Restore between
+// the WAL append and the memtable change. Tests only: it lets one force
+// the interleaving writeMu exists to rule out. Always nil in production.
 var testHookAfterWALAppend func(key string)
 
 // Put durably writes key/item: WAL append+fsync first, then the in-memory
@@ -352,10 +359,17 @@ func (e *StorageEngine) Keys() ([]string, error) {
 // internal/node/node.go). It deliberately skips versioning.Resolve, so it
 // must never be used for ordinary writes — that's what Put is for.
 //
+// Like Put, it is written to the WAL (as a wal.OpRestore entry) before
+// the memtable changes, so a crash right after it returns replays the
+// rollback rather than the rolled-back write. If the WAL append fails,
+// nothing changes and the error is returned. The append and the replace
+// both happen under writeMu, for the reason Put holds it and one more:
+// Replace isn't order-independent the way Put's merge is, so replay only
+// reproduces its effect if WAL order matches the order the memtable saw.
+// (DataStore.RestoreVersions also serves anti-entropy's reconcileBucket,
+// so its installs are WAL-logged too.)
+//
 // Known limitations, both accepted:
-//   - It is not written to the WAL, and does not undo anything already in
-//     it. A crash after a rollback replays the rolled-back write on
-//     restart. Rollback has never been WAL-aware in this codebase.
 //   - It can only change the active memtable. If the write being rolled
 //     back was already frozen for flushing (the Put that wrote it, or any
 //     concurrent Put, crossed the memtable threshold) or already flushed,
@@ -363,6 +377,16 @@ func (e *StorageEngine) Keys() ([]string, error) {
 //     silently succeeding: after replacing, it re-runs GetAll's fold and,
 //     unless the result is exactly items, returns an error wrapping
 //     store.ErrRestoreIncomplete. The replacement is kept either way.
+//   - That incomplete case can come out differently after a restart. If
+//     the write being rolled back was in the frozen memtable and never
+//     became an SSTable — its flush failed (and PutBackOlder merged it back
+//     into the active memtable) or the process crashed mid-flush — it is
+//     visible before the crash, but replay puts it and then applies the
+//     Restore's Replace over it in one memtable, so it's hidden after.
+//     Only in that direction: replay applies each Replace to a superset of
+//     the key's pre-crash active history, and Replace is verbatim, so it
+//     can only hide older data, never bring back what a Restore hid. It
+//     errs toward the rollback, which is what the caller asked for.
 //
 // The replace and the check happen atomically under e.mu (with filesMu
 // held so compaction can't delete a file being read), so a concurrent Put
@@ -370,6 +394,16 @@ func (e *StorageEngine) Keys() ([]string, error) {
 // while the check reads any SSTable holding key — acceptable for a
 // rollback path.
 func (e *StorageEngine) Restore(key string, items []*model.DataItem) error {
+	e.writeMu.Lock()
+	defer e.writeMu.Unlock()
+
+	if err := e.wal.Append(wal.Entry{Op: wal.OpRestore, Key: key, Items: items}); err != nil {
+		return fmt.Errorf("engine: wal append for restore of key %q: %w", key, err)
+	}
+	if testHookAfterWALAppend != nil {
+		testHookAfterWALAppend(key)
+	}
+
 	e.filesMu.RLock()
 	defer e.filesMu.RUnlock()
 	e.mu.Lock()
