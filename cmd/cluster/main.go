@@ -166,10 +166,11 @@ func main() {
 //     finish, so from here no write arrives from outside any node — in
 //     particular no peer's anti-entropy push can reach a node whose loop is
 //     stopped next and whose engine is closed after that.
-//  3. Stop every node's anti-entropy and wait for rounds in progress. Their
-//     remaining RPCs fail fast; installs they already fetched data for
-//     complete while engines are still open. From here nothing inside the
-//     process writes either. Done for all nodes before any is closed.
+//  3. Stop every node's background loops (anti-entropy, and hint delivery
+//     once enabled) and wait for rounds in progress. Their remaining RPCs
+//     fail fast; local writes they're already making complete while
+//     engines are still open. From here nothing inside the process writes
+//     either. Done for all nodes before any is closed.
 //  4. Stop compaction. Its position doesn't matter for safety — engine
 //     Close waits out a compaction in progress — but all background loops
 //     stop here together.
@@ -180,7 +181,7 @@ func main() {
 func shutdownCluster(dashboard *httpapi.Server, nodes []*node.Node, stopCompaction context.CancelFunc) error {
 	dashboard.StopListeners()
 	for _, nd := range nodes {
-		nd.StopAntiEntropy()
+		nd.StopBackgroundLoops()
 	}
 	stopCompaction()
 

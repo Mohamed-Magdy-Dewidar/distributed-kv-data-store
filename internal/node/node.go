@@ -51,14 +51,14 @@ type Node struct {
 	closeOnce sync.Once
 	closeErr  error
 
-	// Anti-entropy loops (see StartAntiEntropyLoop). aeWG counts running
-	// loop goroutines — a round runs inline in its loop's goroutine, so
-	// waiting on aeWG waits out any round in progress. Once aeStopped is
-	// set, no new loop starts.
-	aeMu      sync.Mutex
-	aeCancels []context.CancelFunc
-	aeStopped bool
-	aeWG      sync.WaitGroup
+	// Background loops — anti-entropy and hint delivery (see startLoop).
+	// bgWG counts running loop goroutines — a round runs inline in its
+	// loop's goroutine, so waiting on bgWG waits out any round in progress.
+	// Once bgStopped is set, no new loop starts.
+	bgMu      sync.Mutex
+	bgCancels []context.CancelFunc
+	bgStopped bool
+	bgWG      sync.WaitGroup
 
 	// Replication drains (see drainReplication): one per write whose
 	// fan-out outlived its quorum decision. drainWG counts them; once
@@ -118,8 +118,8 @@ func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, d
 
 // Close releases what n owns, in an order that keeps anything still
 // running from touching what's already closed:
-//  1. Stop its anti-entropy loops and wait for any round in progress
-//     (StopAntiEntropy).
+//  1. Stop its background loops — anti-entropy and hint delivery — and
+//     wait for any round in progress (StopBackgroundLoops).
 //  2. Wait for every replication drain (see drainReplication): their
 //     straggler RPCs finish, and any hints they owe are durably stored.
 //     No new drain starts from here.
@@ -134,7 +134,7 @@ func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, d
 // after Close returns errors rather than panicking.
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
-		n.StopAntiEntropy()
+		n.StopBackgroundLoops()
 
 		n.drainMu.Lock()
 		n.drainClosing = true
@@ -697,8 +697,29 @@ func missingFrom(set, incoming []*model.DataItem) []*model.DataItem {
 }
 
 // StartAntiEntropyLoop runs RunAntiEntropy against every co-replicant peer
-// on a repeating interval until ctx is canceled or StopAntiEntropy (or
-// Close) is called. It does nothing once StopAntiEntropy has run.
+// every interval (see startLoop for scheduling and stopping).
+//
+// The loop only depends on n's outbound connections. A node whose gRPC
+// listener is stopped (as the dashboard's "stop" does, to make it
+// unreachable) keeps running anti-entropy outward, pulling from and
+// pushing to its peers: "stopped" means unreachable by others, not paused.
+func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
+	n.startLoop(ctx, interval, n.runAntiEntropyRound)
+}
+
+// StartHintDeliveryLoop delivers n's pending hints every interval (see
+// deliverHints, and startLoop for scheduling and stopping). It does
+// nothing on an in-memory node, which holds no hints.
+func (n *Node) StartHintDeliveryLoop(ctx context.Context, interval time.Duration) {
+	if n.hints == nil {
+		return
+	}
+	n.startLoop(ctx, interval, n.deliverHints)
+}
+
+// startLoop runs round on a repeating interval until ctx is canceled or
+// StopBackgroundLoops (or Close) is called. It does nothing once
+// StopBackgroundLoops has run.
 //
 // The first round runs after a random delay in [0, interval), then one
 // every interval. Nodes started together (as cmd/cluster starts them)
@@ -706,24 +727,19 @@ func missingFrom(set, incoming []*model.DataItem) []*model.DataItem {
 // time; the random offset keeps each node's schedule independent of the
 // others', so rounds don't all land on the cluster at once. Canceling
 // during that first delay stops the loop at once.
-//
-// The loop only depends on n's outbound connections. A node whose gRPC
-// listener is stopped (as the dashboard's "stop" does, to make it
-// unreachable) keeps running anti-entropy outward, pulling from and
-// pushing to its peers: "stopped" means unreachable by others, not paused.
-func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
-	n.aeMu.Lock()
-	defer n.aeMu.Unlock()
-	if n.aeStopped {
+func (n *Node) startLoop(ctx context.Context, interval time.Duration, round func(context.Context)) {
+	n.bgMu.Lock()
+	defer n.bgMu.Unlock()
+	if n.bgStopped {
 		return
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	n.aeCancels = append(n.aeCancels, cancel)
-	n.aeWG.Add(1)
+	n.bgCancels = append(n.bgCancels, cancel)
+	n.bgWG.Add(1)
 
 	first := time.NewTimer(rand.N(interval))
 	go func() {
-		defer n.aeWG.Done()
+		defer n.bgWG.Done()
 		defer first.Stop()
 		select {
 		case <-first.C:
@@ -734,7 +750,7 @@ func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
-			n.runAntiEntropyRound(ctx)
+			round(ctx)
 			select {
 			case <-ticker.C:
 			case <-ctx.Done():
@@ -758,20 +774,92 @@ func (n *Node) runAntiEntropyRound(ctx context.Context) {
 	}
 }
 
-// StopAntiEntropy cancels every anti-entropy loop n has started and waits
-// until each has exited, including any round in progress: a round's RPCs
-// fail fast once canceled, and any local install it has already fetched
-// data for completes first. After it returns, anti-entropy makes no more
-// calls into n's store, and StartAntiEntropyLoop does nothing. Safe to call
-// more than once, and when no loop was ever started.
-func (n *Node) StopAntiEntropy() {
-	n.aeMu.Lock()
-	n.aeStopped = true
-	for _, cancel := range n.aeCancels {
+// testHookBeforeDeliveringHint and testHookAfterDeliveringHint, when set,
+// run in deliverHintsTo before each hint's Replicate RPC, and after one
+// succeeds but before the hint is marked delivered. Tests only. Always nil
+// in production.
+var (
+	testHookBeforeDeliveringHint func(target, key string)
+	testHookAfterDeliveringHint  func(target, key string)
+)
+
+// deliverHints is one hint-delivery round: every target n holds hints for,
+// in turn (see deliverHintsTo). Failures are logged; whatever wasn't
+// delivered stays pending for the next round. Once ctx is canceled it
+// starts no further target.
+func (n *Node) deliverHints(ctx context.Context) {
+	targets, err := n.hints.Targets()
+	if err != nil {
+		log.Printf("node %s: hint delivery: %v", n.ID, err)
+		return
+	}
+	for _, target := range targets {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := n.deliverHintsTo(ctx, target); err != nil {
+			log.Printf("node %s: delivering hints to %q: %v", n.ID, target, err)
+		}
+	}
+}
+
+// deliverHintsTo sends target each of its pending hints with the ordinary
+// Replicate RPC — target merges them like any replicated write — and marks
+// each delivered once target has accepted it. Each RPC is bounded by
+// ReplicationTimeout.
+//
+// Unavailable (target still unreachable) or DeadlineExceeded (target not
+// answering) ends target's turn this round: every other hint would only
+// fail the same way, one timeout at a time. Any other error is logged and
+// that hint kept, and delivery moves on to the next one.
+func (n *Node) deliverHintsTo(ctx context.Context, target string) error {
+	pending, err := n.hints.Pending(target)
+	if err != nil {
+		return err
+	}
+	for _, h := range pending {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if testHookBeforeDeliveringHint != nil {
+			testHookBeforeDeliveringHint(target, h.Key)
+		}
+		rpcCtx, cancel := context.WithTimeout(ctx, n.QuorumConfig.ReplicationTimeout)
+		err := n.Replicate(rpcCtx, target, h.Key, h.Items)
+		cancel()
+		switch code := status.Code(err); {
+		case code == codes.Unavailable || code == codes.DeadlineExceeded:
+			return nil // still down; next round retries
+		case err != nil:
+			log.Printf("node %s: delivering hint for key %q to %q failed; kept for retry: %v", n.ID, h.Key, target, err)
+			continue
+		}
+		if testHookAfterDeliveringHint != nil {
+			testHookAfterDeliveringHint(target, h.Key)
+		}
+		// Even if ctx was canceled meanwhile: target has the hint.
+		if err := n.hints.MarkDelivered(target, h.Key, h.Items); err != nil {
+			return err // delivered but still pending: redelivered next round, harmlessly
+		}
+	}
+	return nil
+}
+
+// StopBackgroundLoops cancels every background loop n has started —
+// anti-entropy and hint delivery — and waits until each has exited,
+// including any round in progress: a round's RPCs fail fast once canceled,
+// and any local write it's already making (an anti-entropy install, a
+// delivered hint's marker) completes first. After it returns, those loops
+// make no more calls into n's stores, and startLoop does nothing. Safe to
+// call more than once, and when no loop was ever started.
+func (n *Node) StopBackgroundLoops() {
+	n.bgMu.Lock()
+	n.bgStopped = true
+	for _, cancel := range n.bgCancels {
 		cancel()
 	}
-	n.aeCancels = nil
-	n.aeMu.Unlock()
+	n.bgCancels = nil
+	n.bgMu.Unlock()
 
-	n.aeWG.Wait()
+	n.bgWG.Wait()
 }

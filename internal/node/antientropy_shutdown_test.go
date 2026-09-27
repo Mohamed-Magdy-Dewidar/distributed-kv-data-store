@@ -69,39 +69,39 @@ func TestCloseWaitsForAnAntiEntropyRoundInProgress(t *testing.T) {
 	}
 }
 
-// TestStartAntiEntropyLoopAfterStopDoesNothing: once StopAntiEntropy has
+// TestStartAntiEntropyLoopAfterStopDoesNothing: once StopBackgroundLoops has
 // run (as Close runs it), no new loop may start — it would run against a
 // closed engine with nothing left to wait for it.
 func TestStartAntiEntropyLoopAfterStopDoesNothing(t *testing.T) {
 	n := New("node-1", "localhost:60533", 1, 1, 1, nil)
-	n.StopAntiEntropy()
+	n.StopBackgroundLoops()
 	n.StartAntiEntropyLoop(context.Background(), time.Millisecond)
 
-	n.aeMu.Lock()
-	loops := len(n.aeCancels)
-	n.aeMu.Unlock()
+	n.bgMu.Lock()
+	loops := len(n.bgCancels)
+	n.bgMu.Unlock()
 	if loops != 0 {
-		t.Fatalf("expected no loop to start after StopAntiEntropy, %d did", loops)
+		t.Fatalf("expected no loop to start after StopBackgroundLoops, %d did", loops)
 	}
-	n.StopAntiEntropy() // idempotent; must not block
+	n.StopBackgroundLoops() // idempotent; must not block
 }
 
-// TestStopAntiEntropyDuringFirstDelayReturnsPromptly: the loop waits a
+// TestStopBackgroundLoopsDuringFirstDelayReturnsPromptly: the loop waits a
 // random fraction of interval before its first round. Stopping it in that
 // window must not wait the delay out — at cmd/cluster's interval that
 // would hold shutdown for up to 30s.
-func TestStopAntiEntropyDuringFirstDelayReturnsPromptly(t *testing.T) {
+func TestStopBackgroundLoopsDuringFirstDelayReturnsPromptly(t *testing.T) {
 	n := New("node-1", "localhost:60534", 1, 1, 1, nil)
 	n.StartAntiEntropyLoop(context.Background(), time.Hour)
 
 	stopped := make(chan struct{})
 	go func() {
-		n.StopAntiEntropy()
+		n.StopBackgroundLoops()
 		close(stopped)
 	}()
 	select {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
-		t.Fatal("StopAntiEntropy is still waiting out the loop's first delay")
+		t.Fatal("StopBackgroundLoops is still waiting out the loop's first delay")
 	}
 }
