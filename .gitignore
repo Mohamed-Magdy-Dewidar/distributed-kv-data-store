@@ -56,3 +56,9 @@ Desktop.ini
 .DS_Store
 .AppleDouble
 ._*
+
+# ==========================================
+# 5. Runtime data
+# ==========================================
+# Per-node StorageEngine directories written by cmd/cluster (-data flag)
+data/

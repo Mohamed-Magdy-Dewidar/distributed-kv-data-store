@@ -15,6 +15,7 @@ import (
 	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/rpc"
+	"distributed-kv-datastore/internal/storage/engine"
 	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/versioning"
 )
@@ -40,13 +41,35 @@ type Node struct {
 
 	clientsMu sync.Mutex
 	clients   map[string]*rpc.Client
+
+	engine    *engine.StorageEngine // persistent nodes only (NewPersistent); nil in memory
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// New builds a Node and seeds its hash ring with itself plus every
-// configured neighbor. Every node in the cluster must be constructed with
-// the same set of node IDs (this node's own id plus every neighbor's) for
-// all nodes to compute identical preference lists.
+// New builds an in-memory Node and seeds its hash ring with itself plus
+// every configured neighbor. Every node in the cluster must be constructed
+// with the same set of node IDs (this node's own id plus every neighbor's)
+// for all nodes to compute identical preference lists.
 func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node {
+	return newNode(id, address, n, w, r, neighborAddrs, store.NewDataStore(id), nil)
+}
+
+// NewPersistent is New with the node's data kept on disk: it opens (or
+// creates) a StorageEngine at dataDir — replaying its WAL and loading its
+// live SSTables, so a node reopened on the same directory gets its data
+// back — and runs the node's DataStore on top of it. maxMemtableBytes is
+// the engine's flush threshold. The caller must Close the node to close
+// the engine cleanly.
+func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
+	e, err := engine.Open(dataDir, maxMemtableBytes)
+	if err != nil {
+		return nil, fmt.Errorf("node %s: open storage at %s: %w", id, dataDir, err)
+	}
+	return newNode(id, address, n, w, r, neighborAddrs, store.NewDataStoreWithPersister(id, e), e), nil
+}
+
+func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, ds *store.DataStore, e *engine.StorageEngine) *Node {
 	ring := hashring.NewHashRing(defaultVirtualNodesPerPhysical)
 	ring.AddNode(id)
 	for peerID := range neighborAddrs {
@@ -55,12 +78,52 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node
 
 	return &Node{
 		ID:            id,
-		Store:         store.NewDataStore(id),
+		Store:         ds,
 		Address:       address,
 		NeighborAddrs: neighborAddrs,
 		QuorumConfig:  NewQuorumConfig(n, w, r),
 		Ring:          ring,
 		clients:       make(map[string]*rpc.Client),
+		engine:        e,
+	}
+}
+
+// Close releases what n owns: its cached peer connections and, for a
+// persistent node, its StorageEngine (which waits for in-flight flushes,
+// stops compaction, and closes the Manifest and WAL). It's safe to call
+// more than once; later calls return the first call's result. It does not
+// stop n's gRPC listener — the caller owns that and must stop it first, so
+// no inbound write reaches a closed engine. Using n after Close returns
+// errors rather than panicking.
+func (n *Node) Close() error {
+	n.closeOnce.Do(func() {
+		var errs []error
+
+		n.clientsMu.Lock()
+		for peerID, client := range n.clients {
+			if err := client.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close client for %q: %w", peerID, err))
+			}
+		}
+		n.clients = make(map[string]*rpc.Client)
+		n.clientsMu.Unlock()
+
+		if n.engine != nil {
+			if err := n.engine.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close storage engine: %w", err))
+			}
+		}
+		n.closeErr = errors.Join(errs...)
+	})
+	return n.closeErr
+}
+
+// StartCompactionLoop compacts a persistent node's SSTables every interval
+// until ctx is canceled (see StorageEngine.StartCompactionLoop). It's a
+// no-op for an in-memory node, which has nothing to compact.
+func (n *Node) StartCompactionLoop(ctx context.Context, interval time.Duration) {
+	if n.engine != nil {
+		n.engine.StartCompactionLoop(ctx, interval)
 	}
 }
 
@@ -468,6 +531,12 @@ func itemSetsEqual(a, b []*model.DataItem) bool {
 // on a repeating interval until ctx is canceled. Each node's ticker is
 // deliberately independent/unsynchronized from other nodes' tickers, to
 // avoid a thundering-herd effect.
+//
+// NOT YET SAFE ON A PERSISTENT NODE (NewPersistent). reconcileBucket
+// installs merged versions through Store.RestoreVersions, which on a
+// StorageEngine is StorageEngine.Restore — and Restore is not written to
+// the WAL, so anything anti-entropy installs is lost on restart. Resolve
+// that before enabling this loop in cmd/cluster.
 func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {
