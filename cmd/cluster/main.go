@@ -64,7 +64,13 @@ func main() {
 
 	nodeCount := 3
 	basePort := 60100
-	replicationFactor, w, r := 2, 2, 2
+	// N equals nodeCount, so every key's preference list is all three
+	// nodes — full replication, not partitioning-with-slack. That's
+	// deliberate here: it's what gives W=2 a replica of slack, so a single
+	// down node never blocks a write's quorum, and putAsReplica gets to
+	// hint it instead of rolling back — the scenario hinted handoff exists
+	// for. W+R=4 > N=3 still holds, so read-your-writes is unaffected.
+	replicationFactor, w, r := 3, 2, 2
 
 	addresses := make(map[string]string, nodeCount)
 	for i := 0; i < nodeCount; i++ {
