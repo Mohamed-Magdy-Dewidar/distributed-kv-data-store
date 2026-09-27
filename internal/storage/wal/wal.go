@@ -74,11 +74,18 @@ type WAL struct {
 }
 
 // Open opens (creating if necessary) the WAL file at path for reading and
-// appending.
+// appending. It deliberately doesn't use O_APPEND: Replay must be able to
+// truncate a torn tail, which Windows refuses on an append-only handle.
+// Appends still go to the end — Open and Replay both leave the offset
+// there, and every write happens under w.mu.
 func Open(path string) (*WAL, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("wal: open %s: %w", path, err)
+	}
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("wal: seek to end of %s: %w", path, err)
 	}
 	return &WAL{file: f}, nil
 }
@@ -129,6 +136,11 @@ func (w *WAL) Append(entry Entry) error {
 // shape of a process that crashed mid-Append, not a condition to fail on.
 // Any fully-written, checksum-valid records before that point are
 // returned normally.
+//
+// It then truncates the file to the end of the last valid record (and
+// fsyncs), discarding the torn bytes. Without that, the next Append would
+// land after them, and every later Replay would stop at the same torn
+// record, silently losing every write made since the crash.
 func (w *WAL) Replay() ([]Entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -146,6 +158,7 @@ func (w *WAL) Replay() ([]Entry, error) {
 	var entries []Entry
 	header := make([]byte, headerSize)
 	var pos int64
+	var validEnd int64 // end of the last complete, checksum-valid record
 
 	for {
 		_, err := io.ReadFull(w.file, header)
@@ -188,6 +201,16 @@ func (w *WAL) Replay() ([]Entry, error) {
 		}
 
 		entries = append(entries, entry)
+		validEnd = pos
+	}
+
+	if validEnd < fileSize {
+		if err := w.file.Truncate(validEnd); err != nil {
+			return nil, fmt.Errorf("wal: truncate torn tail at offset %d: %w", validEnd, err)
+		}
+		if err := w.file.Sync(); err != nil {
+			return nil, fmt.Errorf("wal: fsync after truncating torn tail: %w", err)
+		}
 	}
 
 	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {

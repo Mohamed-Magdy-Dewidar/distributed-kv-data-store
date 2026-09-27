@@ -155,6 +155,115 @@ func TestReplayStopsCleanlyAtTornTrailingRecord(t *testing.T) {
 	}
 }
 
+// TestAppendsAfterATornTailSurviveTheNextRestart: after a crash mid-Append,
+// Replay must cut the torn bytes off. Otherwise every later Append lands
+// behind them, and the next Replay stops at the same torn record — losing
+// acknowledged, fsynced writes.
+func TestAppendsAfterATornTailSurviveTheNextRestart(t *testing.T) {
+	for name, torn := range map[string][]byte{
+		// header claims a huge payload that was never written
+		"short payload": {0xFF, 0xFF, 0, 0, 0, 0, 0, 0},
+		// complete header and payload whose checksum doesn't match
+		"bad checksum": {0, 0, 0, 2, 0xDE, 0xAD, 0xBE, 0xEF, '{', '}'},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := tempWALPath(t)
+
+			w, err := Open(path)
+			if err != nil {
+				t.Fatalf("Open failed: %v", err)
+			}
+			if err := w.Append(sampleEntry("before-crash", "1")); err != nil {
+				t.Fatalf("Append failed: %v", err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatalf("Close failed: %v", err)
+			}
+			validInfo, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat: %v", err)
+			}
+
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				t.Fatalf("reopen for corruption: %v", err)
+			}
+			if _, err := f.Write(torn); err != nil {
+				t.Fatalf("write torn record: %v", err)
+			}
+			f.Close()
+
+			// First restart: replay, then keep writing.
+			w2, err := Open(path)
+			if err != nil {
+				t.Fatalf("re-Open failed: %v", err)
+			}
+			if got, err := w2.Replay(); err != nil || len(got) != 1 {
+				t.Fatalf("expected [before-crash], got %v (err %v)", got, err)
+			}
+			if info, err := os.Stat(path); err != nil || info.Size() != validInfo.Size() {
+				t.Errorf("expected Replay to truncate the file back to %d bytes, got %v (err %v)", validInfo.Size(), info.Size(), err)
+			}
+			if err := w2.Append(sampleEntry("after-crash", "2")); err != nil {
+				t.Fatalf("Append after replay failed: %v", err)
+			}
+			if err := w2.Close(); err != nil {
+				t.Fatalf("Close failed: %v", err)
+			}
+
+			// Second restart: the acknowledged post-crash write must be there.
+			w3, err := Open(path)
+			if err != nil {
+				t.Fatalf("second re-Open failed: %v", err)
+			}
+			defer w3.Close()
+			got, err := w3.Replay()
+			if err != nil {
+				t.Fatalf("second Replay failed: %v", err)
+			}
+			if len(got) != 2 || got[0].Key != "before-crash" || got[1].Key != "after-crash" {
+				keys := make([]string, len(got))
+				for i, e := range got {
+					keys[i] = e.Key
+				}
+				t.Fatalf("expected [before-crash after-crash], got %v", keys)
+			}
+		})
+	}
+}
+
+// TestAppendWithoutReplayAppendsAtEnd: the file isn't opened O_APPEND (so
+// Replay can truncate a torn tail), so Open itself must position writes at
+// the end — an Append straight after Open must not overwrite old records.
+func TestAppendWithoutReplayAppendsAtEnd(t *testing.T) {
+	path := tempWALPath(t)
+	for _, key := range []string{"first", "second"} {
+		w, err := Open(path)
+		if err != nil {
+			t.Fatalf("Open failed: %v", err)
+		}
+		if err := w.Append(sampleEntry(key, "v")); err != nil {
+			t.Fatalf("Append %s failed: %v", key, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+	}
+
+	w, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer w.Close()
+	got, err := w.Replay()
+	if err != nil {
+		t.Fatalf("Replay failed: %v", err)
+	}
+	if len(got) != 2 || got[0].Key != "first" || got[1].Key != "second" {
+		t.Fatalf("expected [first second], got %v", got)
+	}
+}
+
 func TestReplayOnEmptyFileReturnsNoEntries(t *testing.T) {
 	path := tempWALPath(t)
 
