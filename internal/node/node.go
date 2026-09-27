@@ -505,7 +505,7 @@ func (n *Node) getOrDialClient(peerID string) (*rpc.Client, error) {
 		return nil, fmt.Errorf("unknown peer %q: no address configured", peerID)
 	}
 
-	client, err := rpc.Dial(addr)
+	client, err := rpc.Dial(addr, n.QuorumConfig.MaxReconnectBackoff)
 	if err != nil {
 		return nil, fmt.Errorf("dial peer %q at %s: %w", peerID, addr, err)
 	}

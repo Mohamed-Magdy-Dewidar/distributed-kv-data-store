@@ -19,7 +19,7 @@ import (
 
 func replicateTo(t *testing.T, address string) error {
 	t.Helper()
-	client, err := rpc.Dial(address)
+	client, err := rpc.Dial(address, 0)
 	if err != nil {
 		t.Fatalf("dial %s: %v", address, err)
 	}

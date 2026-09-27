@@ -3,8 +3,10 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"distributed-kv-datastore/internal/merkle"
@@ -20,8 +22,21 @@ type Client struct {
 
 // Dial connects to a peer at address. The connection is not pooled or
 // retried here — one Client per peer, held for the connection's lifetime.
-func Dial(address string) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+//
+// maxReconnectBackoff caps gRPC's exponential reconnect backoff, which
+// otherwise climbs (1s base, x1.6 per attempt) up to a 120s default max
+// delay between reconnect attempts to an unreachable peer — every other
+// setting (base delay, multiplier, jitter) is left at gRPC's default. Zero
+// leaves gRPC's own default max delay in place.
+func Dial(address string, maxReconnectBackoff time.Duration) (*Client, error) {
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if maxReconnectBackoff > 0 {
+		connectParams := grpc.ConnectParams{Backoff: backoff.DefaultConfig}
+		connectParams.Backoff.MaxDelay = maxReconnectBackoff
+		opts = append(opts, grpc.WithConnectParams(connectParams))
+	}
+
+	conn, err := grpc.NewClient(address, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", address, err)
 	}

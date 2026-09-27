@@ -34,10 +34,25 @@ const (
 	// kept well above the cost of that scan.
 	antiEntropyInterval = 30 * time.Second
 
+	// hintDeliveryInterval is how often each persistent node retries
+	// delivering its pending hints to their targets (after a random first
+	// delay, so nodes don't all run at once). It's cheap compared to
+	// anti-entropy's Merkle scan — it only touches keys already known to be
+	// pending — so it runs more often, for faster recovery once a target is
+	// back. A no-op for an in-memory node, which never holds hints.
+	hintDeliveryInterval = 10 * time.Second
+
 	// replicationTimeout bounds each replica RPC of a write's fan-out. It
 	// outlives the client's request, so a replica that's slow still gets
 	// the write, and one that's unreachable gets a hint.
 	replicationTimeout = 5 * time.Second
+
+	// maxReconnectBackoff caps gRPC's reconnect backoff for connections to
+	// peers (120s by default). Without this, a peer that comes back after a
+	// long outage isn't retried again until its backoff — climbing since
+	// the outage began — happens to elapse, silently delaying replication
+	// fan-out, anti-entropy, and hint delivery to it alike.
+	maxReconnectBackoff = 5 * time.Second
 
 	httpShutdownTimeout = 5 * time.Second
 )
@@ -95,6 +110,7 @@ func main() {
 			}
 		}
 		nd.QuorumConfig.ReplicationTimeout = replicationTimeout
+		nd.QuorumConfig.MaxReconnectBackoff = maxReconnectBackoff
 		nodes = append(nodes, nd)
 
 		listener, err := rpc.Serve(addr, nd.Store, nd)
@@ -104,8 +120,9 @@ func main() {
 
 		nd.StartCompactionLoop(compactionCtx, compactionInterval) // no-op in memory
 
-		// Stopped and drained by shutdownCluster before any node closes.
+		// Both stopped and drained by shutdownCluster before any node closes.
 		nd.StartAntiEntropyLoop(context.Background(), antiEntropyInterval)
+		nd.StartHintDeliveryLoop(context.Background(), hintDeliveryInterval) // no-op in memory
 
 		dashboard.Register(id, nd, listener, addr, w, r, neighbors)
 		if *dataDir == "" {
@@ -166,11 +183,11 @@ func main() {
 //     finish, so from here no write arrives from outside any node — in
 //     particular no peer's anti-entropy push can reach a node whose loop is
 //     stopped next and whose engine is closed after that.
-//  3. Stop every node's background loops (anti-entropy, and hint delivery
-//     once enabled) and wait for rounds in progress. Their remaining RPCs
-//     fail fast; local writes they're already making complete while
-//     engines are still open. From here nothing inside the process writes
-//     either. Done for all nodes before any is closed.
+//  3. Stop every node's background loops (anti-entropy and hint delivery)
+//     and wait for rounds in progress. Their remaining RPCs fail fast;
+//     local writes they're already making complete while engines are still
+//     open. From here nothing inside the process writes either. Done for
+//     all nodes before any is closed.
 //  4. Stop compaction. Its position doesn't matter for safety — engine
 //     Close waits out a compaction in progress — but all background loops
 //     stop here together.
