@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"distributed-kv-datastore/internal/hashring"
+	"distributed-kv-datastore/internal/hints"
 	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/rpc"
@@ -45,6 +47,7 @@ type Node struct {
 	clients   map[string]*rpc.Client
 
 	engine    *engine.StorageEngine // persistent nodes only (NewPersistent); nil in memory
+	hints     *hints.Store          // persistent nodes only; nil in memory (no hinted handoff)
 	closeOnce sync.Once
 	closeErr  error
 
@@ -56,6 +59,13 @@ type Node struct {
 	aeCancels []context.CancelFunc
 	aeStopped bool
 	aeWG      sync.WaitGroup
+
+	// Replication drains (see drainReplication): one per write whose
+	// fan-out outlived its quorum decision. drainWG counts them; once
+	// drainClosing is set, no new one starts.
+	drainMu      sync.Mutex
+	drainClosing bool
+	drainWG      sync.WaitGroup
 }
 
 // New builds an in-memory Node and seeds its hash ring with itself plus
@@ -63,24 +73,30 @@ type Node struct {
 // with the same set of node IDs (this node's own id plus every neighbor's)
 // for all nodes to compute identical preference lists.
 func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node {
-	return newNode(id, address, n, w, r, neighborAddrs, store.NewDataStore(id), nil)
+	return newNode(id, address, n, w, r, neighborAddrs, store.NewDataStore(id), nil, nil)
 }
 
 // NewPersistent is New with the node's data kept on disk: it opens (or
 // creates) a StorageEngine at dataDir — replaying its WAL and loading its
 // live SSTables, so a node reopened on the same directory gets its data
-// back — and runs the node's DataStore on top of it. maxMemtableBytes is
-// the engine's flush threshold. The caller must Close the node to close
-// the engine cleanly.
+// back — and runs the node's DataStore on top of it. It also opens the
+// node's hinted-handoff store, on its own engine at dataDir/hints (which
+// the main engine ignores). maxMemtableBytes is both engines' flush
+// threshold. The caller must Close the node to close them cleanly.
 func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
 	e, err := engine.Open(dataDir, maxMemtableBytes)
 	if err != nil {
 		return nil, fmt.Errorf("node %s: open storage at %s: %w", id, dataDir, err)
 	}
-	return newNode(id, address, n, w, r, neighborAddrs, store.NewDataStoreWithPersister(id, e), e), nil
+	hs, err := hints.Open(filepath.Join(dataDir, "hints"), maxMemtableBytes)
+	if err != nil {
+		e.Close()
+		return nil, fmt.Errorf("node %s: %w", id, err)
+	}
+	return newNode(id, address, n, w, r, neighborAddrs, store.NewDataStoreWithPersister(id, e), e, hs), nil
 }
 
-func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, ds *store.DataStore, e *engine.StorageEngine) *Node {
+func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
 	ring := hashring.NewHashRing(defaultVirtualNodesPerPhysical)
 	ring.AddNode(id)
 	for peerID := range neighborAddrs {
@@ -96,21 +112,34 @@ func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, d
 		Ring:          ring,
 		clients:       make(map[string]*rpc.Client),
 		engine:        e,
+		hints:         hs,
 	}
 }
 
-// Close releases what n owns: it first stops its anti-entropy loops and
-// waits for any round in progress (StopAntiEntropy), so no round can write
-// to a closed engine; then closes its cached peer connections and, for a
-// persistent node, its StorageEngine (which waits for in-flight flushes,
-// stops compaction, and closes the Manifest and WAL). It's safe to call
-// more than once; later calls return the first call's result. It does not
-// stop n's gRPC listener — the caller owns that and must stop it first, so
-// no inbound write reaches a closed engine. Using n after Close returns
-// errors rather than panicking.
+// Close releases what n owns, in an order that keeps anything still
+// running from touching what's already closed:
+//  1. Stop its anti-entropy loops and wait for any round in progress
+//     (StopAntiEntropy).
+//  2. Wait for every replication drain (see drainReplication): their
+//     straggler RPCs finish, and any hints they owe are durably stored.
+//     No new drain starts from here.
+//  3. Close its cached peer connections — nothing above uses them now.
+//  4. For a persistent node, close the hint store, then the StorageEngine
+//     (which waits for in-flight flushes, stops compaction, and closes the
+//     Manifest and WAL). The two don't depend on each other.
+//
+// It's safe to call more than once; later calls return the first call's
+// result. It does not stop n's gRPC listener — the caller owns that and
+// must stop it first, so no inbound write reaches a closed engine. Using n
+// after Close returns errors rather than panicking.
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
 		n.StopAntiEntropy()
+
+		n.drainMu.Lock()
+		n.drainClosing = true
+		n.drainMu.Unlock()
+		n.drainWG.Wait()
 
 		var errs []error
 
@@ -123,6 +152,11 @@ func (n *Node) Close() error {
 		n.clients = make(map[string]*rpc.Client)
 		n.clientsMu.Unlock()
 
+		if n.hints != nil {
+			if err := n.hints.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close hint store: %w", err))
+			}
+		}
 		if n.engine != nil {
 			if err := n.engine.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("close storage engine: %w", err))
@@ -206,7 +240,16 @@ func (n *Node) CoordinatePut(ctx context.Context, key string, value any, clientC
 // returning success as soon as W total acks are collected, or failure as
 // soon as reaching W becomes mathematically impossible, without waiting
 // for every straggler. peers is key's preference list minus n itself.
-func (n *Node) putAsReplica(ctx context.Context, key string, value any, context map[string]uint32, peers []string) error {
+//
+// The replica RPCs run on a context detached from ctx's cancellation and
+// bounded by QuorumConfig.ReplicationTimeout, so they outlive the decision
+// and the caller: a slow replica still receives the write. Once decided,
+// drainReplication collects the stragglers' results and stores a hint for
+// every replica that was Unavailable — only if the local write stands
+// (quorum reached, or the caller gave up, which leaves it in place), never
+// after a rollback: a hint would deliver an undone write to a node that
+// never saw it.
+func (n *Node) putAsReplica(ctx context.Context, key string, value any, clientContext map[string]uint32, peers []string) error {
 	// prevVersions is what a failed quorum rolls back to, so a read
 	// failure here must stop the write: rolling back to a nil
 	// prevVersions would delete key's committed versions outright.
@@ -214,7 +257,7 @@ func (n *Node) putAsReplica(ctx context.Context, key string, value any, context 
 	if err != nil {
 		return fmt.Errorf("local read failed for key %q: %w", key, err)
 	}
-	item := n.Store.Put(key, value, context)
+	item := n.Store.Put(key, value, clientContext)
 	// A nil item means the local store couldn't persist the write; the
 	// store has logged why. Nothing was written, so there's nothing to roll
 	// back, and a nil item must never be sent to peers.
@@ -230,17 +273,30 @@ func (n *Node) putAsReplica(ctx context.Context, key string, value any, context 
 		return nil
 	}
 
+	replCtx, cancelRepl := context.WithTimeout(context.WithoutCancel(ctx), n.QuorumConfig.ReplicationTimeout)
 	results := make(chan replicateResult, len(peers))
 	for _, peerID := range peers {
 		go func(peerID string) {
-			err := n.Replicate(ctx, peerID, key, []*model.DataItem{item})
+			if testHookBeforeReplicate != nil {
+				testHookBeforeReplicate(peerID)
+			}
+			err := n.Replicate(replCtx, peerID, key, []*model.DataItem{item})
 			results <- replicateResult{peerID: peerID, err: err}
 		}(peerID)
+	}
+
+	received := 0
+	var unavailable []string
+	// decided hands the stragglers to drainReplication; keep says whether
+	// the local write stands, and so whether hints may be stored.
+	decided := func(keep bool) {
+		n.drainReplication(key, item, results, len(peers)-received, unavailable, keep, cancelRepl)
 	}
 
 	// A failed rollback is reported alongside the quorum error: the failed
 	// write may still be visible locally.
 	rollbackLocalWrite := func(quorumErr error) error {
+		decided(false)
 		if err := n.Store.RestoreVersions(key, prevVersions); err != nil {
 			return errors.Join(quorumErr, fmt.Errorf("rollback of local write for key %q failed: %w", key, err))
 		}
@@ -251,13 +307,18 @@ func (n *Node) putAsReplica(ctx context.Context, key string, value any, context 
 	for i := 0; i < len(peers); i++ {
 		select {
 		case res := <-results:
+			received++
 			if res.err != nil {
 				failures++
+				if status.Code(res.err) == codes.Unavailable {
+					unavailable = append(unavailable, res.peerID)
+				}
 			} else {
 				successes++
 			}
 
 			if successes >= needed {
+				decided(true)
 				return nil
 			}
 			if totalNodes-failures < needed {
@@ -265,12 +326,66 @@ func (n *Node) putAsReplica(ctx context.Context, key string, value any, context 
 					key, successes, totalNodes, needed))
 			}
 		case <-ctx.Done():
+			decided(true) // no rollback here: the local write stands
 			return fmt.Errorf("put canceled for key %q: %w", key, ctx.Err())
 		}
 	}
 
 	return rollbackLocalWrite(fmt.Errorf("write quorum not reached for key %q: %d/%d acks, need W=%d",
 		key, successes, totalNodes, needed))
+}
+
+// testHookBeforeReplicate, when set, runs in putAsReplica's per-replica
+// goroutine before its Replicate RPC; testHookBeforeStoringHints runs in
+// drainReplication before it stores hints. Tests only: they let one hold a
+// replica's RPC past the quorum decision, or hold a drain open. Always nil
+// in production.
+var (
+	testHookBeforeReplicate    func(peerID string)
+	testHookBeforeStoringHints func(key string)
+)
+
+// drainReplication runs once a write's quorum is decided, in the
+// background: it waits for the remaining replica results (at most
+// ReplicationTimeout away), then — if keep, and n has a hint store —
+// stores a hint for every replica that was Unavailable, whether its result
+// came before the decision (unavailable) or after. Other errors never
+// produce a hint: the replica may have applied the write, and anti-entropy
+// covers it otherwise. A hint that can't be stored is only logged: the
+// write itself is already decided.
+//
+// Close waits for every drain. One that would start once Close has begun
+// doesn't: it stores no hints and cancels its stragglers.
+func (n *Node) drainReplication(key string, item *model.DataItem, results <-chan replicateResult, remaining int, unavailable []string, keep bool, cancel context.CancelFunc) {
+	n.drainMu.Lock()
+	if n.drainClosing {
+		n.drainMu.Unlock()
+		cancel()
+		return
+	}
+	n.drainWG.Add(1)
+	n.drainMu.Unlock()
+
+	go func() {
+		defer n.drainWG.Done()
+		defer cancel()
+		for range remaining {
+			if res := <-results; status.Code(res.err) == codes.Unavailable {
+				unavailable = append(unavailable, res.peerID)
+			}
+		}
+		if !keep || n.hints == nil || len(unavailable) == 0 {
+			return
+		}
+		if testHookBeforeStoringHints != nil {
+			testHookBeforeStoringHints(key)
+		}
+		for _, peerID := range unavailable {
+			if err := n.hints.Add(peerID, key, item); err != nil {
+				log.Printf("node %s: storing hint for %q (key %q) failed; anti-entropy will cover it: %v", n.ID, peerID, key, err)
+			}
+		}
+	}()
 }
 
 // forwardPut hands a write for a key n doesn't replicate to one of the

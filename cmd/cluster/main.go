@@ -34,6 +34,11 @@ const (
 	// kept well above the cost of that scan.
 	antiEntropyInterval = 30 * time.Second
 
+	// replicationTimeout bounds each replica RPC of a write's fan-out. It
+	// outlives the client's request, so a replica that's slow still gets
+	// the write, and one that's unreachable gets a hint.
+	replicationTimeout = 5 * time.Second
+
 	httpShutdownTimeout = 5 * time.Second
 )
 
@@ -89,6 +94,7 @@ func main() {
 				startupFailed("failed to open %s: %v", id, err)
 			}
 		}
+		nd.QuorumConfig.ReplicationTimeout = replicationTimeout
 		nodes = append(nodes, nd)
 
 		listener, err := rpc.Serve(addr, nd.Store, nd)
