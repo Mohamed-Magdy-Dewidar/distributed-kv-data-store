@@ -241,6 +241,12 @@ func (n *Node) CoordinatePut(ctx context.Context, key string, value any, clientC
 // soon as reaching W becomes mathematically impossible, without waiting
 // for every straggler. peers is key's preference list minus n itself.
 //
+// The fan-out to every peer always starts, even when the local write alone
+// already satisfies W (so the call returns before any peer result arrives):
+// Dynamo's model is send to all N, wait for W, not send only as many as W
+// requires. Skipping it would leave the other replicas relying solely on
+// anti-entropy, and unreachable ones would never get a hint.
+//
 // The replica RPCs run on a context detached from ctx's cancellation and
 // bounded by QuorumConfig.ReplicationTimeout, so they outlive the decision
 // and the caller: a slow replica still receives the write. Once decided,
@@ -269,10 +275,6 @@ func (n *Node) putAsReplica(ctx context.Context, key string, value any, clientCo
 	successes := 1 // the local write above
 	needed := n.QuorumConfig.W
 
-	if successes >= needed {
-		return nil
-	}
-
 	replCtx, cancelRepl := context.WithTimeout(context.WithoutCancel(ctx), n.QuorumConfig.ReplicationTimeout)
 	results := make(chan replicateResult, len(peers))
 	for _, peerID := range peers {
@@ -291,6 +293,11 @@ func (n *Node) putAsReplica(ctx context.Context, key string, value any, clientCo
 	// the local write stands, and so whether hints may be stored.
 	decided := func(keep bool) {
 		n.drainReplication(key, item, results, len(peers)-received, unavailable, keep, cancelRepl)
+	}
+
+	if successes >= needed {
+		decided(true)
+		return nil
 	}
 
 	// A failed rollback is reported alongside the quorum error: the failed
