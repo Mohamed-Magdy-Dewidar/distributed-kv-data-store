@@ -28,6 +28,12 @@ const (
 	// SSTables.
 	compactionInterval = 30 * time.Second
 
+	// antiEntropyInterval is how often each node reconciles with its peers
+	// (after a random first delay, so nodes don't all run at once). Each
+	// round rebuilds Merkle trees over every key a node holds, so this is
+	// kept well above the cost of that scan.
+	antiEntropyInterval = 30 * time.Second
+
 	httpShutdownTimeout = 5 * time.Second
 )
 
@@ -92,9 +98,8 @@ func main() {
 
 		nd.StartCompactionLoop(compactionCtx, compactionInterval) // no-op in memory
 
-		// Anti-entropy (nd.StartAntiEntropyLoop) is deliberately NOT
-		// started: its loop can't yet be waited on, so shutdown can't stop
-		// it before closing the nodes — see Node.StartAntiEntropyLoop.
+		// Stopped and drained by shutdownCluster before any node closes.
+		nd.StartAntiEntropyLoop(context.Background(), antiEntropyInterval)
 
 		dashboard.Register(id, nd, listener, addr, w, r, neighbors)
 		if *dataDir == "" {

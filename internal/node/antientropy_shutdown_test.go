@@ -85,3 +85,23 @@ func TestStartAntiEntropyLoopAfterStopDoesNothing(t *testing.T) {
 	}
 	n.StopAntiEntropy() // idempotent; must not block
 }
+
+// TestStopAntiEntropyDuringFirstDelayReturnsPromptly: the loop waits a
+// random fraction of interval before its first round. Stopping it in that
+// window must not wait the delay out — at cmd/cluster's interval that
+// would hold shutdown for up to 30s.
+func TestStopAntiEntropyDuringFirstDelayReturnsPromptly(t *testing.T) {
+	n := New("node-1", "localhost:60534", 1, 1, 1, nil)
+	n.StartAntiEntropyLoop(context.Background(), time.Hour)
+
+	stopped := make(chan struct{})
+	go func() {
+		n.StopAntiEntropy()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopAntiEntropy is still waiting out the loop's first delay")
+	}
+}

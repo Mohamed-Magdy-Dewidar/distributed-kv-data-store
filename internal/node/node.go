@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -582,16 +583,19 @@ func missingFrom(set, incoming []*model.DataItem) []*model.DataItem {
 
 // StartAntiEntropyLoop runs RunAntiEntropy against every co-replicant peer
 // on a repeating interval until ctx is canceled or StopAntiEntropy (or
-// Close) is called. Each node's ticker is deliberately
-// independent/unsynchronized from other nodes' tickers, to avoid a
-// thundering-herd effect. It does nothing once StopAntiEntropy has run.
+// Close) is called. It does nothing once StopAntiEntropy has run.
+//
+// The first round runs after a random delay in [0, interval), then one
+// every interval. Nodes started together (as cmd/cluster starts them)
+// would otherwise run their rounds within milliseconds of each other every
+// time; the random offset keeps each node's schedule independent of the
+// others', so rounds don't all land on the cluster at once. Canceling
+// during that first delay stops the loop at once.
 //
 // The loop only depends on n's outbound connections. A node whose gRPC
 // listener is stopped (as the dashboard's "stop" does, to make it
 // unreachable) keeps running anti-entropy outward, pulling from and
 // pushing to its peers: "stopped" means unreachable by others, not paused.
-//
-// NOT YET ENABLED IN cmd/cluster.
 func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
 	n.aeMu.Lock()
 	defer n.aeMu.Unlock()
@@ -602,23 +606,41 @@ func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration)
 	n.aeCancels = append(n.aeCancels, cancel)
 	n.aeWG.Add(1)
 
-	ticker := time.NewTicker(interval)
+	first := time.NewTimer(rand.N(interval))
 	go func() {
 		defer n.aeWG.Done()
+		defer first.Stop()
+		select {
+		case <-first.C:
+		case <-ctx.Done():
+			return
+		}
+
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
+			n.runAntiEntropyRound(ctx)
 			select {
 			case <-ticker.C:
-				for _, peerID := range n.coReplicantPeers() {
-					if err := n.RunAntiEntropy(ctx, peerID); err != nil {
-						log.Printf("node %s: anti-entropy with %q failed: %v", n.ID, peerID, err)
-					}
-				}
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
+}
+
+// runAntiEntropyRound runs RunAntiEntropy against every co-replicant peer
+// in turn, logging (not stopping on) each failure. Once ctx is canceled it
+// starts no further peer: those would only fail.
+func (n *Node) runAntiEntropyRound(ctx context.Context) {
+	for _, peerID := range n.coReplicantPeers() {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := n.RunAntiEntropy(ctx, peerID); err != nil {
+			log.Printf("node %s: anti-entropy with %q failed: %v", n.ID, peerID, err)
+		}
+	}
 }
 
 // StopAntiEntropy cancels every anti-entropy loop n has started and waits
