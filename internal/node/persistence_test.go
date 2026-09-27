@@ -77,9 +77,9 @@ func TestPersistentNodeRecoversFromWAL(t *testing.T) {
 }
 
 // TestPersistentNodeRecoversFromSSTables: writes flushed to SSTables must
-// come back from them. The WAL is never truncated after a flush (a known
-// engine limitation), so it would replay these writes too; deleting it
-// before reopening makes the SSTables and Manifest the only source.
+// come back from them. Once flushed, their WAL segments are deleted, so
+// the WAL left behind must hold nothing: the SSTables and Manifest are the
+// only source on reopening.
 func TestPersistentNodeRecoversFromSSTables(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -97,8 +97,14 @@ func TestPersistentNodeRecoversFromSSTables(t *testing.T) {
 	if files := sstFiles(t, dir); len(files) < 2 {
 		t.Fatalf("expected both writes flushed to SSTables, found %v", files)
 	}
-	if err := os.Remove(filepath.Join(dir, "wal.log")); err != nil {
-		t.Fatalf("remove WAL: %v", err)
+	segments, err := filepath.Glob(filepath.Join(dir, "wal_*.log"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	for _, seg := range segments {
+		if info, err := os.Stat(seg); err != nil || info.Size() != 0 {
+			t.Fatalf("expected the flushed writes' WAL segments to be gone, but %s holds %v bytes (err %v)", seg, info.Size(), err)
+		}
 	}
 
 	reopened := openSoloNode(t, dir, 10)

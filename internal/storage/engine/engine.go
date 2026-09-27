@@ -28,8 +28,7 @@ var _ store.Persister = (*StorageEngine)(nil)
 // values: the memtable merges writes with versioning.Resolve, compaction
 // merges SSTables with versioning.MergeSiblings, and GetAll folds all
 // layers together the same way, returning every surviving sibling newest
-// first. Wiring DataStore to use StorageEngine as its backing store is a
-// separate future integration step.
+// first. store.DataStore runs on top of it via NewDataStoreWithPersister.
 //
 // Known limitations, documented deliberately rather than over-built:
 //   - Only one flush runs at a time. If a new Put crosses the memtable
@@ -52,10 +51,18 @@ type StorageEngine struct {
 	flushing *memtable.MemTable // non-nil only while a flush is in progress
 	sstables []*sstable.SSTable // newest first
 
-	wal      *wal.WAL
+	wal      *wal.Log
 	manifest *manifest.Manifest
 	dataDir  string
 	maxBytes int
+
+	// writeMu makes each write's WAL append and memtable insert one step
+	// with respect to memtable swaps (and the WAL rotation that goes with
+	// each). Without it, a Put could append to the segment being sealed
+	// but insert into the new active memtable — and once the sealed
+	// segment is deleted after its flush, that write would exist only in
+	// memory. Readers never take it.
+	writeMu sync.Mutex
 
 	flushWG sync.WaitGroup // lets tests/Close wait for background flushes
 
@@ -73,16 +80,17 @@ type StorageEngine struct {
 	filesMu sync.RWMutex
 }
 
-// Open creates or opens a StorageEngine rooted at dataDir: replays the
-// WAL to reconstruct the active memtable, then loads every SSTable the
-// Manifest records as live. On any error, every resource already opened
-// is closed before returning.
+// Open creates or opens a StorageEngine rooted at dataDir: replays every
+// remaining WAL segment to reconstruct the active memtable (see
+// wal.OpenLog — only segments not yet known to be flushed are still
+// there), then loads every SSTable the Manifest records as live. On any
+// error, every resource already opened is closed before returning.
 func Open(dataDir string, maxMemtableBytes int) (_ *StorageEngine, err error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("engine: create data dir %s: %w", dataDir, err)
 	}
 
-	w, err := wal.Open(filepath.Join(dataDir, "wal.log"))
+	w, entries, err := wal.OpenLog(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open wal: %w", err)
 	}
@@ -110,10 +118,6 @@ func Open(dataDir string, maxMemtableBytes int) (_ *StorageEngine, err error) {
 		maxBytes: maxMemtableBytes,
 	}
 
-	entries, err := w.Replay()
-	if err != nil {
-		return nil, fmt.Errorf("engine: replay wal: %w", err)
-	}
 	for _, entry := range entries {
 		e.active.Put(entry.Key, entry.Item) // ignore threshold signal on replay: don't auto-flush during startup
 	}
@@ -145,26 +149,55 @@ func (e *StorageEngine) loadLiveSSTables() error {
 	return nil
 }
 
+// testHookAfterWALAppend, when set, runs inside Put between the WAL append
+// and the memtable insert. Tests only: it lets one force the interleaving
+// writeMu exists to rule out. Always nil in production.
+var testHookAfterWALAppend func(key string)
+
 // Put durably writes key/item: WAL append+fsync first, then the in-memory
 // insert — the WAL append is the true point of durability.
+//
+// When the insert crosses the memtable threshold (and no flush is already
+// running), the WAL is rotated and the memtable frozen for flushing, so
+// the sealed segments hold exactly what the frozen memtable (plus anything
+// older put back into it) holds. Both happen under writeMu, so no other
+// write can land between them. If rotation fails, nothing is frozen: the
+// memtable keeps growing and the next Put that crosses tries again.
 func (e *StorageEngine) Put(key string, item *model.DataItem) error {
+	e.writeMu.Lock()
+	defer e.writeMu.Unlock()
+
 	if err := e.wal.Append(wal.Entry{Key: key, Item: item}); err != nil {
 		return fmt.Errorf("engine: wal append for key %q: %w", key, err)
+	}
+	if testHookAfterWALAppend != nil {
+		testHookAfterWALAppend(key)
 	}
 
 	e.mu.Lock()
 	crossed := e.active.Put(key, item)
-
-	if crossed && e.flushing == nil {
-		e.flushing = e.active
-		e.active = memtable.New(e.maxBytes)
-
-		e.flushWG.Add(1)
-		frozen := e.flushing
-		go e.flush(frozen)
+	swap := crossed && e.flushing == nil
+	e.mu.Unlock()
+	if !swap {
+		return nil
 	}
+
+	// Rotate outside e.mu so readers aren't blocked on file creation;
+	// writeMu keeps every other write out meanwhile, and only Put (under
+	// writeMu) ever sets e.flushing, so it's still nil below.
+	sealed, err := e.wal.Rotate()
+	if err != nil {
+		return nil // the write itself is durable; the swap waits for the next crossing Put
+	}
+
+	e.mu.Lock()
+	e.flushing = e.active
+	e.active = memtable.New(e.maxBytes)
+	frozen := e.flushing
+	e.flushWG.Add(1)
 	e.mu.Unlock()
 
+	go e.flush(frozen, sealed)
 	return nil
 }
 
@@ -180,7 +213,14 @@ func (e *StorageEngine) Put(key string, item *model.DataItem) error {
 // versions via PutBackOlder, so GetAll's answer doesn't change and the
 // next flush retries them. Flush errors are not otherwise reported; the
 // data also remains recoverable from the WAL on restart.
-func (e *StorageEngine) flush(frozen *memtable.MemTable) {
+//
+// sealedSeg is the WAL segment sealed when frozen was frozen: every entry
+// frozen holds is in a segment numbered at most that. Only once the
+// SSTable is registered in the Manifest are those segments deleted. A
+// failed flush deletes nothing — its entries move into the active
+// memtable, whose segments are all newer, so they're deleted only when
+// that memtable's own flush succeeds.
+func (e *StorageEngine) flush(frozen *memtable.MemTable, sealedSeg uint64) {
 	defer e.flushWG.Done()
 
 	entries := frozen.Snapshot() // read-only: frozen stays queryable throughout the write below
@@ -188,8 +228,6 @@ func (e *StorageEngine) flush(frozen *memtable.MemTable) {
 	sst, err := e.writeAndRegister(entries)
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if err != nil {
 		e.active.PutBackOlder(entries) // no threshold signal: the next Put triggers the retry
 	} else {
@@ -197,6 +235,13 @@ func (e *StorageEngine) flush(frozen *memtable.MemTable) {
 	}
 	if e.flushing == frozen {
 		e.flushing = nil
+	}
+	e.mu.Unlock()
+
+	if err == nil {
+		// Best effort, like the rest of flush: segments left behind are only
+		// replayed harmlessly, and the next successful flush deletes them.
+		_ = e.wal.DeleteThrough(sealedSeg)
 	}
 }
 

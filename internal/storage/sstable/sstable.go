@@ -16,6 +16,7 @@ import (
 	"github.com/bits-and-blooms/bloom/v3"
 
 	"distributed-kv-datastore/internal/model"
+	"distributed-kv-datastore/internal/storage/fsutil"
 	"distributed-kv-datastore/internal/storage/memtable"
 	"distributed-kv-datastore/internal/vectorclock"
 )
@@ -243,6 +244,11 @@ func writeAndPublish(f *os.File, id, tmpPath, finalPath string, entries []memtab
 	}
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return nil, fmt.Errorf("sstable: rename to %s: %w", finalPath, err)
+	}
+	// The rename isn't durable until the directory is synced: without this
+	// a crash could lose the file after the Manifest has registered it.
+	if err := fsutil.SyncDir(filepath.Dir(finalPath)); err != nil {
+		return nil, fmt.Errorf("sstable: publish %s: %w", finalPath, err)
 	}
 
 	return &SSTable{

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"distributed-kv-datastore/internal/storage/fsutil"
 )
 
 const filename = "MANIFEST"
@@ -36,6 +38,13 @@ func Open(dir string) (*Manifest, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("manifest: open %s: %w", path, err)
+	}
+	// Make the file's directory entry durable, in case this call just
+	// created it — otherwise a crash could lose the whole MANIFEST even
+	// though each line written to it was fsynced.
+	if err := fsutil.SyncDir(dir); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("manifest: %w", err)
 	}
 
 	m := &Manifest{file: f, live: make(map[string]bool)}
