@@ -106,10 +106,8 @@ func main() {
 		nd.StartCompactionLoop(compactionCtx, compactionInterval) // no-op in memory
 
 		// Anti-entropy (nd.StartAntiEntropyLoop) is deliberately NOT
-		// started: it installs merged versions via StorageEngine.Restore,
-		// which isn't written to the WAL, so on a persistent node anything
-		// it installs would be lost on restart. Resolve that first — see
-		// Node.StartAntiEntropyLoop.
+		// started: its loop can't yet be waited on, so shutdown can't stop
+		// it before closing the nodes — see Node.StartAntiEntropyLoop.
 
 		dashboard.Register(id, nd, listener, addr, w, r, neighbors)
 		if *dataDir == "" {

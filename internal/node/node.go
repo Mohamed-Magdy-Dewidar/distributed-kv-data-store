@@ -17,6 +17,7 @@ import (
 	"distributed-kv-datastore/internal/rpc"
 	"distributed-kv-datastore/internal/storage/engine"
 	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/vectorclock"
 	"distributed-kv-datastore/internal/versioning"
 )
 
@@ -466,17 +467,28 @@ func (n *Node) sharesReplicaSet(key, peerID string) bool {
 	return self && peer
 }
 
+// testHookBeforeReconcileInstall, when set, runs in reconcileBucket after
+// both sides' sibling sets for key have been read and before anything is
+// installed locally. Tests only: it lets one land a concurrent write in
+// that window. Always nil in production.
+var testHookBeforeReconcileInstall func(key string)
+
 // reconcileBucket reconciles a single divergent bucket: for every key
 // either side holds in that bucket that both n and peerID replicate (see
 // sharesReplicaSet; any other key is skipped without being fetched), it
-// fetches both sides' sibling sets, merges them via
-// versioning.MergeSiblings, and pushes the merged result back to whichever
-// side differs from it.
+// fetches both sides' sibling sets and sends each side the versions it's
+// missing. Every peer version not already covered locally is merged in
+// through Store.MergeReplicated — the causal path an incoming Replicate
+// uses — and every local version the peer doesn't cover is pushed with
+// Replicate, which the peer merges the same way. Nothing is overwritten
+// wholesale, so a write that lands on either side after the reads is
+// merged with, never lost; the reads only decide what's worth sending.
+// The result on both sides is what versioning.MergeSiblings of the two
+// sets would give, and a key already in sync sends nothing either way.
 //
 // Any local storage error aborts the bucket, just as a remote fetch error
 // does. Carrying on would treat a failed local read as "this node holds
-// nothing here", and RestoreVersions — which bypasses causality — would
-// then overwrite the local versions with the peer's.
+// nothing here", and silently skip pushing the local versions.
 func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.Client, bucketIdx int) error {
 	allLocalKeys, err := n.Store.Keys()
 	if err != nil {
@@ -516,15 +528,17 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 			return fmt.Errorf("fetch %q from %q: %w", key, peerID, err)
 		}
 
-		merged := versioning.MergeSiblings(localItems, remoteItems)
+		if testHookBeforeReconcileInstall != nil {
+			testHookBeforeReconcileInstall(key)
+		}
 
-		if !itemSetsEqual(merged, localItems) {
-			if err := n.Store.RestoreVersions(key, merged); err != nil {
+		for _, item := range missingFrom(localItems, remoteItems) {
+			if err := n.Store.MergeReplicated(key, item); err != nil {
 				return fmt.Errorf("install reconciled %q locally: %w", key, err)
 			}
 		}
-		if !itemSetsEqual(merged, remoteItems) {
-			if err := n.Replicate(ctx, peerID, key, merged); err != nil {
+		if toPush := missingFrom(remoteItems, localItems); len(toPush) > 0 {
+			if err := n.Replicate(ctx, peerID, key, toPush); err != nil {
 				return fmt.Errorf("push reconciled %q to %q: %w", key, peerID, err)
 			}
 		}
@@ -532,20 +546,25 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 	return nil
 }
 
-// itemSetsEqual is a shallow pointer-identity comparison: merged always
-// contains either the exact same *DataItem pointers as one input (nothing
-// changed) or a genuinely different set (resolve() dropped or added
-// something), so pointer equality is sufficient.
-func itemSetsEqual(a, b []*model.DataItem) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+// missingFrom returns the versions in incoming that set doesn't already
+// cover — those versioning.Resolve would keep if merged into set, rather
+// than drop as superseded by or equal to one of set's own. It compares
+// vector clocks, not pointers: the two sets come from different nodes.
+func missingFrom(set, incoming []*model.DataItem) []*model.DataItem {
+	var missing []*model.DataItem
+	for _, item := range incoming {
+		covered := false
+		for _, have := range set {
+			if c := have.VectorClock.Compare(item.VectorClock); c == vectorclock.After || c == vectorclock.Equal {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			missing = append(missing, item)
 		}
 	}
-	return true
+	return missing
 }
 
 // StartAntiEntropyLoop runs RunAntiEntropy against every co-replicant peer
@@ -553,11 +572,11 @@ func itemSetsEqual(a, b []*model.DataItem) bool {
 // deliberately independent/unsynchronized from other nodes' tickers, to
 // avoid a thundering-herd effect.
 //
-// NOT YET SAFE ON A PERSISTENT NODE (NewPersistent). reconcileBucket
-// installs merged versions through Store.RestoreVersions, which on a
-// StorageEngine is StorageEngine.Restore — and Restore is not written to
-// the WAL, so anything anti-entropy installs is lost on restart. Resolve
-// that before enabling this loop in cmd/cluster.
+// NOT YET SAFE TO ENABLE IN cmd/cluster: the loop can't be waited on. Once
+// ctx is canceled, a round already running can still be installing
+// versions after the node's StorageEngine is closed, so shutdown can't
+// order "stop anti-entropy" before "close the node". That needs the loop
+// made joinable first.
 func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {

@@ -343,9 +343,9 @@ func TestReconcileBucketAbortsWhenLocalInstallFails(t *testing.T) {
 	node1, node2 := reconcileSetup(t, p, 60411)
 	node2.Store.Put("k", "from-node-2", nil) // node-1 has nothing: merged must be installed locally
 
-	p.fail(faults{restore: errDisk})
+	p.fail(faults{put: errDisk}) // installs go through MergeReplicated -> Persister.Put
 	if err := reconcileKey(t, node1, "k"); err == nil || !errors.Is(err, errDisk) {
-		t.Fatalf("expected reconcileBucket to fail with the restore error, got %v", err)
+		t.Fatalf("expected reconcileBucket to fail with the install error, got %v", err)
 	}
 }
 
