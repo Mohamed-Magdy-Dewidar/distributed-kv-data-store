@@ -36,6 +36,13 @@ func hashKey(key string) uint32 {
 
 // AddNode adds a physical node to the ring, represented by
 // virtualNodesPerPhysical positions.
+//
+// Two vnodes (from the same or different physical nodes) can hash to the
+// same position. On that collision, whichever node ID sorts lexicographically
+// lower keeps the slot, independent of which vnode was added first — this is
+// what makes every independently-built ring (see the package doc) resolve
+// the collision the same way, since AddNode order isn't otherwise
+// synchronized across nodes. hr.ring never holds a position twice.
 func (hr *HashRing) AddNode(nodeID string) {
 	hr.mu.Lock()
 	defer hr.mu.Unlock()
@@ -43,6 +50,13 @@ func (hr *HashRing) AddNode(nodeID string) {
 	for i := 0; i < hr.virtualNodesPerPhysical; i++ {
 		virtualNodeKey := nodeID + "-" + strconv.Itoa(i)
 		pos := hashKey(virtualNodeKey)
+
+		if existing, collided := hr.nodeMap[pos]; collided {
+			if nodeID < existing {
+				hr.nodeMap[pos] = nodeID
+			}
+			continue
+		}
 
 		hr.nodeMap[pos] = nodeID
 		hr.ring = append(hr.ring, pos)

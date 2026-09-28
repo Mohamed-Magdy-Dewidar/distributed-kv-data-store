@@ -2,6 +2,7 @@ package hashring
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -185,6 +186,71 @@ func TestNoNodeIsCatastrophicallyOverOrUnderloaded(t *testing.T) {
 		if count < expected-tolerance || count > expected+tolerance {
 			t.Errorf("node %q got %d/%d keys as primary (expected ~%d ± %d) — distribution looks skewed",
 				nodeID, count, sampleSize, expected, tolerance)
+		}
+	}
+}
+
+// TestCollidingVnodesResolveDeterministicallyRegardlessOfInsertionOrder
+// pins down a real vnode hash collision, found by offline brute force (see
+// findcollision.go, not checked in): under the real 150-vnode-per-physical
+// hashKey, "node-21" and "node-2622" collide at four separate positions —
+// e.g. hashKey("node-21-109") == hashKey("node-2622-74") ==
+// 1164506696 — confirmed against an independent from-scratch FNV-1a
+// implementation, not just hash/fnv's own output.
+//
+// Before the deterministic tie-break, AddNode's last write wins, so which
+// node owns a colliding slot depended on insertion order — and since
+// newNode (internal/node) adds neighbors by ranging over a map, that order
+// isn't even the same across restarts of one node, let alone between two
+// independently-built rings (node-21's ring and node-2622's ring). This
+// test builds the ring in two different orders (also varying where the
+// non-colliding "node-3" lands) and requires identical results either way.
+func TestCollidingVnodesResolveDeterministicallyRegardlessOfInsertionOrder(t *testing.T) {
+	const nodeA = "node-21"   // lexicographically lower: must win every collision
+	const nodeB = "node-2622"
+
+	buildRing := func(order []string) *HashRing {
+		hr := NewHashRing(150)
+		for _, id := range order {
+			hr.AddNode(id)
+		}
+		return hr
+	}
+
+	ringA := buildRing([]string{nodeA, nodeB, "node-3"})
+	ringB := buildRing([]string{"node-3", nodeB, nodeA})
+
+	if !reflect.DeepEqual(ringA.nodeMap, ringB.nodeMap) {
+		t.Fatalf("nodeMap differs by insertion order:\n ringA=%v\n ringB=%v", ringA.nodeMap, ringB.nodeMap)
+	}
+	if !reflect.DeepEqual(ringA.ring, ringB.ring) {
+		t.Fatalf("ring differs by insertion order:\n ringA=%v\n ringB=%v", ringA.ring, ringB.ring)
+	}
+
+	// Every known colliding position must have gone to nodeA, the
+	// lexicographically lower ID, in both rings.
+	for _, pos := range []uint32{1164506696, 1181284315, 1097396220, 1114173839} {
+		if owner := ringA.nodeMap[pos]; owner != nodeA {
+			t.Errorf("ringA: expected colliding position %d to go to %s, got %s", pos, nodeA, owner)
+		}
+		if owner := ringB.nodeMap[pos]; owner != nodeA {
+			t.Errorf("ringB: expected colliding position %d to go to %s, got %s", pos, nodeA, owner)
+		}
+	}
+
+	// hr.ring must hold each position once, even though four positions were
+	// each targeted by two AddNode calls (one per colliding node).
+	wantRingLen := 3*150 - 4
+	if len(ringA.ring) != wantRingLen {
+		t.Fatalf("expected %d unique ring positions (450 minus 4 collisions), got %d", wantRingLen, len(ringA.ring))
+	}
+
+	for i := 0; i < 200; i++ {
+		key := fmt.Sprintf("sample-key-%d", i)
+		listA := ringA.GetPreferenceList(key, 2)
+		listB := ringB.GetPreferenceList(key, 2)
+		if !reflect.DeepEqual(listA, listB) {
+			t.Fatalf("key %q: preference list differs by insertion order: ringA=%v ringB=%v", key, listA, listB)
 		}
 	}
 }
