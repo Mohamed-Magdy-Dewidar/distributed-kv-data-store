@@ -351,6 +351,12 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 func (n *Node) CoordinatePut(ctx context.Context, key string, value any, clientContext map[string]uint32) error {
 	v := n.membership.Load()
 	isReplica, peers := n.isReplicaFor(v, key)
+	// INVARIANT: this refusal happens before any access to n.Store, so a
+	// FailedPrecondition (rpc.ErrNotReplica) always means the write was
+	// applied nowhere. forwardPut relies on that to fail over to the next
+	// replica without risking a second version of the write under another
+	// replica's clock entry. Do not read or write the store above this line.
+	// TestCoordinatePutRefusesANonOwnerBeforeAnyStoreAccess guards it.
 	if !isReplica {
 		return fmt.Errorf("node %s, key %q: %w", n.ID, key, rpc.ErrNotReplica)
 	}
