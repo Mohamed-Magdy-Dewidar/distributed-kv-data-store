@@ -20,6 +20,12 @@ type peerHealth struct {
 	misses int    // consecutive failed pings
 	dead   bool   // misses reached QuorumConfig.MaxMissedHeartbeats
 	epoch  uint64 // the membership epoch in its latest ping reply
+
+	// reachable is whether the most recent ping to the peer was answered.
+	// Unlike dead it drops on the first failure: a single failed dial leaves
+	// the connection in reconnect backoff, and RPCs on it fail fast until it
+	// reconnects, before any threshold is reached.
+	reachable bool
 }
 
 // errPeerDead is the result a write, read or anti-entropy step gets for a
@@ -55,6 +61,7 @@ func (n *Node) recordHeartbeat(peerID string, ok bool) {
 		n.health[peerID] = h
 	}
 	wasDead := h.dead
+	h.reachable = ok
 	if ok {
 		h.misses, h.dead = 0, false
 	} else {

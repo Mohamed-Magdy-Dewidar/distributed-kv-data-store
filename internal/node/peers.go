@@ -14,6 +14,11 @@ type PeerStatus struct {
 	// LastSeenEpoch is the membership epoch in the peer's most recent ping
 	// reply, 0 if it has never answered.
 	LastSeenEpoch uint64 `json:"lastSeenEpoch"`
+
+	// Reachable is true only when this node's most recent ping to the peer
+	// was answered; false before the first answer. A peer can be Alive (not
+	// yet past MaxMissedHeartbeats misses) without being Reachable.
+	Reachable bool `json:"reachable"`
 }
 
 // IsMember reports whether this node is in its current view. A node that has
@@ -39,6 +44,7 @@ func (n *Node) PeerStatuses() map[string]PeerStatus {
 		if h := n.health[id]; h != nil {
 			st.Alive = !h.dead
 			st.LastSeenEpoch = h.epoch
+			st.Reachable = h.reachable
 		}
 		out[id] = st
 	}

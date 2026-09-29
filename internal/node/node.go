@@ -36,6 +36,11 @@ import (
 // fairness becomes a goal; 500 vnodes measured closer to ±30-40%.
 const defaultVirtualNodesPerPhysical = 150
 
+// VirtualNodesPerPhysical is the vnode count every node's ring uses. Code
+// that computes placement outside a node (tests, tools) must use the same
+// value, with hashring.NewHashRingFromMembers, to agree with the nodes.
+const VirtualNodesPerPhysical = defaultVirtualNodesPerPhysical
+
 type Node struct {
 	// ID is the node's identity in the ring, the membership, hint targets and
 	// peer connections. Its writes are versioned under clockID instead: see

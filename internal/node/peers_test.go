@@ -97,3 +97,33 @@ func TestWaitDrainedNeedsPeersOnlyForANodeOutsideTheView(t *testing.T) {
 		t.Fatalf("expected drained once node-2 and node-3 were seen at epoch 2: %v", err)
 	}
 }
+
+// Reachable reports the latest ping only: false before any answer, true once
+// one is answered, and false again after a single failed ping, while the peer
+// is still alive (one miss is below MaxMissedHeartbeats).
+func TestPeerReachableFollowsTheLatestPing(t *testing.T) {
+	addrs := reserveAddrs(t, "node-1", "node-2") // node-2 isn't pinged until it is served
+	a := New("node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
+	fastHealth(a)
+	b := New("node-2", addrs["node-2"], 2, 1, 1, neighborsOf(addrs, "node-2"))
+
+	if st := a.PeerStatuses()["node-2"]; st.Reachable || !st.Alive {
+		t.Fatalf("before any ping: %+v, want alive and not reachable", st)
+	}
+
+	listener := serveAt(t, addrs["node-2"], b.Store, b)
+	eventually(t, 5*time.Second, "an answered ping", func() bool {
+		a.heartbeatRound(context.Background())
+		return a.PeerStatuses()["node-2"].Reachable
+	})
+
+	listener.Stop()
+	a.heartbeatRound(context.Background())
+	st := a.PeerStatuses()["node-2"]
+	if st.Reachable {
+		t.Fatalf("after a failed ping: %+v, want not reachable", st)
+	}
+	if !st.Alive {
+		t.Fatalf("one failed ping marked the peer dead: %+v", st)
+	}
+}
