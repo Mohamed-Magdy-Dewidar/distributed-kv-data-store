@@ -57,11 +57,7 @@ func startTestCluster(t *testing.T, addrs map[string]string, overrides map[strin
 		}
 
 		n := New(id, addr, replicationFactor, w, r, neighbors)
-		listener, err := rpc.Serve(addr, n.Store, n)
-		if err != nil {
-			t.Fatalf("failed to start server for %s: %v", id, err)
-		}
-		t.Cleanup(listener.Stop)
+		listener := serveAt(t, addr, n.Store, n)
 
 		nodes[id] = n
 		listeners[id] = listener
@@ -74,11 +70,7 @@ func startTestCluster(t *testing.T, addrs map[string]string, overrides map[strin
 // (the coordinator's own local write, plus 1 surviving peer) — exactly W —
 // so the write must still succeed.
 func TestPutQuorumMetDespiteOneNodeDown(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60201",
-		"node-2": "localhost:60202",
-		"node-3": "localhost:60203",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, listeners := startTestCluster(t, addrs, nil)
 
 	listeners["node-3"].Stop()
@@ -95,11 +87,7 @@ func TestPutQuorumMetDespiteOneNodeDown(t *testing.T) {
 // the totalNodes-failures<needed early exit — not by blocking until ctx's
 // deadline.
 func TestPutQuorumNotReachableFailsFast(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60211",
-		"node-2": "localhost:60212",
-		"node-3": "localhost:60213",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, listeners := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {w: 3, r: 1},
 	})
@@ -129,11 +117,7 @@ func TestPutQuorumNotReachableFailsFast(t *testing.T) {
 // coordinator's own local read, plus 1 surviving peer) — exactly R — so
 // Get must still succeed and return the value just written.
 func TestGetQuorumMetDespiteOneNodeDown(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60221",
-		"node-2": "localhost:60222",
-		"node-3": "localhost:60223",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, listeners := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {w: 2, r: 2},
 	})
@@ -166,11 +150,7 @@ func TestGetQuorumMetDespiteOneNodeDown(t *testing.T) {
 // as siblings — proving the merge works across an actual RPC fan-out, not
 // just against in-memory data.
 func TestGetSurfacesGenuineSiblingConflictsAcrossNodes(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60231",
-		"node-2": "localhost:60232",
-		"node-3": "localhost:60233",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, _ := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {w: 2, r: 3},
 	})
@@ -206,11 +186,7 @@ func TestGetSurfacesGenuineSiblingConflictsAcrossNodes(t *testing.T) {
 // rollback must remove the key entirely rather than leave an orphaned
 // version behind.
 func TestPutRollsBackLocalWriteWhenQuorumUnreachableFirstWrite(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60241",
-		"node-2": "localhost:60242",
-		"node-3": "localhost:60243",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, listeners := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {w: 2, r: 1},
 	})
@@ -234,11 +210,7 @@ func TestPutRollsBackLocalWriteWhenQuorumUnreachableFirstWrite(t *testing.T) {
 // store to exactly the pre-attempt version, not leave the unacknowledged
 // overwrite in place.
 func TestPutRollsBackLocalWriteWhenQuorumUnreachableOverwrite(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60251",
-		"node-2": "localhost:60252",
-		"node-3": "localhost:60253",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, listeners := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {w: 2, r: 1},
 	})
@@ -267,11 +239,7 @@ func TestPutRollsBackLocalWriteWhenQuorumUnreachableOverwrite(t *testing.T) {
 // advancing the vector clock across attempts — each failed attempt should
 // be fully undone before the next one starts.
 func TestPutRollbackDoesNotAccumulateAcrossRepeatedFailures(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60261",
-		"node-2": "localhost:60262",
-		"node-3": "localhost:60263",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, listeners := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {w: 2, r: 1},
 	})
@@ -302,11 +270,7 @@ func TestPutRollbackDoesNotAccumulateAcrossRepeatedFailures(t *testing.T) {
 // coordinated by node-1 for that key must never touch node-1's local
 // store, while the two actual replicas end up holding it.
 func TestPutGetActAsPureCoordinatorWhenNotAReplica(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60281",
-		"node-2": "localhost:60282",
-		"node-3": "localhost:60283",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	// Uniform N=2 on every node, not just node-1: node-1 forwards its write
 	// to a replica, which coordinates with its own N — with N=3 it would
 	// replicate to node-1 too. A real cluster must agree on N anyway.

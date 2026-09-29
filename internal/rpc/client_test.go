@@ -13,8 +13,8 @@ import (
 	"distributed-kv-datastore/internal/store"
 )
 
-// serveOn starts a raw gRPC server at addr (an empty addr picks a free
-// ephemeral port) and returns its actual address and its (abrupt) Stop —
+// serveOn starts a raw gRPC server at addr and returns its actual address and
+// its (abrupt) Stop —
 // unlike Listener.Stop's GracefulStop, which sends a GOAWAY that gets an
 // already-connected client to reconnect right away regardless of any
 // backoff cap. Stop severs the connection outright, the way a crashed or
@@ -22,9 +22,6 @@ import (
 // gRPC's backoff.
 func serveOn(t *testing.T, addr string) (actualAddr string, stop func()) {
 	t.Helper()
-	if addr == "" {
-		addr = "localhost:0"
-	}
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatalf("listen on %s: %v", addr, err)
@@ -65,7 +62,10 @@ func waitForState(t *testing.T, conn *grpc.ClientConn, want connectivity.State, 
 // plain (non-wait-for-ready) call from idle just redials once immediately,
 // bypassing the backoff schedule entirely rather than exercising it.
 func TestMaxReconnectBackoffLetsAClientReconnectQuickly(t *testing.T) {
-	addr, stop := serveOn(t, "")
+	// The peer comes back on the same address, so this is a known port: below
+	// 32768, where neither Linux nor Windows hands out ephemeral ports (so
+	// nothing takes it while the peer is down), and unique to this package.
+	addr, stop := serveOn(t, "127.0.0.1:26501")
 
 	client, err := Dial(addr, 50*time.Millisecond)
 	if err != nil {

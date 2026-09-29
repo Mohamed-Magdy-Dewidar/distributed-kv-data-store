@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"distributed-kv-datastore/internal/model"
-	"distributed-kv-datastore/internal/rpc"
 	"distributed-kv-datastore/internal/store"
 )
 
@@ -24,8 +23,9 @@ func sortedValues(items []*model.DataItem) []any {
 // merge of the stale reads verbatim would erase that write and resurrect
 // the version it replaced. Merging node-2's version in instead keeps it.
 func TestReconcileDoesNotClobberAWriteLandingAfterItsReads(t *testing.T) {
-	node1 := startTestNode(t, "node-1", "localhost:60511", map[string]string{"node-2": "localhost:60512"})
-	node2 := startTestNode(t, "node-2", "localhost:60512", map[string]string{"node-1": "localhost:60511"})
+	a := reserveAddrs(t, "node-1", "node-2")
+	node1 := startTestNode(t, "node-1", a["node-1"], map[string]string{"node-2": a["node-2"]})
+	node2 := startTestNode(t, "node-2", a["node-2"], map[string]string{"node-1": a["node-1"]})
 	node1.Store.Put("k", "old-node-1", nil)
 	node2.Store.Put("k", "from-node-2", nil) // concurrent with node-1's
 
@@ -65,18 +65,15 @@ func TestReconcileDoesNotClobberAWriteLandingAfterItsReads(t *testing.T) {
 // any install on node-1.
 func TestReconcileSendsNothingForAKeyAlreadyInSync(t *testing.T) {
 	p1, p2 := newFlakyPersister(), newFlakyPersister()
-	node1, _ := reconcileSetup(t, p1, 60521)
+	node1, _ := reconcileSetup(t, p1)
 
 	// reconcileSetup's node-2 already serves an in-memory store; this one
 	// serves p2 on its own port so the fault reaches its gRPC handler.
-	node2 := New("node-2", "localhost:60523", 2, 2, 1, map[string]string{"node-1": "localhost:60521"})
+	addr2 := reserveAddr(t)
+	node2 := New("node-2", addr2, 2, 2, 1, map[string]string{"node-1": node1.Address})
 	node2.Store = store.NewDataStoreWithPersister("node-2", p2)
-	listener, err := rpc.Serve("localhost:60523", node2.Store, node2)
-	if err != nil {
-		t.Fatalf("serve node-2: %v", err)
-	}
-	t.Cleanup(listener.Stop)
-	if _, err := node1.SetMembership(1, membersWithAddr(node1, "node-2", "localhost:60523")); err != nil {
+	serveAt(t, addr2, node2.Store, node2)
+	if _, err := node1.SetMembership(1, membersWithAddr(node1, "node-2", addr2)); err != nil {
 		t.Fatalf("SetMembership: %v", err)
 	}
 

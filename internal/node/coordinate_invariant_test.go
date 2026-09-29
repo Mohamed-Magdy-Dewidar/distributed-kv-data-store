@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,7 +55,8 @@ func (c *countingPersister) Keys() ([]string, error) {
 // not own the key, and requires FailedPrecondition and not a single access to
 // the node's store; a key it does own is the control that the counter works.
 func TestCoordinatePutRefusesANonOwnerBeforeAnyStoreAccess(t *testing.T) {
-	addrs := map[string]string{"node-1": "localhost:61501", "node-2": "localhost:61502", "node-3": "localhost:61503"}
+	addrs := reserveAddrs(t, "node-1")
+	maps.Copy(addrs, knownAddrs("node-2", "node-3")) // down: an owned write's replication to them fails fast
 	nd := New("node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
 	persister := newCountingPersister()
 	nd.Store = store.NewDataStoreWithPersister("node-1", persister) // before serving, so no handler races the swap

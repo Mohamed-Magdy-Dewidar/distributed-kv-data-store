@@ -13,31 +13,15 @@ import (
 	"distributed-kv-datastore/internal/storage/engine"
 )
 
-// freeAddr finds a currently-free TCP port by binding to it and closing it
-// immediately. There's a small window where something else could grab it
-// before Run does; acceptable for a single-process test suite, and the
-// standard way to get a free port when the code under test binds its own
-// listener rather than accepting one.
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to find a free port: %v", err)
-	}
-	addr := lis.Addr().String()
-	lis.Close()
-	return addr
-}
-
 // testConfig returns a valid single-node config (N=W=R=1, no peers) with
 // free ports and short-but-not-instant timeouts, suitable for driving Run
 // directly in tests. dataDir == "" gives an in-memory node.
 func testConfig(t *testing.T, dataDir string) *config.Config {
 	t.Helper()
-	grpcAddr := freeAddr(t)
+	grpcAddr := knownAddr() // Run binds its addresses itself; see ports_test.go
 	return &config.Config{
 		NodeID:  "kv-0",
-		Listen:  config.Listen{GRPC: grpcAddr, HTTP: freeAddr(t)},
+		Listen:  config.Listen{GRPC: grpcAddr, HTTP: knownAddr()},
 		DataDir: dataDir,
 		Cluster: config.Cluster{
 			N: 1, W: 1, R: 1,

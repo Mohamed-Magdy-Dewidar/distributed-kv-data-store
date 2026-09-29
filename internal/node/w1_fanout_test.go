@@ -10,7 +10,7 @@ import (
 // model is send to all N, wait for W, not send only as many as W requires.
 // node-2 must still receive the write, not be left to anti-entropy alone.
 func TestW1FansOutToLivePeerEvenThoughLocalWriteAloneSatisfiesW(t *testing.T) {
-	addrs, peersOf := hintCluster(60721)
+	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := persistentCoordinator(t, t.TempDir(), peersOf("node-1"), 1)
 	node2 := New("node-2", addrs["node-2"], 3, 1, 1, peersOf("node-2"))
 	serveNode(t, node2, addrs["node-2"])
@@ -33,7 +33,7 @@ func TestW1FansOutToLivePeerEvenThoughLocalWriteAloneSatisfiesW(t *testing.T) {
 // unwritten until anti-entropy happens to reconcile it.
 func TestW1StillHintsUnreachablePeers(t *testing.T) {
 	dir := t.TempDir()
-	_, peersOf := hintCluster(60731)
+	_, peersOf := hintCluster(t, "node-2", "node-3")
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 1)
 	// node-2 and node-3 are never started: both Unavailable.
 

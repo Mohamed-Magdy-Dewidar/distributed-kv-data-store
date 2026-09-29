@@ -11,9 +11,9 @@ import (
 
 // hintedWrite has node-1 (persistent, W=2) write each key with node-2 up
 // and node-3 down, then waits until node-3's hints for them are stored.
-func hintedWrite(t *testing.T, base int, keys ...string) (node1 *Node, addrs map[string]string, peersOf func(string) map[string]string) {
+func hintedWrite(t *testing.T, keys ...string) (node1 *Node, addrs map[string]string, peersOf func(string) map[string]string) {
 	t.Helper()
-	addrs, peersOf = hintCluster(base)
+	addrs, peersOf = hintCluster(t, "node-3") // node-3 is started later, on this known address
 	node1 = persistentCoordinator(t, t.TempDir(), peersOf("node-1"), 2)
 	node1.QuorumConfig.ReplicationTimeout = 300 * time.Millisecond // a down target costs one of these per round
 	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
@@ -63,7 +63,7 @@ func waitReachable(t *testing.T, from *Node, target string) {
 // delivery round sends it every hinted write, versions intact, and retires
 // the hints.
 func TestHintsAreDeliveredOnceTheTargetIsBack(t *testing.T) {
-	node1, addrs, peersOf := hintedWrite(t, 60671, "a", "b")
+	node1, addrs, peersOf := hintedWrite(t, "a", "b")
 	node3 := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
 	serveNode(t, node3, addrs["node-3"])
 	waitReachable(t, node1, "node-3")
@@ -86,7 +86,7 @@ func TestHintsAreDeliveredOnceTheTargetIsBack(t *testing.T) {
 // TestHintsStayPendingWhileTheTargetIsDown: a round against a target
 // that's still unreachable delivers nothing and must retire nothing.
 func TestHintsStayPendingWhileTheTargetIsDown(t *testing.T) {
-	node1, _, _ := hintedWrite(t, 60681, "a", "b")
+	node1, _, _ := hintedWrite(t, "a", "b")
 
 	node1.deliverHints(context.Background())
 
@@ -99,7 +99,7 @@ func TestHintsStayPendingWhileTheTargetIsDown(t *testing.T) {
 // its target Unavailable, the round moves on rather than trying (and
 // timing out on) every other hint for it.
 func TestUnreachableTargetIsSkippedForTheRestOfTheRound(t *testing.T) {
-	node1, _, _ := hintedWrite(t, 60691, "a", "b", "c")
+	node1, _, _ := hintedWrite(t, "a", "b", "c")
 
 	var attempts atomic.Int32
 	testHookBeforeDeliveringHint = func(target, key string) { attempts.Add(1) }
@@ -118,7 +118,7 @@ func TestUnreachableTargetIsSkippedForTheRestOfTheRound(t *testing.T) {
 // the still-open hint store — rather than return while the round is still
 // using it.
 func TestStopWaitsForAHintDeliveryInProgress(t *testing.T) {
-	node1, addrs, peersOf := hintedWrite(t, 60701, "a")
+	node1, addrs, peersOf := hintedWrite(t, "a")
 	node3 := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
 	serveNode(t, node3, addrs["node-3"])
 	waitReachable(t, node1, "node-3")
@@ -179,7 +179,7 @@ func TestStopDuringHintLoopFirstDelayReturnsPromptly(t *testing.T) {
 // TestHintDeliveryLoopIsNoOpInMemory: an in-memory node holds no hints, so
 // no delivery loop starts.
 func TestHintDeliveryLoopIsNoOpInMemory(t *testing.T) {
-	n := New("node-1", "localhost:60711", 1, 1, 1, nil)
+	n := New("node-1", "unused", 1, 1, 1, nil)
 	n.StartHintDeliveryLoop(context.Background(), time.Millisecond)
 
 	n.bgMu.Lock()

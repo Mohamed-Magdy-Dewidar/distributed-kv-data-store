@@ -23,25 +23,21 @@ type forwardCluster struct {
 	replicas []string
 }
 
-func newForwardCluster(t *testing.T, base int, serve func(replicas []string) []string, pick func(key string, replicas []string) bool) *forwardCluster {
+func newForwardCluster(t *testing.T, serve func(replicas []string) []string, pick func(key string, replicas []string) bool) *forwardCluster {
 	t.Helper()
 	ids := []string{"node-1", "node-2", "node-3"}
-	addrs := map[string]string{}
-	for i, id := range ids {
-		addrs[id] = fmt.Sprintf("localhost:%d", base+i)
-	}
-	nodes := map[string]*Node{}
-	for _, id := range ids {
-		nodes[id] = New(id, addrs[id], 2, 1, 1, neighborsOf(addrs, id))
-		nodes[id].QuorumConfig.MaxReconnectBackoff = 50 * time.Millisecond
-	}
-	forwarder := nodes["node-3"]
 
+	// The ring depends only on the member IDs, so the key (and which nodes
+	// will listen) can be chosen before any address exists.
+	idRing, err := buildView(0, map[string]string{"node-1": "a", "node-2": "b", "node-3": "c"}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var key string
 	var replicas []string
 	for i := 0; ; i++ {
 		key = fmt.Sprintf("fwd-key-%d", i)
-		replicas = owners(forwarder, key, 2)
+		replicas = idRing.ring.GetPreferenceList(key, 2)
 		if slices.Contains(replicas, "node-3") {
 			continue
 		}
@@ -49,10 +45,26 @@ func newForwardCluster(t *testing.T, base int, serve func(replicas []string) []s
 			break
 		}
 	}
-	for _, id := range serve(replicas) {
+
+	// Listening nodes get reserved listeners; the rest refuse connections.
+	served := serve(replicas)
+	addrs := map[string]string{}
+	for _, id := range ids {
+		if slices.Contains(served, id) {
+			addrs[id] = reserveAddr(t)
+		} else {
+			addrs[id] = knownAddr()
+		}
+	}
+	nodes := map[string]*Node{}
+	for _, id := range ids {
+		nodes[id] = New(id, addrs[id], 2, 1, 1, neighborsOf(addrs, id))
+		nodes[id].QuorumConfig.MaxReconnectBackoff = 50 * time.Millisecond
+	}
+	for _, id := range served {
 		serveNode(t, nodes[id], addrs[id])
 	}
-	return &forwardCluster{nodes: nodes, addrs: addrs, forward: forwarder, key: key, replicas: replicas}
+	return &forwardCluster{nodes: nodes, addrs: addrs, forward: nodes["node-3"], key: key, replicas: replicas}
 }
 
 func (c *forwardCluster) put(t *testing.T, timeout time.Duration) error {
@@ -67,7 +79,7 @@ func (c *forwardCluster) put(t *testing.T, timeout time.Duration) error {
 // forwarder, whose view still lists it first, tries the next replica. No
 // heartbeats run, so the two views stay different.
 func TestForwardFailsOverFromAReplicaThatIsNotAnOwner(t *testing.T) {
-	c := newForwardCluster(t, 61411, func([]string) []string { return []string{"node-1", "node-2", "node-3"} }, nil)
+	c := newForwardCluster(t, func([]string) []string { return []string{"node-1", "node-2", "node-3"} }, nil)
 	first, second := c.nodes[c.replicas[0]], c.nodes[c.replicas[1]]
 
 	// The first replica's view: the other two nodes only (it has been removed).
@@ -98,13 +110,12 @@ func (n *Node) owners(t *testing.T, key string) []string {
 // skipped too.
 func TestForwardFailsOverFromAReplicaItCannotDial(t *testing.T) {
 	for name, badAddr := range map[string]string{
-		"dial error":       "bad\x7faddr:1", // rejected while creating the connection
-		"unresolvable":     "no-such-host.invalid:7000",
-		"nothing listens":  "localhost:61439",
-		"unsupported port": "localhost:1",
+		"dial error":      "bad\x7faddr:1", // rejected while creating the connection
+		"unresolvable":    "no-such-host.invalid:7000",
+		"nothing listens": knownAddr(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := newForwardCluster(t, 61421, func(replicas []string) []string { return []string{replicas[1], "node-3"} }, nil)
+			c := newForwardCluster(t, func(replicas []string) []string { return []string{replicas[1], "node-3"} }, nil)
 			members := maps2(c.addrs)
 			members[c.replicas[0]] = badAddr
 			if _, err := c.forward.SetMembership(1, members); err != nil {
@@ -153,7 +164,7 @@ func TestForwardWithNoReachableReplicaIsUnavailable(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := newForwardCluster(t, 61431, func([]string) []string { return []string{"node-3"} }, nil)
+			c := newForwardCluster(t, func([]string) []string { return []string{"node-3"} }, nil)
 			prepare(c)
 
 			err := c.put(t, 10*time.Second)
@@ -175,7 +186,7 @@ func TestForwardWithNoReachableReplicaIsUnavailable(t *testing.T) {
 // A replica heartbeats have marked dead is not tried: with a hung first
 // replica, the write still completes at once.
 func TestForwardSkipsAReplicaMarkedDead(t *testing.T) {
-	c := newForwardCluster(t, 61441, func(replicas []string) []string { return []string{replicas[1], "node-3"} }, nil)
+	c := newForwardCluster(t, func(replicas []string) []string { return []string{replicas[1], "node-3"} }, nil)
 	startHungPeer(t, c.addrs[c.replicas[0]])
 	for range c.forward.QuorumConfig.MaxMissedHeartbeats {
 		c.forward.recordHeartbeat(c.replicas[0], false)

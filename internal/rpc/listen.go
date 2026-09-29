@@ -29,7 +29,13 @@ func Serve(address string, ds *store.DataStore, coord WriteCoordinator) (*Listen
 	if err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", address, err)
 	}
+	return ServeListener(lis, ds, coord), nil
+}
 
+// ServeListener is Serve on a listener the caller has already opened, for
+// example on port 0 so the OS picks a free port that stays bound from then
+// on. The returned Listener owns lis: stopping it closes lis.
+func ServeListener(lis net.Listener, ds *store.DataStore, coord WriteCoordinator) *Listener {
 	grpcServer := grpc.NewServer()
 	pb.RegisterKVReplicationServer(grpcServer, NewServer(ds, coord))
 	// The client-facing service shares the server (so StopWithin covers it),
@@ -44,7 +50,7 @@ func Serve(address string, ds *store.DataStore, coord WriteCoordinator) (*Listen
 		_ = grpcServer.Serve(lis) // returns when Stop() is called
 	}()
 
-	return &Listener{grpcServer: grpcServer, addr: lis.Addr()}, nil
+	return &Listener{grpcServer: grpcServer, addr: lis.Addr()}
 }
 
 func (l *Listener) Addr() string {

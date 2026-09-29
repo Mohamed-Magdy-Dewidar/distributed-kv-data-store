@@ -6,10 +6,7 @@ import (
 )
 
 func TestAntiEntropyConvergesAfterMissedReplication(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60301",
-		"node-2": "localhost:60302",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2")
 	nodes, _ := startTestCluster(t, addrs, nil)
 
 	nodes["node-1"].Store.Put("orphaned-key", "value-from-node-1", nil)
@@ -30,10 +27,7 @@ func TestAntiEntropyConvergesAfterMissedReplication(t *testing.T) {
 }
 
 func TestAntiEntropyIsIdempotentWhenAlreadyInSync(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60311",
-		"node-2": "localhost:60312",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2")
 	nodes, _ := startTestCluster(t, addrs, nil)
 
 	ctx := context.Background()
@@ -55,10 +49,7 @@ func TestAntiEntropyIsIdempotentWhenAlreadyInSync(t *testing.T) {
 }
 
 func TestAntiEntropyReconcilesGenuineSiblingsFromBothSides(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60321",
-		"node-2": "localhost:60322",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2")
 	nodes, _ := startTestCluster(t, addrs, nil)
 
 	nodes["node-1"].Store.Put("contested-key", "from-node-1", nil)

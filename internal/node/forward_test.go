@@ -36,11 +36,7 @@ func startUniformCluster(t *testing.T, addrs map[string]string, n, w, r int, sto
 		if ds, ok := stores[id]; ok {
 			nd.Store = ds
 		}
-		listener, err := rpc.Serve(addr, nd.Store, nd)
-		if err != nil {
-			t.Fatalf("failed to start server for %s: %v", id, err)
-		}
-		t.Cleanup(listener.Stop)
+		listener := serveAt(t, addr, nd.Store, nd)
 		nodes[id] = nd
 		listeners[id] = listener
 	}
@@ -129,10 +125,7 @@ func assertOnlyReplicaVersion(t *testing.T, nd *Node, key string, want any, repl
 // either coordinator — and the second must supersede the first rather than
 // compare as Concurrent.
 func TestSequentialWritesViaDifferentCoordinatorsStaySequential(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60431", "node-2": "localhost:60432",
-		"node-3": "localhost:60433", "node-4": "localhost:60434",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3", "node-4")
 	nodes, _ := startUniformCluster(t, addrs, 2, 2, 2, nil)
 	key, replicas := keyReplicatedOnlyBy(t, []string{"node-1", "node-2", "node-3", "node-4"}, 2, "node-1", "node-4")
 	ctx := context.Background()
@@ -162,10 +155,7 @@ func TestSequentialWritesViaDifferentCoordinatorsStaySequential(t *testing.T) {
 // to get an identical clock, which Resolve drops as a duplicate — while
 // Put still reported success.
 func TestSequentialWritesViaSameNonReplicaCoordinatorAreNotLost(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60441", "node-2": "localhost:60442",
-		"node-3": "localhost:60443", "node-4": "localhost:60444",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3", "node-4")
 	nodes, _ := startUniformCluster(t, addrs, 2, 2, 2, nil)
 	key, replicas := keyReplicatedOnlyBy(t, []string{"node-1", "node-2", "node-3", "node-4"}, 2, "node-1")
 	ctx := context.Background()
@@ -184,9 +174,7 @@ func TestSequentialWritesViaSameNonReplicaCoordinatorAreNotLost(t *testing.T) {
 // preference list is down, the write goes to the next one, which versions
 // it on its own entry.
 func TestForwardFailsOverWhenReplicaUnavailable(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60451", "node-2": "localhost:60452", "node-3": "localhost:60453",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	key, replicas := keyReplicatedOnlyBy(t, []string{"node-1", "node-2", "node-3"}, 2, "node-1")
 	nodes, listeners := startUniformCluster(t, addrs, 2, 1, 1, nil)
 	listeners[replicas[0]].Stop()
@@ -206,9 +194,7 @@ func TestForwardFailsOverWhenReplicaUnavailable(t *testing.T) {
 // than version the write again on another replica. With W=1, failing over
 // would have succeeded on the healthy replica.
 func TestForwardDoesNotFailOverWhenReplicaFailsTheWrite(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60461", "node-2": "localhost:60462", "node-3": "localhost:60463",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	key, replicas := keyReplicatedOnlyBy(t, []string{"node-1", "node-2", "node-3"}, 2, "node-1")
 	nodes, _ := startUniformCluster(t, addrs, 2, 1, 1, map[string]*store.DataStore{
 		replicas[0]: store.NewDataStoreWithPersister(replicas[0], failingPersister{}),
@@ -226,9 +212,8 @@ func TestForwardDoesNotFailOverWhenReplicaFailsTheWrite(t *testing.T) {
 // key it doesn't replicate must refuse, never forward the write onward.
 func TestCoordinatePutRefusesWhenNotAReplica(t *testing.T) {
 	key, _ := keyReplicatedOnlyBy(t, []string{"node-1", "node-2", "node-3"}, 2, "node-1")
-	nd := New("node-1", "localhost:60471", 2, 1, 1, map[string]string{
-		"node-2": "localhost:60472", "node-3": "localhost:60473",
-	})
+	a := knownAddrs("node-1", "node-2", "node-3") // never dialed
+	nd := New("node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"], "node-3": a["node-3"]})
 	if err := nd.CoordinatePut(context.Background(), key, "v", nil); !errors.Is(err, rpc.ErrNotReplica) {
 		t.Fatalf("expected rpc.ErrNotReplica, got %v", err)
 	}

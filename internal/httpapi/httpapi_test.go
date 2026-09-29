@@ -44,7 +44,10 @@ func post(t *testing.T, h http.Handler, path string) int {
 // that one — otherwise the node keeps accepting writes through shutdown —
 // and handleStart must refuse to start another afterwards.
 func TestStopListenersStopsListenersTheDashboardRestarted(t *testing.T) {
-	const addr = "localhost:60551"
+	// The dashboard restarts the node's listener on the same address, so this
+	// is a known port: below 32768, where neither Linux nor Windows hands out
+	// ephemeral ports, and unique to this package's tests.
+	const addr = "127.0.0.1:26001"
 	nd := node.New("node-1", addr, 1, 1, 1, nil)
 	listener, err := rpc.Serve(addr, nd.Store, nd)
 	if err != nil {

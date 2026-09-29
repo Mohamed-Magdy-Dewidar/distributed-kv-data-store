@@ -9,7 +9,7 @@ import (
 // Heartbeats record each peer's epoch from its ping replies; the record goes
 // when the peer leaves the view, and a node removed from the view says so.
 func TestPeerEpochsAreRecordedAndPrunedWithTheView(t *testing.T) {
-	nodes, addrs := startLoopCluster(t, 61201, "node-1", "node-2", "node-3")
+	nodes, addrs := startLoopCluster(t, "node-1", "node-2", "node-3")
 	a := nodes["node-1"]
 	for _, nd := range nodes {
 		if _, err := nd.SetMembership(4, addrs); err != nil {
@@ -58,7 +58,7 @@ func TestPeerEpochsAreRecordedAndPrunedWithTheView(t *testing.T) {
 // WaitDrained: a member is done with its handoff; a node that is out of the
 // view also needs the remaining members to have been seen at the epoch.
 func TestWaitDrainedNeedsPeersOnlyForANodeOutsideTheView(t *testing.T) {
-	nodes, addrs := startLoopCluster(t, 61211, "node-1", "node-2", "node-3")
+	nodes, addrs := startLoopCluster(t, "node-1", "node-2", "node-3")
 	a := nodes["node-1"]
 
 	quick := func() context.Context {

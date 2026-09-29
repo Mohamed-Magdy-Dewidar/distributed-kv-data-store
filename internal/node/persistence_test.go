@@ -18,7 +18,7 @@ import (
 // neighbors) at dir, so Node.Put and Node.Get run entirely locally.
 func openSoloNode(t *testing.T, dir string, maxMemtableBytes int) *Node {
 	t.Helper()
-	nd, err := NewPersistent("node-1", "localhost:0", 1, 1, 1, nil, dir, maxMemtableBytes)
+	nd, err := NewPersistent("node-1", "unused", 1, 1, 1, nil, dir, maxMemtableBytes)
 	if err != nil {
 		t.Fatalf("NewPersistent failed: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestNewPersistentClosesMainEngineWhenHintsOpenFails(t *testing.T) {
 	}
 	defer blocker.Close()
 
-	if _, err := NewPersistent("node-1", "localhost:0", 1, 1, 1, nil, dir, 1<<20); err == nil {
+	if _, err := NewPersistent("node-1", "unused", 1, 1, 1, nil, dir, 1<<20); err == nil {
 		t.Fatal("expected NewPersistent to fail while the hints dir is locked")
 	} else if !errors.Is(err, engine.ErrLocked) {
 		t.Fatalf("expected the error to wrap engine.ErrLocked, got %v", err)
@@ -155,7 +155,8 @@ func TestNewPersistentClosesMainEngineWhenHintsOpenFails(t *testing.T) {
 // be called again safely — on a persistent node too, where closing the
 // engine's WAL twice would otherwise fail.
 func TestCloseIsIdempotentAndClosesPeerClients(t *testing.T) {
-	nd := New("node-1", "localhost:60481", 2, 1, 1, map[string]string{"node-2": "localhost:60482"})
+	a := knownAddrs("node-1", "node-2") // never served
+	nd := New("node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"]})
 	if nd.engine != nil {
 		t.Fatal("expected an in-memory node to have no storage engine")
 	}

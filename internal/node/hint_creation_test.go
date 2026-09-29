@@ -2,22 +2,28 @@ package node
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"distributed-kv-datastore/internal/hints"
-	"distributed-kv-datastore/internal/rpc"
 	"distributed-kv-datastore/internal/store"
 )
 
 // hintCluster addresses three nodes; N=3, so every key's preference list
-// is all of them and node-1 coordinates every write it's given.
-func hintCluster(base int) (addrs map[string]string, peersOf func(id string) map[string]string) {
+// is all of them and node-1 coordinates every write it's given. Nodes in
+// down get a known address, which refuses connections until a node is served
+// there (see ports_test.go); the others get reserved listeners.
+func hintCluster(t *testing.T, down ...string) (addrs map[string]string, peersOf func(id string) map[string]string) {
+	t.Helper()
 	addrs = map[string]string{}
-	for i, id := range []string{"node-1", "node-2", "node-3"} {
-		addrs[id] = fmt.Sprintf("localhost:%d", base+i)
+	for _, id := range []string{"node-1", "node-2", "node-3"} {
+		if slices.Contains(down, id) {
+			addrs[id] = knownAddr()
+		} else {
+			addrs[id] = reserveAddrs(t, id)[id]
+		}
 	}
 	peersOf = func(id string) map[string]string {
 		peers := map[string]string{}
@@ -31,14 +37,10 @@ func hintCluster(base int) (addrs map[string]string, peersOf func(id string) map
 	return addrs, peersOf
 }
 
-// serveNode starts nd's listener, stopped at cleanup.
+// serveNode serves nd at addr (see serveAt), stopped at cleanup.
 func serveNode(t *testing.T, nd *Node, addr string) {
 	t.Helper()
-	listener, err := rpc.Serve(addr, nd.Store, nd)
-	if err != nil {
-		t.Fatalf("serve %s: %v", nd.ID, err)
-	}
-	t.Cleanup(listener.Stop)
+	serveAt(t, addr, nd.Store, nd)
 }
 
 // persistentCoordinator opens node-1 as a persistent node at dir with
@@ -80,7 +82,7 @@ func pendingHintKeys(t *testing.T, dir, target string) []string {
 // durable hint; node-2, which acked, must not.
 func TestUnreachableReplicaGetsHintEvenWhenItsFailureArrivesAfterQuorum(t *testing.T) {
 	dir := t.TempDir()
-	addrs, peersOf := hintCluster(60601)
+	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 2)
 	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
 	// node-3 is never started: Unavailable.
@@ -114,7 +116,7 @@ func TestUnreachableReplicaGetsHintEvenWhenItsFailureArrivesAfterQuorum(t *testi
 // applied it — not a case for a hint, only for anti-entropy.
 func TestReplicaFailingOtherwiseGetsNoHint(t *testing.T) {
 	dir := t.TempDir()
-	addrs, peersOf := hintCluster(60611)
+	addrs, peersOf := hintCluster(t)
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 2)
 	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
 	node3 := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
@@ -137,7 +139,7 @@ func TestReplicaFailingOtherwiseGetsNoHint(t *testing.T) {
 // undone write to node-3, which never saw it.
 func TestRolledBackWriteGetsNoHint(t *testing.T) {
 	dir := t.TempDir()
-	addrs, peersOf := hintCluster(60621)
+	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 3)
 	serveNode(t, New("node-2", addrs["node-2"], 3, 3, 1, peersOf("node-2")), addrs["node-2"])
 
@@ -159,7 +161,7 @@ func TestRolledBackWriteGetsNoHint(t *testing.T) {
 // nowhere durable to keep a hint; a write with a replica down still
 // succeeds on quorum, and the drain finishes without trying to store one.
 func TestInMemoryCoordinatorDoesNotAttemptHints(t *testing.T) {
-	addrs, peersOf := hintCluster(60631)
+	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := New("node-1", addrs["node-1"], 3, 2, 1, peersOf("node-1"))
 	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
 
@@ -176,7 +178,7 @@ func TestInMemoryCoordinatorDoesNotAttemptHints(t *testing.T) {
 // in the still-open hint store rather than being lost.
 func TestCloseWaitsForADrainStoringHints(t *testing.T) {
 	dir := t.TempDir()
-	addrs, peersOf := hintCluster(60641)
+	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 2)
 	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
 
@@ -214,7 +216,7 @@ func TestCloseWaitsForADrainStoringHints(t *testing.T) {
 // held until the caller has its answer and cancels its context. The fan-out
 // runs detached from that cancellation, so node-3 still gets the write.
 func TestSlowReplicaStillReceivesWriteAfterCallerCancels(t *testing.T) {
-	addrs, peersOf := hintCluster(60651)
+	addrs, peersOf := hintCluster(t)
 	node1 := New("node-1", addrs["node-1"], 3, 2, 1, peersOf("node-1"))
 	t.Cleanup(func() { node1.Close() })
 	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
@@ -250,7 +252,7 @@ func TestSlowReplicaStillReceivesWriteAfterCallerCancels(t *testing.T) {
 // mean unbounded — a replica RPC still pending past ReplicationTimeout is
 // abandoned rather than delivered.
 func TestReplicationTimeoutBoundsStragglers(t *testing.T) {
-	addrs, peersOf := hintCluster(60661)
+	addrs, peersOf := hintCluster(t)
 	node1 := New("node-1", addrs["node-1"], 3, 2, 1, peersOf("node-1"))
 	node1.QuorumConfig.ReplicationTimeout = 100 * time.Millisecond
 	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])

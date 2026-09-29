@@ -10,14 +10,13 @@ import (
 	"time"
 
 	"distributed-kv-datastore/internal/node"
-	"distributed-kv-datastore/internal/rpc"
 )
 
 // adminServer runs a probe server for nd on a free port, ready, stopped at
 // cleanup, and returns its base URL.
 func adminServer(t *testing.T, nd *node.Node) string {
 	t.Helper()
-	addr := freeAddr(t)
+	addr := knownAddr() // the probe server binds it itself
 	p := newProbeServer(addr)
 	if err := p.start(); err != nil {
 		t.Fatal(err)
@@ -65,15 +64,6 @@ func fastNode(id, addr string, neighbors map[string]string) *node.Node {
 	return nd
 }
 
-func serveRPC(t *testing.T, nd *node.Node, addr string) {
-	t.Helper()
-	l, err := rpc.Serve(addr, nd.Store, nd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(l.Stop)
-}
-
 func eventuallyTrue(t *testing.T, within time.Duration, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -87,7 +77,7 @@ func eventuallyTrue(t *testing.T, within time.Duration, what string, cond func()
 
 // (a) POST /admin/membership maps SetMembership's outcomes onto statuses.
 func TestPostMembershipStatusMapping(t *testing.T) {
-	addr := freeAddr(t)
+	addr := knownAddr() // never served
 	nd := fastNode("kv-0", addr, nil)
 	base := adminServer(t, nd)
 	own := map[string]string{"kv-0": addr}
@@ -101,7 +91,7 @@ func TestPostMembershipStatusMapping(t *testing.T) {
 		t.Fatalf("the same membership again: %d %v, want 200 changed=false", status, body)
 	}
 
-	status, body = call(t, "POST", base+"/admin/membership", membershipJSON(1, map[string]string{"kv-0": addr, "kv-1": "127.0.0.1:1"}))
+	status, body = call(t, "POST", base+"/admin/membership", membershipJSON(1, map[string]string{"kv-0": addr, "kv-1": knownAddr()}))
 	if status != 409 || body["error"] != "membership conflict" || body["currentEpoch"] != float64(1) {
 		t.Fatalf("conflict: %d %v", status, body)
 	}
@@ -142,7 +132,7 @@ func TestPostMembershipStatusMapping(t *testing.T) {
 // (b) GET /admin/membership reports the view, the handoff and what
 // heartbeats have shown of the peers.
 func TestGetMembershipReflectsViewHandoffAndPeers(t *testing.T) {
-	ax, ay := freeAddr(t), freeAddr(t)
+	ax, ay := knownAddr(), reserveAddr(t) // kv-1 is served; kv-0 isn't
 	x := fastNode("kv-0", ax, map[string]string{"kv-1": ay})
 	y := fastNode("kv-1", ay, map[string]string{"kv-0": ax})
 	serveRPC(t, y, ay)
@@ -181,7 +171,7 @@ func TestGetMembershipReflectsViewHandoffAndPeers(t *testing.T) {
 
 // (c) /readyz says 503 once the view no longer includes this node.
 func TestReadyzIsNotReadyOnceRemovedFromTheMembership(t *testing.T) {
-	ax, ay := freeAddr(t), freeAddr(t)
+	ax, ay := knownAddr(), knownAddr() // neither is served
 	nd := fastNode("kv-0", ax, map[string]string{"kv-1": ay})
 	base := adminServer(t, nd)
 
@@ -215,7 +205,7 @@ func TestParseHandoffWait(t *testing.T) {
 // (d) GET /admin/handoff blocks until the handoff is done: 504 with the
 // status while a leaving node's target is down, 200 once it is up.
 func TestHandoffWait(t *testing.T) {
-	ax, ay := freeAddr(t), freeAddr(t)
+	ax, ay := knownAddr(), knownAddr() // kv-1 is down, then started
 	x := fastNode("kv-0", ax, map[string]string{"kv-1": ay})
 	for i := range 20 {
 		x.Store.Put(fmt.Sprintf("key-%02d", i), "v", nil)
@@ -271,7 +261,7 @@ func TestHandoffWait(t *testing.T) {
 // (e) A leaving node isn't drained just because its own handoff is done: the
 // members that remain must have been seen at the new epoch too.
 func TestDrainedNeedsTheRemainingMembersToAcknowledge(t *testing.T) {
-	ax, ay, az := freeAddr(t), freeAddr(t), freeAddr(t)
+	ax, ay, az := knownAddr(), reserveAddr(t), knownAddr() // kv-2 is down, then started
 	x := fastNode("kv-0", ax, map[string]string{"kv-1": ay, "kv-2": az})
 	y := fastNode("kv-1", ay, map[string]string{"kv-0": ax, "kv-2": az})
 	z := fastNode("kv-2", az, map[string]string{"kv-0": ax, "kv-1": ay})

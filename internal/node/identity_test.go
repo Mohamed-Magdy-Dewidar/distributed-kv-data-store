@@ -150,7 +150,8 @@ func TestNewPersistentRefusesADirOwnedByAnotherNodeID(t *testing.T) {
 // sibling: the replica keeps it and a quorum read returns it.
 func TestReusedNodeIDOnAnEmptyDataDirDoesNotLoseWrites(t *testing.T) {
 	ctx := context.Background()
-	addrs := map[string]string{"node-1": "localhost:60801", "node-2": "localhost:60802"}
+	addrs := reserveAddrs(t, "node-2")
+	addrs["node-1"] = knownAddr() // restarted on the same address
 	dir := t.TempDir()
 	const n, w, r = 2, 2, 2
 

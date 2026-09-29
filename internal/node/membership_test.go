@@ -175,9 +175,14 @@ func swappedAddrs(m map[string]string, a, b string) map[string]string {
 	return out
 }
 
+// fixedAddrs are member addresses for tests that only record a membership
+// (in memory and in the MEMBERSHIP file) and never dial it. They must be the
+// same every time a test reopens a node, so they are fixed for the package.
+var fixedAddrs = knownAddrs("node-1", "node-2", "node-3", "other")
+
 func openTwoNode(t *testing.T, dir string) *Node {
 	t.Helper()
-	nd, err := NewPersistent("node-1", "localhost:60911", 2, 1, 1, map[string]string{"node-2": "localhost:60912"}, dir, 1<<20)
+	nd, err := NewPersistent("node-1", fixedAddrs["node-1"], 2, 1, 1, map[string]string{"node-2": fixedAddrs["node-2"]}, dir, 1<<20)
 	if err != nil {
 		t.Fatalf("NewPersistent: %v", err)
 	}
@@ -188,7 +193,7 @@ func openTwoNode(t *testing.T, dir string) *Node {
 // configuration's member list says on the next start.
 func TestSetMembershipPersistsAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
-	three := map[string]string{"node-1": "localhost:60911", "node-2": "localhost:60912", "node-3": "localhost:60913"}
+	three := map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["node-2"], "node-3": fixedAddrs["node-3"]}
 
 	nd := openTwoNode(t, dir)
 	if changed, err := nd.SetMembership(3, three); err != nil || !changed {
@@ -213,7 +218,7 @@ func TestFreshPersistentNodeStartsAtEpochZeroWithoutAFile(t *testing.T) {
 	dir := t.TempDir()
 	nd := openTwoNode(t, dir)
 	defer nd.Close()
-	assertMembership(t, nd, 0, map[string]string{"node-1": "localhost:60911", "node-2": "localhost:60912"})
+	assertMembership(t, nd, 0, map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["node-2"]})
 	if _, err := os.Stat(filepath.Join(dir, membershipFileName)); !os.IsNotExist(err) {
 		t.Fatalf("expected no MEMBERSHIP file yet (stat err %v)", err)
 	}
@@ -232,7 +237,7 @@ func TestSetMembershipDoesNotPublishWhenPersistFails(t *testing.T) {
 		attempted = true
 		return errors.New("disk full")
 	}
-	changed, err := nd.SetMembership(1, map[string]string{"node-1": "localhost:60911", "node-2": "localhost:60912", "node-3": "localhost:60913"})
+	changed, err := nd.SetMembership(1, map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["node-2"], "node-3": fixedAddrs["node-3"]})
 	if err == nil || !strings.Contains(err.Error(), "disk full") || changed {
 		t.Fatalf("changed=%v err=%v, want the persist failure", changed, err)
 	}
@@ -246,7 +251,7 @@ func TestSetMembershipDoesNotPublishWhenPersistFails(t *testing.T) {
 
 // (f) Removing a member retires its client without closing it; Close closes it.
 func TestRemovedMembersClientIsRetiredNotClosed(t *testing.T) {
-	addrs := map[string]string{"node-1": "localhost:60921", "node-2": "localhost:60922", "node-3": "localhost:60923"}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	node1 := New("node-1", addrs["node-1"], 2, 1, 1, map[string]string{"node-2": addrs["node-2"], "node-3": addrs["node-3"]})
 	for _, id := range []string{"node-2", "node-3"} {
 		peer := New(id, addrs[id], 2, 1, 1, nil)
@@ -382,9 +387,9 @@ func writeRawMembership(t *testing.T, dir string, content any) {
 
 // (i) A MEMBERSHIP file the node can't trust stops it from starting.
 func TestNewPersistentRefusesAnUntrustworthyMembershipFile(t *testing.T) {
-	good := map[string]string{"node-1": "localhost:60911", "node-2": "localhost:60912"}
-	other := map[string]string{"node-1": "localhost:60911", "node-2": "localhost:60999"}
-	dupAddr := map[string]string{"node-1": "localhost:60911", "node-2": "localhost:60911"}
+	good := map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["node-2"]}
+	other := map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["other"]}
+	dupAddr := map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["node-1"]}
 
 	for name, tc := range map[string]struct {
 		content any
@@ -403,7 +408,7 @@ func TestNewPersistentRefusesAnUntrustworthyMembershipFile(t *testing.T) {
 			dir := t.TempDir()
 			writeRawMembership(t, dir, tc.content)
 
-			nd, err := NewPersistent("node-1", "localhost:60911", 2, 1, 1, map[string]string{"node-2": "localhost:60912"}, dir, 1<<20)
+			nd, err := NewPersistent("node-1", fixedAddrs["node-1"], 2, 1, 1, map[string]string{"node-2": fixedAddrs["node-2"]}, dir, 1<<20)
 			if err == nil {
 				nd.Close()
 				t.Fatal("expected NewPersistent to refuse the file")

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"distributed-kv-datastore/internal/model"
-	"distributed-kv-datastore/internal/rpc"
 )
 
 func startTestNode(t *testing.T, id, address string, neighbors map[string]string) *Node {
@@ -17,22 +16,19 @@ func startTestNode(t *testing.T, id, address string, neighbors map[string]string
 	// selection anyway (they call Store.Put/Replicate/FetchItem directly).
 	n := New(id, address, 2, 2, 1, neighbors)
 
-	listener, err := rpc.Serve(address, n.Store, n)
-	if err != nil {
-		t.Fatalf("failed to start server for %s: %v", id, err)
-	}
-	t.Cleanup(listener.Stop)
+	serveAt(t, address, n.Store, n)
 
 	return n
 }
 
 func TestReplicationCreatesSiblingsNaturally(t *testing.T) {
 	// TestReplicationCreatesSibling
-	node1 := startTestNode(t, "node-1", "localhost:60101", map[string]string{
-		"node-2": "localhost:60102",
+	a := reserveAddrs(t, "node-1", "node-2")
+	node1 := startTestNode(t, "node-1", a["node-1"], map[string]string{
+		"node-2": a["node-2"],
 	})
-	node2 := startTestNode(t, "node-2", "localhost:60102", map[string]string{
-		"node-1": "localhost:60101",
+	node2 := startTestNode(t, "node-2", a["node-2"], map[string]string{
+		"node-1": a["node-1"],
 	})
 
 	node1.Store.Put("foo", "from-node1", nil)
@@ -55,11 +51,12 @@ func TestReplicationCreatesSiblingsNaturally(t *testing.T) {
 }
 
 func TestReplicationConvergesBothDirections(t *testing.T) {
-	node1 := startTestNode(t, "node-1", "localhost:60111", map[string]string{
-		"node-2": "localhost:60112",
+	a := reserveAddrs(t, "node-1", "node-2")
+	node1 := startTestNode(t, "node-1", a["node-1"], map[string]string{
+		"node-2": a["node-2"],
 	})
-	node2 := startTestNode(t, "node-2", "localhost:60112", map[string]string{
-		"node-1": "localhost:60111",
+	node2 := startTestNode(t, "node-2", a["node-2"], map[string]string{
+		"node-1": a["node-1"],
 	})
 
 	node1.Store.Put("foo", "from-node1", nil)
@@ -105,11 +102,12 @@ func TestReplicationConvergesBothDirections(t *testing.T) {
 }
 
 func TestFetchItem(t *testing.T) {
-	node1 := startTestNode(t, "node-1", "localhost:60121", map[string]string{
-		"node-2": "localhost:60122",
+	a := reserveAddrs(t, "node-1", "node-2")
+	node1 := startTestNode(t, "node-1", a["node-1"], map[string]string{
+		"node-2": a["node-2"],
 	})
-	_ = startTestNode(t, "node-2", "localhost:60122", map[string]string{
-		"node-1": "localhost:60121",
+	_ = startTestNode(t, "node-2", a["node-2"], map[string]string{
+		"node-1": a["node-1"],
 	})
 
 	ctx := context.Background()

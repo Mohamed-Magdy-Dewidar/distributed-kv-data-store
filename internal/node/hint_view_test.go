@@ -2,8 +2,6 @@ package node
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,10 +26,7 @@ func (c *countingPeer) Replicate(context.Context, *pb.ReplicateRequest) (*pb.Rep
 
 func startCountingPeer(t *testing.T, addr string) *countingPeer {
 	t.Helper()
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Fatalf("listen %s: %v", addr, err)
-	}
+	lis := listenAt(t, addr)
 	p := &countingPeer{}
 	srv := grpc.NewServer()
 	pb.RegisterKVReplicationServer(srv, p)
@@ -57,13 +52,9 @@ func countHintAttempts(t *testing.T) map[string]*atomic.Int32 {
 	return counts
 }
 
-func hintNode(t *testing.T, base int) (*Node, map[string]string) {
+func hintNode(t *testing.T) (*Node, map[string]string) {
 	t.Helper()
-	addrs := map[string]string{
-		"node-1": fmt.Sprintf("localhost:%d", base),
-		"node-2": fmt.Sprintf("localhost:%d", base+1),
-		"node-3": fmt.Sprintf("localhost:%d", base+2),
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nd, err := NewPersistent("node-1", addrs["node-1"], 1, 1, 1, neighborsOf(addrs, "node-1"), t.TempDir(), 1<<20)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +77,7 @@ func pendingKeys(t *testing.T, nd *Node, target string) int {
 // sent — not in any round — and stays in the store. A hint for a node that
 // remains is delivered as usual.
 func TestHintsForARemovedNodeAreNeverDelivered(t *testing.T) {
-	nd, addrs := hintNode(t, 61451)
+	nd, addrs := hintNode(t)
 	removed := startCountingPeer(t, addrs["node-2"])
 	stays := startCountingPeer(t, addrs["node-3"])
 	attempts := countHintAttempts(t)
@@ -120,7 +111,7 @@ func TestHintsForARemovedNodeAreNeverDelivered(t *testing.T) {
 // (b) A hint for a node marked dead waits; when the node is alive again it
 // is delivered.
 func TestHintsForADeadNodeWaitUntilItIsAlive(t *testing.T) {
-	nd, addrs := hintNode(t, 61461)
+	nd, addrs := hintNode(t)
 	target := startCountingPeer(t, addrs["node-2"])
 	attempts := countHintAttempts(t)
 	if err := nd.hints.Add("node-2", "k", hintItem()); err != nil {

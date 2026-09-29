@@ -16,7 +16,7 @@ func aeRoundHook(t *testing.T, hook func(start bool)) {
 }
 
 func aloneNode() *Node {
-	return New("node-1", "localhost:0", 1, 1, 1, nil)
+	return New("node-1", "unused", 1, 1, 1, nil)
 }
 
 // A trigger starts a round well before the interval (here an hour).

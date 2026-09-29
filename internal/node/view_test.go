@@ -26,7 +26,7 @@ func membersWithAddr(nd *Node, id, addr string) map[string]string {
 // and none of them may fail: every view holds the same members, so every
 // operation is valid whichever one it loads.
 func TestNewViewsPublishedWhileOperationsRun(t *testing.T) {
-	addrs := map[string]string{"node-1": "localhost:60811", "node-2": "localhost:60812", "node-3": "localhost:60813"}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, _ := startUniformCluster(t, addrs, 3, 2, 2, nil)
 	node1 := nodes["node-1"]
 
@@ -79,12 +79,13 @@ func TestNewViewsPublishedWhileOperationsRun(t *testing.T) {
 // address; the old connection is retired (still open, so an RPC in flight on
 // it can finish) until Close closes it.
 func TestAddressChangeDialsNewAddressAndRetiresTheOldClient(t *testing.T) {
-	oldAddr, newAddr := "localhost:60821", "localhost:60822"
-	node1 := New("node-1", "localhost:60820", 2, 1, 1, map[string]string{"node-2": oldAddr})
+	a := reserveAddrs(t, "node-1", "old", "new")
+	oldAddr, newAddr := a["old"], a["new"]
+	node1 := New("node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": oldAddr})
 
 	// Two distinguishable servers: the one at the old address holds "old".
-	oldPeer := New("node-2", oldAddr, 2, 1, 1, map[string]string{"node-1": "localhost:60820"})
-	newPeer := New("node-2", newAddr, 2, 1, 1, map[string]string{"node-1": "localhost:60820"})
+	oldPeer := New("node-2", oldAddr, 2, 1, 1, map[string]string{"node-1": a["node-1"]})
+	newPeer := New("node-2", newAddr, 2, 1, 1, map[string]string{"node-1": a["node-1"]})
 	oldPeer.Store.Put("k", "old", nil)
 	newPeer.Store.Put("k", "new", nil)
 	serveNode(t, oldPeer, oldAddr)
@@ -149,7 +150,8 @@ func TestAddressChangeDialsNewAddressAndRetiresTheOldClient(t *testing.T) {
 // (c) Once Close has closed the client cache, nothing dials: a late caller
 // can't leave a connection nobody will close.
 func TestDialAfterCloseIsRefused(t *testing.T) {
-	node1 := New("node-1", "localhost:60830", 2, 1, 1, map[string]string{"node-2": "localhost:60831"})
+	a := knownAddrs("node-1", "node-2") // never served
+	node1 := New("node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"]})
 	if err := node1.Close(); err != nil {
 		t.Fatal(err)
 	}

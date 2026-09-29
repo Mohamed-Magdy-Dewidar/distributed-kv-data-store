@@ -28,11 +28,7 @@ func keyReplicatedBy(t *testing.T, n *Node, prefix string, want ...string) strin
 // both directions — instead of copying it onto a node outside its
 // preference list.
 func TestAntiEntropySkipsKeysThePeerDoesNotReplicate(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60501",
-		"node-2": "localhost:60502",
-		"node-3": "localhost:60503",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	n2 := quorumOverride{n: 2, w: 1, r: 1}
 	nodes, _ := startTestCluster(t, addrs, map[string]quorumOverride{"node-1": n2, "node-2": n2, "node-3": n2})
 	node1, node2 := nodes["node-1"], nodes["node-2"]

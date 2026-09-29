@@ -63,10 +63,7 @@ func misses(nd *Node, peerID string) int {
 // handshake) and then fails calls fast, so it is slow for only that long.
 func tcpBlackHole(t *testing.T, addr string) {
 	t.Helper()
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Fatalf("listen %s: %v", addr, err)
-	}
+	lis := listenAt(t, addr)
 	var mu sync.Mutex
 	var conns []net.Conn
 	go func() {
@@ -129,10 +126,7 @@ func (h *hungPeer) CoordinatePut(ctx context.Context, _ *pb.CoordinatePutRequest
 
 func startHungPeer(t *testing.T, addr string) {
 	t.Helper()
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Fatalf("listen %s: %v", addr, err)
-	}
+	lis := listenAt(t, addr)
 	h := &hungPeer{done: make(chan struct{})}
 	srv := grpc.NewServer()
 	pb.RegisterKVReplicationServer(srv, h)
@@ -165,7 +159,8 @@ func sameMembership(a, b *Node) bool {
 // (a) A peer that stops answering is marked dead after MaxMissedHeartbeats
 // misses; one that answers again is alive.
 func TestHeartbeatMarksAStoppedPeerDeadAndARestartedOneAlive(t *testing.T) {
-	addrs := map[string]string{"node-1": "localhost:61001", "node-2": "localhost:61002"}
+	addrs := reserveAddrs(t, "node-1")
+	addrs["node-2"] = knownAddr() // stopped and restarted on the same address
 	node1 := New("node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
 	node2 := New("node-2", addrs["node-2"], 2, 1, 1, neighborsOf(addrs, "node-2"))
 	fastHealth(node1)
@@ -204,7 +199,7 @@ func TestHeartbeatMarksAStoppedPeerDeadAndARestartedOneAlive(t *testing.T) {
 // that waits on node-3 is slow.
 func hungCluster(t *testing.T) *Node {
 	t.Helper()
-	addrs := map[string]string{"node-1": "localhost:61011", "node-2": "localhost:61012", "node-3": "localhost:61013"}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 3, neighborsOf(addrs, "node-2")), addrs["node-2"])
 	startHungPeer(t, addrs["node-3"])
 
@@ -281,12 +276,9 @@ func TestAntiEntropyRoundSkipsDeadPeers(t *testing.T) {
 
 // startLoopCluster starts len(ids) served nodes (N=2, W=1, R=1), all with the
 // membership of ids at epoch 0. Their heartbeat loops are not started.
-func startLoopCluster(t *testing.T, base int, ids ...string) (map[string]*Node, map[string]string) {
+func startLoopCluster(t *testing.T, ids ...string) (map[string]*Node, map[string]string) {
 	t.Helper()
-	addrs := map[string]string{}
-	for i, id := range ids {
-		addrs[id] = fmt.Sprintf("localhost:%d", base+i)
-	}
+	addrs := reserveAddrs(t, ids...)
 	nodes := map[string]*Node{}
 	for _, id := range ids {
 		nd := New(id, addrs[id], 2, 1, 1, neighborsOf(addrs, id))
@@ -301,10 +293,10 @@ func startLoopCluster(t *testing.T, base int, ids ...string) (map[string]*Node, 
 // higher epoch in a ping reply fetch it. node-1 announces an address nobody
 // can fetch from, so only the pinger side can work.
 func TestNewerMembershipPropagatesThroughPingReplies(t *testing.T) {
-	nodes, addrs := startLoopCluster(t, 61021, "node-1", "node-2", "node-3")
-	nodes["node-1"].Address = "localhost:1" // a receiver can't fetch from here
+	nodes, addrs := startLoopCluster(t, "node-1", "node-2", "node-3")
+	nodes["node-1"].Address = knownAddr() // nothing listens there: a receiver can't fetch from it
 
-	next := withMember(addrs, "node-4", "localhost:61029")
+	next := withMember(addrs, "node-4", knownAddr())
 	if changed, err := nodes["node-1"].SetMembership(1, next); err != nil || !changed {
 		t.Fatalf("SetMembership: changed=%v err=%v", changed, err)
 	}
@@ -323,12 +315,12 @@ func TestNewerMembershipPropagatesThroughPingReplies(t *testing.T) {
 // (d) A new member announces itself: nodes that don't list it can't ping it,
 // but its ping carries a higher epoch and its address, and they fetch from it.
 func TestNewMemberIsDiscoveredFromItsFirstPing(t *testing.T) {
-	nodes, addrs := startLoopCluster(t, 61031, "node-1", "node-2", "node-3")
+	nodes, addrs := startLoopCluster(t, "node-1", "node-2", "node-3")
 	for _, nd := range nodes {
 		beat(t, nd)
 	}
 
-	addrs["node-4"] = "localhost:61034"
+	addrs["node-4"] = reserveAddr(t)
 	node4 := New("node-4", addrs["node-4"], 2, 1, 1, neighborsOf(addrs, "node-4"))
 	fastHealth(node4)
 	serveNode(t, node4, addrs["node-4"])
@@ -350,12 +342,12 @@ func TestNewMemberIsDiscoveredFromItsFirstPing(t *testing.T) {
 // (e) The same epoch with different members is a conflict nobody resolves:
 // neither side adopts, and neither treats the other as dead.
 func TestConflictingMembershipsAtOneEpochAreLeftAlone(t *testing.T) {
-	nodes, addrs := startLoopCluster(t, 61041, "node-1", "node-2")
+	nodes, addrs := startLoopCluster(t, "node-1", "node-2")
 	a, b := nodes["node-1"], nodes["node-2"]
-	if _, err := a.SetMembership(1, withMember(addrs, "node-x", "localhost:61048")); err != nil {
+	if _, err := a.SetMembership(1, withMember(addrs, "node-x", knownAddr())); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.SetMembership(1, withMember(addrs, "node-y", "localhost:61049")); err != nil {
+	if _, err := b.SetMembership(1, withMember(addrs, "node-y", knownAddr())); err != nil {
 		t.Fatal(err)
 	}
 	viewA, viewB := a.membership.Load(), b.membership.Load()
@@ -382,7 +374,7 @@ func TestImpostorAtAMembersAddressIsDeadAndNotTrusted(t *testing.T) {
 	log.SetOutput(writerFunc(func(p []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return buf.Write(p) }))
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	addrs := map[string]string{"node-1": "localhost:61051", "node-2": "localhost:61052", "node-3": "localhost:61053"}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	// node-3 really is node-3, at an epoch far ahead of node-1's...
 	node3 := New("node-3", addrs["node-3"], 2, 1, 1, neighborsOf(addrs, "node-3"))
 	if _, err := node3.SetMembership(9, addrs); err != nil {
@@ -466,7 +458,7 @@ func TestFetchAndAdoptIsSingleFlight(t *testing.T) {
 
 // (g) Heartbeats, membership changes and traffic together, under -race.
 func TestHeartbeatsMembershipChangesAndTrafficTogether(t *testing.T) {
-	addrs := map[string]string{"node-1": "localhost:61061", "node-2": "localhost:61062", "node-3": "localhost:61063"}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes := map[string]*Node{}
 	for id, addr := range addrs {
 		nd := New(id, addr, 3, 2, 2, neighborsOf(addrs, id))
@@ -526,7 +518,7 @@ func TestHeartbeatsMembershipChangesAndTrafficTogether(t *testing.T) {
 
 // (h) StopBackgroundLoops stops the heartbeat loop: no pings after it returns.
 func TestStopBackgroundLoopsStopsTheHeartbeatLoop(t *testing.T) {
-	nodes, _ := startLoopCluster(t, 61071, "node-1", "node-2")
+	nodes, _ := startLoopCluster(t, "node-1", "node-2")
 	pinger, peer := nodes["node-1"], nodes["node-2"]
 	pinger.StartHeartbeatLoop(context.Background(), 20*time.Millisecond)
 
@@ -550,7 +542,7 @@ func TestStopBackgroundLoopsStopsTheHeartbeatLoop(t *testing.T) {
 
 // A peer that accepts connections but never speaks is found dead too.
 func TestHeartbeatMarksARawTCPBlackHoleDead(t *testing.T) {
-	addrs := map[string]string{"node-1": "localhost:61081", "node-2": "localhost:61082"}
+	addrs := reserveAddrs(t, "node-1", "node-2")
 	tcpBlackHole(t, addrs["node-2"])
 	node1 := New("node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
 	fastHealth(node1)

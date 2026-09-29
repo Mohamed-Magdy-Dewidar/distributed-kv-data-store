@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -19,12 +20,9 @@ import (
 // kvClusterClients starts len(ids) served nodes with N=3, W=3, R=1 — every
 // acknowledged write is on all three replicas, so a read from any replica sees
 // it — and a KVClient connection to each.
-func kvClusterClients(t *testing.T, base int, ids ...string) (map[string]*Node, map[string]pb.KVClientClient) {
+func kvClusterClients(t *testing.T, ids ...string) (map[string]*Node, map[string]pb.KVClientClient) {
 	t.Helper()
-	addrs := map[string]string{}
-	for i, id := range ids {
-		addrs[id] = fmt.Sprintf("localhost:%d", base+i)
-	}
+	addrs := reserveAddrs(t, ids...)
 	nodes := map[string]*Node{}
 	clients := map[string]pb.KVClientClient{}
 	for _, id := range ids {
@@ -65,7 +63,7 @@ func mustGet(t *testing.T, c pb.KVClientClient, key string) *pb.GetResponse {
 
 // 1. A value comes back byte-identical, non-ASCII UTF-8 included.
 func TestClientPutGetRoundTrip(t *testing.T) {
-	_, clients := kvClusterClients(t, 61601, "node-1", "node-2", "node-3")
+	_, clients := kvClusterClients(t, "node-1", "node-2", "node-3")
 	const value = "héllo ✓"
 
 	mustPut(t, clients["node-1"], "greeting", value, nil)
@@ -80,7 +78,7 @@ func TestClientPutGetRoundTrip(t *testing.T) {
 // 2. Two writes that don't know of each other are siblings; a write carrying
 // the context Get returned collapses them.
 func TestClientSiblingsCollapseWithTheReturnedContext(t *testing.T) {
-	_, clients := kvClusterClients(t, 61611, "node-1", "node-2", "node-3")
+	_, clients := kvClusterClients(t, "node-1", "node-2", "node-3")
 	stale := mustGet(t, clients["node-1"], "k").Context // the key doesn't exist yet
 
 	// Same stale context, coordinated by different nodes: concurrent versions.
@@ -103,7 +101,7 @@ func TestClientSiblingsCollapseWithTheReturnedContext(t *testing.T) {
 
 // 3. A key that was never written is not an error.
 func TestClientGetOfAMissingKey(t *testing.T) {
-	_, clients := kvClusterClients(t, 61621, "node-1", "node-2", "node-3")
+	_, clients := kvClusterClients(t, "node-1", "node-2", "node-3")
 
 	resp, err := clients["node-1"].Get(ctx5(t), &pb.GetRequest{Key: "never-written"})
 	if err != nil {
@@ -120,7 +118,7 @@ func TestClientGetOfAMissingKey(t *testing.T) {
 // A deleted key is not found, but its tombstone is in the context, so a Put
 // with that context supersedes it.
 func TestClientGetHidesTombstonesButKeepsTheirClocks(t *testing.T) {
-	nodes, clients := kvClusterClients(t, 61631, "node-1", "node-2", "node-3")
+	nodes, clients := kvClusterClients(t, "node-1", "node-2", "node-3")
 	mustPut(t, clients["node-1"], "doomed", "alive", nil)
 
 	// Delete on node-1 (there is no delete in the client API) and copy the
@@ -152,7 +150,7 @@ func TestClientGetHidesTombstonesButKeepsTheirClocks(t *testing.T) {
 
 // Values that weren't written as strings come back as their JSON encoding.
 func TestClientGetRendersNonStringValuesAsJSON(t *testing.T) {
-	nodes, clients := kvClusterClients(t, 61641, "node-1", "node-2", "node-3")
+	nodes, clients := kvClusterClients(t, "node-1", "node-2", "node-3")
 	for _, nd := range nodes {
 		nd.Store.Put("number", 42, nil)
 	}
@@ -165,7 +163,7 @@ func TestClientGetRendersNonStringValuesAsJSON(t *testing.T) {
 
 // 4. A node that isn't a replica for the key forwards the write.
 func TestClientPutThroughANonReplicaIsForwarded(t *testing.T) {
-	nodes, clients := kvClusterClients(t, 61651, "node-1", "node-2", "node-3", "node-4")
+	nodes, clients := kvClusterClients(t, "node-1", "node-2", "node-3", "node-4")
 	var key string
 	for i := 0; ; i++ {
 		key = fmt.Sprintf("fwd-%d", i)
@@ -188,7 +186,7 @@ func TestClientPutThroughANonReplicaIsForwarded(t *testing.T) {
 
 // 5. An empty key is the caller's mistake.
 func TestClientEmptyKeyIsInvalidArgument(t *testing.T) {
-	_, clients := kvClusterClients(t, 61661, "node-1", "node-2", "node-3")
+	_, clients := kvClusterClients(t, "node-1", "node-2", "node-3")
 
 	_, err := clients["node-1"].Put(ctx5(t), &pb.PutRequest{Key: "", Value: "v"})
 	if got := status.Code(err); got != codes.InvalidArgument {
@@ -204,7 +202,8 @@ func TestClientEmptyKeyIsInvalidArgument(t *testing.T) {
 // its own code.
 func TestClientErrorCodes(t *testing.T) {
 	// Only node-1 is up; W=3 can't be met.
-	addrs := map[string]string{"node-1": "localhost:61671", "node-2": "localhost:61672", "node-3": "localhost:61673"}
+	addrs := reserveAddrs(t, "node-1")
+	maps.Copy(addrs, knownAddrs("node-2", "node-3")) // down
 	nd := New("node-1", addrs["node-1"], 3, 3, 1, neighborsOf(addrs, "node-1"))
 	nd.QuorumConfig.ReplicationTimeout = time.Second
 	nd.QuorumConfig.MaxReconnectBackoff = 50 * time.Millisecond
@@ -232,7 +231,7 @@ func TestClientErrorCodes(t *testing.T) {
 
 // 6. grpcurl and friends can find the service without the .proto files.
 func TestReflectionListsTheClientService(t *testing.T) {
-	addr := "localhost:61681"
+	addr := reserveAddr(t)
 	serveNode(t, New("node-1", addr, 1, 1, 1, nil), addr)
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {

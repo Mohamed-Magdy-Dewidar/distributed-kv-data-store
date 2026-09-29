@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -39,7 +40,18 @@ func replicateTo(t *testing.T, address string) error {
 // writes, and lose nothing anti-entropy installed.
 func TestShutdownClusterStopsEverythingBeforeClosingEngines(t *testing.T) {
 	base := t.TempDir()
-	addrs := map[string]string{"node-1": "localhost:60541", "node-2": "localhost:60542"}
+	// Each node's listener is opened on port 0 before any node is built, so
+	// the addresses are known and no port is released and bound again.
+	lis := map[string]net.Listener{}
+	addrs := map[string]string{}
+	for _, id := range []string{"node-1", "node-2"} {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { l.Close() }) // a no-op once served and stopped
+		lis[id], addrs[id] = l, l.Addr().String()
+	}
 	open := func(id string) *node.Node {
 		neighbors := map[string]string{}
 		for peer, addr := range addrs {
@@ -59,10 +71,7 @@ func TestShutdownClusterStopsEverythingBeforeClosingEngines(t *testing.T) {
 	for _, id := range []string{"node-1", "node-2"} {
 		nd := open(id)
 		nodes = append(nodes, nd)
-		listener, err := rpc.Serve(addrs[id], nd.Store, nd)
-		if err != nil {
-			t.Fatalf("serve %s: %v", id, err)
-		}
+		listener := rpc.ServeListener(lis[id], nd.Store, nd)
 		dashboard.Register(id, nd, listener, addrs[id], 2, 1, nil)
 	}
 	const perNode = 20

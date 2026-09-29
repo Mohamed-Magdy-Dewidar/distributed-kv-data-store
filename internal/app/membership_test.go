@@ -108,7 +108,7 @@ func runUntilReadyThenStop(t *testing.T, cfg *config.Config) error {
 // startup fails with the conflict.
 func TestRunFailsOnConfigContradictingPersistedMembershipAtTheSameEpoch(t *testing.T) {
 	cfg := testConfig(t, t.TempDir())
-	seedMembership(t, cfg, 5, map[string]string{"kv-0": cfg.SelfAddress(), "kv-1": "127.0.0.1:1"})
+	seedMembership(t, cfg, 5, map[string]string{"kv-0": cfg.SelfAddress(), "kv-1": knownAddr()})
 
 	cfg.Cluster.Epoch = 5 // same epoch, but the config lists only kv-0
 
@@ -129,7 +129,8 @@ func TestRunFailsOnConfigContradictingPersistedMembershipAtTheSameEpoch(t *testi
 func TestRunKeepsPersistedMembershipWhenConfigEpochIsLower(t *testing.T) {
 	logs := captureLog(t)
 	cfg := testConfig(t, t.TempDir())
-	persisted := map[string]string{"kv-0": cfg.SelfAddress(), "kv-1": "127.0.0.1:1"}
+	absent := knownAddr() // kv-1 is only recorded, never started
+	persisted := map[string]string{"kv-0": cfg.SelfAddress(), "kv-1": absent}
 	seedMembership(t, cfg, 5, persisted)
 
 	cfg.Cluster.Epoch = 3
@@ -141,7 +142,7 @@ func TestRunKeepsPersistedMembershipWhenConfigEpochIsLower(t *testing.T) {
 		t.Fatalf("expected a log line containing %q, got:\n%s", want, logs.String())
 	}
 	epoch, members := persistedMembership(t, cfg)
-	if epoch != 5 || len(members) != 2 || members["kv-1"] != "127.0.0.1:1" {
+	if epoch != 5 || len(members) != 2 || members["kv-1"] != absent {
 		t.Fatalf("expected the persisted membership (epoch 5, kv-0 and kv-1) to be kept, got epoch %d %v", epoch, members)
 	}
 }
@@ -149,7 +150,7 @@ func TestRunKeepsPersistedMembershipWhenConfigEpochIsLower(t *testing.T) {
 // A configured epoch newer than the persisted one is adopted and persisted.
 func TestRunAdoptsAndPersistsAHigherConfigEpoch(t *testing.T) {
 	cfg := testConfig(t, t.TempDir())
-	seedMembership(t, cfg, 5, map[string]string{"kv-0": cfg.SelfAddress(), "kv-1": "127.0.0.1:1"})
+	seedMembership(t, cfg, 5, map[string]string{"kv-0": cfg.SelfAddress(), "kv-1": knownAddr()})
 
 	cfg.Cluster.Epoch = 7
 

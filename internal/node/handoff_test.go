@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -94,8 +95,8 @@ func TestScaleUpMovesEveryKeyToItsNewOwners(t *testing.T) {
 	fastHandoffRetries(t)
 	ids := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
 	addrs := map[string]string{}
-	for i, id := range ids {
-		addrs[id] = fmt.Sprintf("localhost:%d", 61101+i)
+	for _, id := range ids {
+		addrs[id] = reserveAddr(t)
 	}
 	nodes := map[string]*Node{}
 	for _, id := range ids[:4] {
@@ -161,7 +162,7 @@ func TestScaleUpMovesEveryKeyToItsNewOwners(t *testing.T) {
 // pushes to every new owner, even those that were owners before.
 func TestLeavingNodePushesToEveryNewOwner(t *testing.T) {
 	fastHandoffRetries(t)
-	addrs := map[string]string{"node-1": "localhost:61111", "node-2": "localhost:61112", "node-3": "localhost:61113"}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes := map[string]*Node{}
 	for id := range addrs {
 		nodes[id] = newHandoffNode(id, addrs[id], 2, 2, neighborsOf(addrs, id))
@@ -203,7 +204,7 @@ func TestLeavingNodePushesToEveryNewOwner(t *testing.T) {
 // N=2 and the keys exist only on node-1, so nobody else can supply them.
 func TestNewerViewKeepsTheBaseOfTheCancelledHandoff(t *testing.T) {
 	fastHandoffRetries(t)
-	addrs := map[string]string{"node-1": "localhost:61121", "node-2": "localhost:61122", "node-3": "localhost:61123"}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes := map[string]*Node{
 		"node-1": newHandoffNode("node-1", addrs["node-1"], 2, 1, map[string]string{"node-2": addrs["node-2"]}),
 		"node-2": newHandoffNode("node-2", addrs["node-2"], 2, 1, map[string]string{"node-1": addrs["node-1"]}),
@@ -281,7 +282,7 @@ func openHandoffNode(t *testing.T, dir, addr string) *Node {
 // completed one is not repeated.
 func TestHandoffResumesAfterRestartAndIsRecordedWhenDone(t *testing.T) {
 	fastHandoffRetries(t)
-	addrs := map[string]string{"node-1": "localhost:61131", "node-2": "localhost:61132"}
+	addrs := reserveAddrs(t, "node-1", "node-2")
 	dir := t.TempDir()
 	node2 := newHandoffNode("node-2", addrs["node-2"], 1, 1, nil)
 	serveNode(t, node2, addrs["node-2"])
@@ -367,7 +368,8 @@ func TestHandoffResumesAfterRestartAndIsRecordedWhenDone(t *testing.T) {
 // take, finishes, and delivers them when the target is back.
 func TestUnreachableTargetBecomesAHintForANodeThatStays(t *testing.T) {
 	fastHandoffRetries(t)
-	addrs := map[string]string{"node-1": "localhost:61141", "node-2": "localhost:61142"}
+	addrs := reserveAddrs(t, "node-1")
+	maps.Copy(addrs, knownAddrs("node-2")) // down, then started later
 	nd := openHandoffNode(t, t.TempDir(), addrs["node-1"])
 	defer nd.Close()
 	expected := map[string][]string{}
@@ -403,7 +405,8 @@ func TestUnreachableTargetBecomesAHintForANodeThatStays(t *testing.T) {
 // done until the target has the data.
 func TestLeavingNodeWaitsForAnUnreachableTarget(t *testing.T) {
 	fastHandoffRetries(t)
-	addrs := map[string]string{"node-1": "localhost:61151", "node-2": "localhost:61152"}
+	addrs := reserveAddrs(t, "node-1")
+	maps.Copy(addrs, knownAddrs("node-2")) // down, then started later
 	nd := newHandoffNode("node-1", addrs["node-1"], 1, 1, map[string]string{"node-2": addrs["node-2"]})
 
 	expected := map[string][]string{}
@@ -442,8 +445,8 @@ func TestHandoffRacesWithTrafficAndFurtherViewChanges(t *testing.T) {
 	fastHandoffRetries(t)
 	ids := []string{"node-1", "node-2", "node-3", "node-4"}
 	addrs := map[string]string{}
-	for i, id := range ids {
-		addrs[id] = fmt.Sprintf("localhost:%d", 61161+i)
+	for _, id := range ids {
+		addrs[id] = reserveAddr(t)
 	}
 	nodes := map[string]*Node{}
 	for _, id := range ids[:3] {

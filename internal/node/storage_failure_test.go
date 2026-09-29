@@ -123,8 +123,9 @@ func itemValues(items []*model.DataItem) []any {
 // nil item, not anything. Reads still work, so Put gets past its
 // prevVersions read to the write itself.
 func TestPutFailsWithoutReplicatingWhenLocalWriteFails(t *testing.T) {
-	node1 := startTestNode(t, "node-1", "localhost:60331", map[string]string{"node-2": "localhost:60332"})
-	node2 := startTestNode(t, "node-2", "localhost:60332", map[string]string{"node-1": "localhost:60331"})
+	a := reserveAddrs(t, "node-1", "node-2")
+	node1 := startTestNode(t, "node-1", a["node-1"], map[string]string{"node-2": a["node-2"]})
+	node2 := startTestNode(t, "node-2", a["node-2"], map[string]string{"node-1": a["node-1"]})
 	// N=2 of 2 nodes: node-1 is a replica for every key, so Put writes locally.
 	p := newFlakyPersister()
 	p.fail(faults{put: errDisk})
@@ -144,11 +145,7 @@ func TestPutFailsWithoutReplicatingWhenLocalWriteFails(t *testing.T) {
 // broken local store must not fail the write — and the replicas must end
 // up holding it.
 func TestNonReplicaPutIgnoresItsOwnBrokenStore(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60341",
-		"node-2": "localhost:60342",
-		"node-3": "localhost:60343",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	// Uniform N=2 on every node: the replica node-1 forwards to coordinates
 	// with its own N, and a real cluster must agree on N anyway.
 	nodes, _ := startTestCluster(t, addrs, map[string]quorumOverride{
@@ -185,8 +182,9 @@ func TestNonReplicaPutIgnoresItsOwnBrokenStore(t *testing.T) {
 // local read fails must not answer "not found" on its own — the failed
 // read isn't a vote, so it has to get its one response from a peer.
 func TestGetCountsLocalReadFailureAsFailedVote(t *testing.T) {
-	node1 := startTestNode(t, "node-1", "localhost:60351", map[string]string{"node-2": "localhost:60352"})
-	node2 := startTestNode(t, "node-2", "localhost:60352", map[string]string{"node-1": "localhost:60351"})
+	a := reserveAddrs(t, "node-1", "node-2")
+	node1 := startTestNode(t, "node-1", a["node-1"], map[string]string{"node-2": a["node-2"]})
+	node2 := startTestNode(t, "node-2", a["node-2"], map[string]string{"node-1": a["node-1"]})
 	// N=2, R=1: node-1 is a replica for every key.
 	p := newFlakyPersister()
 	p.fail(faults{get: errDisk})
@@ -206,10 +204,7 @@ func TestGetCountsLocalReadFailureAsFailedVote(t *testing.T) {
 // local read failed, only one response is possible, so the read must fail
 // rather than count the failed read toward R.
 func TestGetQuorumFailsWhenLocalReadFailsAndRNeedsIt(t *testing.T) {
-	addrs := map[string]string{
-		"node-1": "localhost:60361",
-		"node-2": "localhost:60362",
-	}
+	addrs := reserveAddrs(t, "node-1", "node-2")
 	nodes, _ := startTestCluster(t, addrs, map[string]quorumOverride{
 		"node-1": {n: 2, w: 2, r: 2},
 	})
@@ -227,10 +222,9 @@ func TestGetQuorumFailsWhenLocalReadFailsAndRNeedsIt(t *testing.T) {
 // deadPeerNode starts node-1 (N=2, W=2) whose only peer, node-2, has no
 // listener: every replication fails, so every Put misses quorum and rolls
 // back. Its store is persister-backed by p.
-func deadPeerNode(t *testing.T, p *flakyPersister, port int) *Node {
+func deadPeerNode(t *testing.T, p *flakyPersister) *Node {
 	t.Helper()
-	n := startTestNode(t, "node-1", fmt.Sprintf("localhost:%d", port),
-		map[string]string{"node-2": fmt.Sprintf("localhost:%d", port+1)})
+	n := startTestNode(t, "node-1", reserveAddr(t), map[string]string{"node-2": knownAddr()})
 	n.Store = store.NewDataStoreWithPersister("node-1", p)
 	return n
 }
@@ -241,7 +235,7 @@ func deadPeerNode(t *testing.T, p *flakyPersister, port int) *Node {
 // roll back to "no prior versions" — deleting the committed value.
 func TestPutDoesNotDeleteCommittedDataWhenPrevVersionsReadFails(t *testing.T) {
 	p := newFlakyPersister()
-	node1 := deadPeerNode(t, p, 60371)
+	node1 := deadPeerNode(t, p)
 	committed := node1.Store.Put("foo", "committed", nil)
 
 	p.fail(faults{get: errDisk})
@@ -266,7 +260,7 @@ func TestPutDoesNotDeleteCommittedDataWhenPrevVersionsReadFails(t *testing.T) {
 // fails, the error must say so — the failed write may still be visible.
 func TestPutReportsFailedRollback(t *testing.T) {
 	p := newFlakyPersister()
-	node1 := deadPeerNode(t, p, 60381)
+	node1 := deadPeerNode(t, p)
 	p.fail(faults{restore: errDisk})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -282,9 +276,10 @@ func TestPutReportsFailedRollback(t *testing.T) {
 
 // reconcileSetup starts node-1 (persister-backed by p) and node-2
 // (in-memory), full replication between them.
-func reconcileSetup(t *testing.T, p *flakyPersister, port int) (*Node, *Node) {
+func reconcileSetup(t *testing.T, p *flakyPersister) (*Node, *Node) {
 	t.Helper()
-	a1, a2 := fmt.Sprintf("localhost:%d", port), fmt.Sprintf("localhost:%d", port+1)
+	a := reserveAddrs(t, "node-1", "node-2")
+	a1, a2 := a["node-1"], a["node-2"]
 	node1 := startTestNode(t, "node-1", a1, map[string]string{"node-2": a2})
 	node2 := startTestNode(t, "node-2", a2, map[string]string{"node-1": a1})
 	node1.Store = store.NewDataStoreWithPersister("node-1", p)
@@ -306,7 +301,7 @@ func reconcileKey(t *testing.T, node1 *Node, key string) error {
 // overwrite node-1's own concurrent version with node-2's.
 func TestReconcileBucketAbortsWhenLocalReadFails(t *testing.T) {
 	p := newFlakyPersister()
-	node1, node2 := reconcileSetup(t, p, 60391)
+	node1, node2 := reconcileSetup(t, p)
 	node1.Store.Put("k", "from-node-1", nil)
 	node2.Store.Put("k", "from-node-2", nil) // concurrent with node-1's
 
@@ -326,7 +321,7 @@ func TestReconcileBucketAbortsWhenLocalReadFails(t *testing.T) {
 // abort the bucket, not reconcile as if node-1 held no keys in it.
 func TestReconcileBucketAbortsWhenLocalKeysFail(t *testing.T) {
 	p := newFlakyPersister()
-	node1, _ := reconcileSetup(t, p, 60401)
+	node1, _ := reconcileSetup(t, p)
 	node1.Store.Put("k", "from-node-1", nil)
 
 	p.fail(faults{keys: errDisk})
@@ -340,7 +335,7 @@ func TestReconcileBucketAbortsWhenLocalKeysFail(t *testing.T) {
 // success with node-1 still unreconciled.
 func TestReconcileBucketAbortsWhenLocalInstallFails(t *testing.T) {
 	p := newFlakyPersister()
-	node1, node2 := reconcileSetup(t, p, 60411)
+	node1, node2 := reconcileSetup(t, p)
 	node2.Store.Put("k", "from-node-2", nil) // node-1 has nothing: merged must be installed locally
 
 	p.fail(faults{put: errDisk}) // installs go through MergeReplicated -> Persister.Put
@@ -352,7 +347,7 @@ func TestReconcileBucketAbortsWhenLocalInstallFails(t *testing.T) {
 // TestRunAntiEntropyFailsWhenLocalTreeCannotBeBuilt: a local tree built
 // over a store that failed to read would describe it as empty.
 func TestRunAntiEntropyFailsWhenLocalTreeCannotBeBuilt(t *testing.T) {
-	node1, _ := reconcileSetup(t, newFlakyPersister(), 60421)
+	node1, _ := reconcileSetup(t, newFlakyPersister())
 	node1.Store = store.NewDataStoreWithPersister("node-1", failingPersister{})
 
 	err := node1.RunAntiEntropy(context.Background(), "node-2")
