@@ -909,9 +909,8 @@ func missingFrom(set, incoming []*model.DataItem) []*model.DataItem {
 // every interval (see startLoop for scheduling and stopping).
 //
 // The loop only depends on n's outbound connections. A node whose gRPC
-// listener is stopped (as the dashboard's "stop" does, to make it
-// unreachable) keeps running anti-entropy outward, pulling from and
-// pushing to its peers: "stopped" means unreachable by others, not paused.
+// listener is stopped (unreachable by others) keeps running anti-entropy
+// outward, pulling from and pushing to its peers.
 func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
 	n.startLoop(ctx, interval, n.runAntiEntropyRound, n.aeTrigger)
 }
@@ -931,10 +930,10 @@ func (n *Node) StartHintDeliveryLoop(ctx context.Context, interval time.Duration
 // StopBackgroundLoops has run.
 //
 // The first round runs after a random delay in [0, interval), then one
-// every interval. Nodes started together (as cmd/cluster starts them)
-// would otherwise run their rounds within milliseconds of each other every
-// time; the random offset keeps each node's schedule independent of the
-// others', so rounds don't all land on the cluster at once. Canceling
+// every interval. Nodes started together (a whole cluster brought up at
+// once) would otherwise run their rounds within milliseconds of each other
+// every time; the random offset keeps each node's schedule independent of
+// the others', so rounds don't all land on the cluster at once. Canceling
 // during that first delay stops the loop at once.
 //
 // A receive on trigger (a nil trigger never fires) starts a round at once,

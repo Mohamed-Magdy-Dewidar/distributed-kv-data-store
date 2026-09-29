@@ -3,11 +3,11 @@ package node
 import "time"
 
 // DefaultReplicationTimeout is the ReplicationTimeout NewQuorumConfig
-// starts with. Deployments set their own (cmd/cluster does).
+// starts with. Deployments set their own (cmd/node does, from its config).
 const DefaultReplicationTimeout = 5 * time.Second
 
 // DefaultMaxReconnectBackoff is the MaxReconnectBackoff NewQuorumConfig
-// starts with. Deployments set their own (cmd/cluster does).
+// starts with. Deployments set their own (cmd/node does, from its config).
 const DefaultMaxReconnectBackoff = 5 * time.Second
 
 // DefaultHeartbeatTimeout is the HeartbeatTimeout NewQuorumConfig starts

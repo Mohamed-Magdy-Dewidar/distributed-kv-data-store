@@ -126,10 +126,9 @@ type cluster struct {
 // node must come back on the same ones, so they can't be handed a listener.
 // They get known ports instead (see internal/node's ports_test.go): below
 // 32768, which neither Linux nor Windows hands out as an ephemeral port, from
-// a range only this package uses (node 20001-24999, app 25001-25999, httpapi
-// 26001, rpc 26501, e2e 27001-27999). Ports are never reused within a
-// process, and running out of the range panics rather than spill into
-// another package's.
+// a range only this package uses (node 20001-24999, app 25001-25999, rpc
+// 26501, e2e 27001-27999). Ports are never reused within a process, and
+// running out of the range panics rather than spill into another package's.
 const (
 	knownPortBase  = 27000
 	knownPortCount = 999

@@ -1,7 +1,6 @@
 // Command node runs a single distributed-kv-datastore node from a YAML
-// config file (see internal/config), for a real deployment (one node per
-// process, e.g. one per Kubernetes pod) — as opposed to cmd/cluster, which
-// runs several nodes in one process for local demos.
+// config file (see internal/config): one node per process, e.g. one per
+// Kubernetes pod.
 package main
 
 import (

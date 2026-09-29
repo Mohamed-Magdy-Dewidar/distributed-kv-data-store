@@ -2,9 +2,8 @@
 
 `examples/local/node-{1,2,3}.yaml` configure a real 3-node cluster
 (`n=3, w=2, r=2`) on `localhost`, each with its own gRPC port, HTTP probe
-port, and data directory. Unlike `cmd/cluster` (which runs several nodes
-in one process for demos), each of these is a separate `cmd/node` process
-— closer to how a real deployment runs one node per pod.
+port, and data directory. Each node is a separate `cmd/node` process, as
+in a real deployment, which runs one node per pod.
 
 Start each node in its own terminal, from the repo root:
 

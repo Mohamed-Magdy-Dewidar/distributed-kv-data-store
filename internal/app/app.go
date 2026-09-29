@@ -23,8 +23,7 @@ import (
 // probeShutdownTimeout bounds the probe server's own Shutdown call. It's
 // the last thing Run stops, after everything else is already down, so
 // nothing depends on this finishing quickly — the bound exists only so a
-// wedged probe server can't hang Run forever, mirroring cmd/cluster's own
-// httpShutdownTimeout for the same reason.
+// wedged probe server can't hang Run forever.
 const probeShutdownTimeout = 5 * time.Second
 
 // testHookStep, when set, is called with a short name at each startup and

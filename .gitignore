@@ -23,12 +23,6 @@ go.work.sum
 # The local folder where we downloaded the protoc compiler
 .tools/
 
-# Generated Protobuf files. 
-# NOTE: If you want other people to clone your repo and run it WITHOUT 
-# installing protoc, you should COMMENT OUT these next two lines so the 
-# .pb.go files ARE committed to Git.
-internal/rpc/pb/*.pb.go
-
 # ==========================================
 # 3. IDE and Editor Files
 # ==========================================
@@ -60,5 +54,5 @@ Desktop.ini
 # ==========================================
 # 5. Runtime data
 # ==========================================
-# Per-node StorageEngine directories written by cmd/cluster (-data flag)
+# Node data directories from local runs (examples/local/*.yaml use data/local)
 data/

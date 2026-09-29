@@ -59,7 +59,7 @@ func reserveAddr(t *testing.T) string {
 
 // This package's known ports are knownPortBase+1 .. knownPortBase+knownPortCount
 // (see above). Every test package that needs known ports has its own range:
-// node 20001-24999, app 25001-25999, httpapi 26001, rpc 26501.
+// node 20001-24999, app 25001-25999, rpc 26501.
 const (
 	knownPortBase  = 20000
 	knownPortCount = 4999

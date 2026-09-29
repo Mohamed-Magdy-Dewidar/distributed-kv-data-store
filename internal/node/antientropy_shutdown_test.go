@@ -83,7 +83,7 @@ func TestStartAntiEntropyLoopAfterStopDoesNothing(t *testing.T) {
 
 // TestStopBackgroundLoopsDuringFirstDelayReturnsPromptly: the loop waits a
 // random fraction of interval before its first round. Stopping it in that
-// window must not wait the delay out — at cmd/cluster's interval that
+// window must not wait the delay out — at a 30s anti-entropy interval that
 // would hold shutdown for up to 30s.
 func TestStopBackgroundLoopsDuringFirstDelayReturnsPromptly(t *testing.T) {
 	n := New("node-1", "unused", 1, 1, 1, nil)
