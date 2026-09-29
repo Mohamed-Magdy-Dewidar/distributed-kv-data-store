@@ -15,11 +15,26 @@ import (
 	"distributed-kv-datastore/internal/store"
 )
 
+// simulateCrashDeath releases e's OS lock on its data dir without going
+// through Close, standing in for what process death does at the OS level.
+// A test that tears down other engine internals directly (bypassing
+// Close) to simulate a crash, then reopens the *same* dir within the same
+// test process, must call this too — otherwise the reopen sees the dir as
+// still locked, since only a real process exit (or Close) would have
+// released it.
+func simulateCrashDeath(e *StorageEngine) {
+	e.lock.Unlock()
+}
+
 // crashImage copies dir's files to a fresh directory, simulating a crash:
 // the copy holds exactly what's on disk right now, with no Close, flush or
 // other clean shutdown step. The engine using dir must be quiescent (no
 // flush in flight). Only one engine ever opens the copy, so the original
 // can't interfere with the replay being tested.
+//
+// The LOCK file is skipped: it holds no data (Open recreates it as needed),
+// and the original engine still holds an OS lock on it — which, on
+// Windows, blocks even a read from this second handle.
 func crashImage(t *testing.T, dir string) string {
 	t.Helper()
 	dst := t.TempDir()
@@ -28,6 +43,9 @@ func crashImage(t *testing.T, dir string) string {
 		t.Fatalf("crashImage: read %s: %v", dir, err)
 	}
 	for _, de := range entries {
+		if de.Name() == lockFileName {
+			continue
+		}
 		if !de.Type().IsRegular() {
 			t.Fatalf("crashImage: unexpected non-file %s", de.Name())
 		}

@@ -88,6 +88,7 @@ func TestFailedFlushKeepsItsWALSegments(t *testing.T) {
 	}
 
 	e.wal.Close() // "crash": release the WAL without a clean Close
+	simulateCrashDeath(e)
 	reopened := mustOpen(t, dir, 10)
 	defer reopened.Close()
 	for _, key := range []string{"k1", "k2", "k3"} {

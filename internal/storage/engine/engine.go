@@ -2,12 +2,15 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/compaction"
@@ -18,6 +21,16 @@ import (
 	"distributed-kv-datastore/internal/store"
 	"distributed-kv-datastore/internal/versioning"
 )
+
+// ErrLocked is returned by Open when dataDir is already locked by another
+// StorageEngine — in this process or another. It's checked with errors.Is;
+// the error Open actually returns wraps it with dataDir's path.
+var ErrLocked = errors.New("engine: data directory is locked by another process")
+
+// lockFileName is the advisory lock file created in a data dir. Never
+// removed: deleting it would race a concurrent Open recreating it, and an
+// OS advisory lock doesn't need the file gone to be released.
+const lockFileName = "LOCK"
 
 // StorageEngine is DataStore's durable backend. This check is the only
 // reason this package imports internal/store; store never imports engine.
@@ -55,6 +68,7 @@ type StorageEngine struct {
 	manifest *manifest.Manifest
 	dataDir  string
 	maxBytes int
+	lock     *flock.Flock // OS advisory lock on dataDir, held from Open to Close
 
 	// writeMu makes each write's WAL append and memtable insert one step
 	// with respect to memtable swaps (and the WAL rotation that goes with
@@ -80,15 +94,32 @@ type StorageEngine struct {
 	filesMu sync.RWMutex
 }
 
-// Open creates or opens a StorageEngine rooted at dataDir: replays every
-// remaining WAL segment to reconstruct the active memtable (see
-// wal.OpenLog — only segments not yet known to be flushed are still
+// Open creates or opens a StorageEngine rooted at dataDir: takes an
+// exclusive OS advisory lock on dataDir (see ErrLocked) so a second process
+// or a second Open call can't run against the same data concurrently, then
+// replays every remaining WAL segment to reconstruct the active memtable
+// (see wal.OpenLog — only segments not yet known to be flushed are still
 // there), then loads every SSTable the Manifest records as live. On any
-// error, every resource already opened is closed before returning.
+// error, every resource already opened (the lock included) is closed
+// before returning.
 func Open(dataDir string, maxMemtableBytes int) (_ *StorageEngine, err error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("engine: create data dir %s: %w", dataDir, err)
 	}
+
+	lock := flock.New(filepath.Join(dataDir, lockFileName))
+	locked, err := lock.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("engine: lock %s: %w", dataDir, err)
+	}
+	if !locked {
+		return nil, fmt.Errorf("engine: %s: %w", dataDir, ErrLocked)
+	}
+	defer func() {
+		if err != nil {
+			lock.Unlock()
+		}
+	}()
 
 	w, entries, err := wal.OpenLog(dataDir)
 	if err != nil {
@@ -116,6 +147,7 @@ func Open(dataDir string, maxMemtableBytes int) (_ *StorageEngine, err error) {
 		manifest: mf,
 		dataDir:  dataDir,
 		maxBytes: maxMemtableBytes,
+		lock:     lock,
 	}
 
 	// Replay in log order: a Restore's verbatim Replace only reproduces
@@ -593,6 +625,12 @@ func (e *StorageEngine) StartCompactionLoop(ctx context.Context, interval time.D
 	}()
 }
 
+// Close stops the compaction loop's effect (further ticks are no-ops),
+// closes the manifest and WAL, and releases dataDir's lock last — even if
+// closing the manifest or WAL failed above, so a failed Close still lets a
+// later Open back into this dataDir rather than leaving it permanently
+// locked. flock's Unlock is idempotent (a no-op once already unlocked), so
+// calling Close more than once is safe as far as the lock is concerned.
 func (e *StorageEngine) Close() error {
 	e.WaitForPendingFlushes()
 
@@ -600,8 +638,15 @@ func (e *StorageEngine) Close() error {
 	e.closed = true
 	e.compactMu.Unlock()
 
+	var closeErr error
 	if err := e.manifest.Close(); err != nil {
-		return err
+		closeErr = err
+	} else if err := e.wal.Close(); err != nil {
+		closeErr = err
 	}
-	return e.wal.Close()
+
+	if err := e.lock.Unlock(); err != nil && closeErr == nil {
+		closeErr = fmt.Errorf("engine: unlock %s: %w", e.dataDir, err)
+	}
+	return closeErr
 }

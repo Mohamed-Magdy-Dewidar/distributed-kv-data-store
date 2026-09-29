@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"distributed-kv-datastore/internal/storage/engine"
 )
 
 // openSoloNode opens a persistent single-node "cluster" (N=W=R=1, no
@@ -110,6 +113,39 @@ func TestPersistentNodeRecoversFromSSTables(t *testing.T) {
 	reopened := openSoloNode(t, dir, 10)
 	t.Cleanup(func() { reopened.Close() })
 	assertRecovered(t, reopened, "k", "v2", map[string]uint32{"node-1": 2})
+}
+
+// TestNewPersistentClosesMainEngineWhenHintsOpenFails: if hints.Open fails
+// (here because another engine already holds the hints dir's lock),
+// NewPersistent must close the main engine it already opened — releasing
+// its own lock — rather than leaking a locked, orphaned StorageEngine.
+func TestNewPersistentClosesMainEngineWhenHintsOpenFails(t *testing.T) {
+	dir := t.TempDir()
+
+	// Pre-lock the hints dir ourselves, so NewPersistent's internal
+	// hints.Open call fails with engine.ErrLocked.
+	blocker, err := engine.Open(filepath.Join(dir, "hints"), 1<<20)
+	if err != nil {
+		t.Fatalf("failed to pre-lock the hints dir: %v", err)
+	}
+	defer blocker.Close()
+
+	if _, err := NewPersistent("node-1", "localhost:0", 1, 1, 1, nil, dir, 1<<20); err == nil {
+		t.Fatal("expected NewPersistent to fail while the hints dir is locked")
+	} else if !errors.Is(err, engine.ErrLocked) {
+		t.Fatalf("expected the error to wrap engine.ErrLocked, got %v", err)
+	}
+
+	// The main engine must have been closed on that failure path. If it
+	// weren't, its lock would still be held and this Open would itself
+	// fail with ErrLocked.
+	e, err := engine.Open(dir, 1<<20)
+	if err != nil {
+		t.Fatalf("expected the main engine's dir to be unlocked after the failed NewPersistent, got %v", err)
+	}
+	if err := e.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
 }
 
 // TestCloseIsIdempotentAndClosesPeerClients: Close closes every cached
