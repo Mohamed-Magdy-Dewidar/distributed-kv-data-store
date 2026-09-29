@@ -319,7 +319,7 @@ func TestPutGetActAsPureCoordinatorWhenNotAReplica(t *testing.T) {
 	var key string
 	for i := 0; i < 10000; i++ {
 		candidate := fmt.Sprintf("probe-key-%d", i)
-		list := nodes["node-1"].Ring.GetPreferenceList(candidate, 2)
+		list := nodes["node-1"].membership.Load().ring.GetPreferenceList(candidate, 2)
 		if len(list) != 2 {
 			continue
 		}
@@ -341,7 +341,7 @@ func TestPutGetActAsPureCoordinatorWhenNotAReplica(t *testing.T) {
 		t.Fatalf("expected non-replica node-1 to never store %q locally after Put, got found=%v items=%v", key, found, items)
 	}
 
-	for _, replicaID := range nodes["node-1"].Ring.GetPreferenceList(key, 2) {
+	for _, replicaID := range nodes["node-1"].membership.Load().ring.GetPreferenceList(key, 2) {
 		items, found, _ := nodes[replicaID].Store.Get(key)
 		if !found || len(items) != 1 || items[0].Value != "coordinator-only" {
 			t.Fatalf("expected replica %q to hold the coordinated write, got found=%v items=%v", replicaID, found, items)

@@ -160,7 +160,7 @@ func TestNonReplicaPutIgnoresItsOwnBrokenStore(t *testing.T) {
 	var key string
 	for i := 0; i < 10000; i++ {
 		candidate := fmt.Sprintf("probe-key-%d", i)
-		list := nodes["node-1"].Ring.GetPreferenceList(candidate, 2)
+		list := nodes["node-1"].membership.Load().ring.GetPreferenceList(candidate, 2)
 		if len(list) == 2 && list[0] != "node-1" && list[1] != "node-1" {
 			key = candidate
 			break
@@ -174,7 +174,7 @@ func TestNonReplicaPutIgnoresItsOwnBrokenStore(t *testing.T) {
 	if err := nodes["node-1"].Put(context.Background(), key, "v", nil); err != nil {
 		t.Fatalf("expected the forwarded write to succeed despite node-1's broken store, got %v", err)
 	}
-	for _, replicaID := range nodes["node-1"].Ring.GetPreferenceList(key, 2) {
+	for _, replicaID := range nodes["node-1"].membership.Load().ring.GetPreferenceList(key, 2) {
 		if items, found, _ := nodes[replicaID].Store.Get(key); !found || !reflect.DeepEqual(itemValues(items), []any{"v"}) {
 			t.Fatalf("expected replica %s to hold [v], got found=%v %v", replicaID, found, itemValues(items))
 		}

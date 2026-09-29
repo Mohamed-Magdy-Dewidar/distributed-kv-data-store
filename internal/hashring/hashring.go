@@ -103,7 +103,9 @@ func NewHashRingFromMembers(virtualNodesPerPhysical int, ids []string) (*HashRin
 
 // AddNode adds a physical node to the ring, represented by
 // virtualNodesPerPhysical positions, with the collision rule described on
-// place.
+// place. It mutates the ring, so it must never be called on one that has been
+// published (shared with concurrent readers, as a node's view does): build a
+// new ring with NewHashRingFromMembers instead.
 func (hr *HashRing) AddNode(nodeID string) {
 	hr.mu.Lock()
 	defer hr.mu.Unlock()

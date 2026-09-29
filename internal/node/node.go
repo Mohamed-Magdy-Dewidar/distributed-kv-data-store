@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -40,16 +41,27 @@ type Node struct {
 	// ID is the node's identity in the ring, the membership, hint targets and
 	// peer connections. Its writes are versioned under clockID instead: see
 	// ClockID.
-	ID            string
-	clockID       string
-	Store         *store.DataStore
-	Address       string
-	NeighborAddrs map[string]string
-	QuorumConfig  QuorumConfig
-	Ring          *hashring.HashRing
+	ID           string
+	clockID      string
+	Store        *store.DataStore
+	Address      string
+	QuorumConfig QuorumConfig
 
-	clientsMu sync.Mutex
-	clients   map[string]*rpc.Client
+	// membership is the node's current view of the cluster: who the members
+	// are, where they listen, and the hash ring built from them. Readers load
+	// it once per operation and use that one snapshot throughout; a published
+	// view is never mutated (see view).
+	membership atomic.Pointer[view]
+
+	// clients caches one connection per peer, with the address it was dialed
+	// at. A connection whose peer's address has since changed is moved to
+	// retired, not closed: an in-flight RPC (an anti-entropy round holds one
+	// for its whole run) may still be using it. Close closes both. Once
+	// clientsClosed is set, nothing dials. All guarded by clientsMu.
+	clientsMu     sync.Mutex
+	clients       map[string]peerClient
+	retired       []*rpc.Client
+	clientsClosed bool
 
 	engine    *engine.StorageEngine // persistent nodes only (NewPersistent); nil in memory
 	hints     *hints.Store          // persistent nodes only; nil in memory (no hinted handoff)
@@ -84,12 +96,12 @@ type Node struct {
 // tests and demos: nothing survives a restart, and a restarted in-memory node
 // is a new writer.
 func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node {
-	ring, err := ringFor(id, neighborAddrs)
+	v, err := initialView(id, address, neighborAddrs)
 	if err != nil {
 		panic(fmt.Sprintf("node %q: %v", id, err))
 	}
 	clockID := identity.ClockID(id, identity.NewIncarnation())
-	return newNode(id, clockID, address, n, w, r, neighborAddrs, ring, store.NewDataStoreWithClockID(id, clockID), nil, nil)
+	return newNode(id, clockID, address, n, w, r, v, store.NewDataStoreWithClockID(id, clockID), nil, nil)
 }
 
 // ClockID is the name this node's writes carry in vector clocks: its node ID
@@ -115,7 +127,7 @@ func (n *Node) ClockID() string { return n.clockID }
 // refuses to start, naming both IDs and the directory, if the file belongs to
 // a different node ID.
 func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
-	ring, err := ringFor(id, neighborAddrs)
+	v, err := initialView(id, address, neighborAddrs)
 	if err != nil {
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
@@ -134,7 +146,7 @@ func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]str
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
 	clockID := identity.ClockID(id, incarnation)
-	return newNode(id, clockID, address, n, w, r, neighborAddrs, ring, store.NewDataStoreWithPersisterAndClockID(id, clockID, e), e, hs), nil
+	return newNode(id, clockID, address, n, w, r, v, store.NewDataStoreWithPersisterAndClockID(id, clockID, e), e, hs), nil
 }
 
 // ringFor builds the hash ring for a node: a pure function of the member set
@@ -152,20 +164,23 @@ func ringFor(id string, neighborAddrs map[string]string) (*hashring.HashRing, er
 	return hashring.NewHashRingFromMembers(defaultVirtualNodesPerPhysical, members)
 }
 
-func newNode(id, clockID, address string, n, w, r int, neighborAddrs map[string]string, ring *hashring.HashRing, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
-	return &Node{
-		ID:            id,
-		clockID:       clockID,
-		Store:         ds,
-		Address:       address,
-		NeighborAddrs: neighborAddrs,
-		QuorumConfig:  NewQuorumConfig(n, w, r),
-		Ring:          ring,
-		clients:       make(map[string]*rpc.Client),
-		engine:        e,
-		hints:         hs,
+func newNode(id, clockID, address string, n, w, r int, v *view, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
+	nd := &Node{
+		ID:           id,
+		clockID:      clockID,
+		Store:        ds,
+		Address:      address,
+		QuorumConfig: NewQuorumConfig(n, w, r),
+		clients:      make(map[string]peerClient),
+		engine:       e,
+		hints:        hs,
 	}
+	nd.membership.Store(v)
+	return nd
 }
+
+// setView installs v as the node's current view. Tests only, for now.
+func (n *Node) setView(v *view) { n.membership.Store(v) }
 
 // Close releases what n owns, in an order that keeps anything still
 // running from touching what's already closed:
@@ -174,7 +189,8 @@ func newNode(id, clockID, address string, n, w, r int, neighborAddrs map[string]
 //  2. Wait for every replication drain (see drainReplication): their
 //     straggler RPCs finish, and any hints they owe are durably stored.
 //     No new drain starts from here.
-//  3. Close its cached peer connections — nothing above uses them now.
+//  3. Close its cached peer connections, retired ones included, and refuse
+//     to dial any more — nothing above uses them now.
 //  4. For a persistent node, close the hint store, then the StorageEngine
 //     (which waits for in-flight flushes, stops compaction, and closes the
 //     Manifest and WAL). The two don't depend on each other.
@@ -195,12 +211,19 @@ func (n *Node) Close() error {
 		var errs []error
 
 		n.clientsMu.Lock()
-		for peerID, client := range n.clients {
-			if err := client.Close(); err != nil {
+		n.clientsClosed = true
+		for peerID, pc := range n.clients {
+			if err := pc.client.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("close client for %q: %w", peerID, err))
 			}
 		}
-		n.clients = make(map[string]*rpc.Client)
+		for _, client := range n.retired {
+			if err := client.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close retired client: %w", err))
+			}
+		}
+		n.clients = make(map[string]peerClient)
+		n.retired = nil
 		n.clientsMu.Unlock()
 
 		if n.hints != nil {
@@ -238,8 +261,8 @@ func (n *Node) StartCompactionLoop(ctx context.Context, interval time.Duration) 
 // already comes back as the *full* preference list (length N) — exactly
 // the replicas a non-replica forwards a write to, in order (see
 // forwardPut), or fans a read out to (see Get).
-func (n *Node) isReplicaFor(key string) (isReplica bool, peers []string) {
-	preferenceList := n.Ring.GetPreferenceList(key, n.QuorumConfig.N)
+func (n *Node) isReplicaFor(v *view, key string) (isReplica bool, peers []string) {
+	preferenceList := v.ring.GetPreferenceList(key, n.QuorumConfig.N)
 
 	peers = make([]string, 0, len(preferenceList))
 	for _, nodeID := range preferenceList {
@@ -266,11 +289,12 @@ type replicateResult struct {
 // versioned exactly once, by a node that stores it: a vector clock tracks
 // who committed data, never who merely routed a request.
 func (n *Node) Put(ctx context.Context, key string, value any, context map[string]uint32) error {
-	isReplica, peers := n.isReplicaFor(key)
+	v := n.membership.Load()
+	isReplica, peers := n.isReplicaFor(v, key)
 	if !isReplica {
-		return n.forwardPut(ctx, key, value, context, peers)
+		return n.forwardPut(ctx, v, key, value, context, peers)
 	}
-	return n.putAsReplica(ctx, key, value, context, peers)
+	return n.putAsReplica(ctx, v, key, value, context, peers)
 }
 
 // CoordinatePut implements rpc.WriteCoordinator: it coordinates a write
@@ -278,11 +302,12 @@ func (n *Node) Put(ctx context.Context, key string, value any, context map[strin
 // forwarding again when n isn't one of key's replicas — nodes whose rings
 // disagree must fail the write, not bounce it between themselves.
 func (n *Node) CoordinatePut(ctx context.Context, key string, value any, clientContext map[string]uint32) error {
-	isReplica, peers := n.isReplicaFor(key)
+	v := n.membership.Load()
+	isReplica, peers := n.isReplicaFor(v, key)
 	if !isReplica {
 		return fmt.Errorf("node %s, key %q: %w", n.ID, key, rpc.ErrNotReplica)
 	}
-	return n.putAsReplica(ctx, key, value, clientContext, peers)
+	return n.putAsReplica(ctx, v, key, value, clientContext, peers)
 }
 
 // putAsReplica applies value locally (counting as one success toward W) —
@@ -306,7 +331,7 @@ func (n *Node) CoordinatePut(ctx context.Context, key string, value any, clientC
 // (quorum reached, or the caller gave up, which leaves it in place), never
 // after a rollback: a hint would deliver an undone write to a node that
 // never saw it.
-func (n *Node) putAsReplica(ctx context.Context, key string, value any, clientContext map[string]uint32, peers []string) error {
+func (n *Node) putAsReplica(ctx context.Context, v *view, key string, value any, clientContext map[string]uint32, peers []string) error {
 	// prevVersions is what a failed quorum rolls back to, so a read
 	// failure here must stop the write: rolling back to a nil
 	// prevVersions would delete key's committed versions outright.
@@ -333,7 +358,7 @@ func (n *Node) putAsReplica(ctx context.Context, key string, value any, clientCo
 			if testHookBeforeReplicate != nil {
 				testHookBeforeReplicate(peerID)
 			}
-			err := n.Replicate(replCtx, peerID, key, []*model.DataItem{item})
+			err := n.replicate(replCtx, v, peerID, key, []*model.DataItem{item})
 			results <- replicateResult{peerID: peerID, err: err}
 		}(peerID)
 	}
@@ -453,10 +478,10 @@ func (n *Node) drainReplication(key string, item *model.DataItem, results <-chan
 // quorum, a timeout, a refusal) is returned as-is: that replica may already
 // have applied the write, and retrying elsewhere would version it a second
 // time under a different replica's clock entry.
-func (n *Node) forwardPut(ctx context.Context, key string, value any, clientContext map[string]uint32, replicas []string) error {
+func (n *Node) forwardPut(ctx context.Context, v *view, key string, value any, clientContext map[string]uint32, replicas []string) error {
 	var unavailable []error
 	for _, replicaID := range replicas {
-		client, err := n.getOrDialClient(replicaID)
+		client, err := n.clientFor(v, replicaID)
 		if err != nil {
 			return fmt.Errorf("forward put for key %q: %w", key, err)
 		}
@@ -487,7 +512,8 @@ type fetchResult struct {
 // A local read error counts as a failed response, exactly like a peer RPC
 // error — never as a "not found" vote toward R.
 func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
-	isReplica, peers := n.isReplicaFor(key)
+	v := n.membership.Load()
+	isReplica, peers := n.isReplicaFor(v, key)
 
 	var merged []*model.DataItem
 	totalNodes := len(peers)
@@ -512,7 +538,7 @@ func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 	results := make(chan fetchResult, len(peers))
 	for _, peerID := range peers {
 		go func(peerID string) {
-			items, found, err := n.FetchItem(ctx, peerID, key)
+			items, found, err := n.fetchItem(ctx, v, peerID, key)
 			if err != nil {
 				results <- fetchResult{peerID: peerID, err: err}
 				return
@@ -550,17 +576,40 @@ func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 		key, responses, totalNodes, needed)
 }
 
+// peerClient is a cached connection and the address it was dialed at.
+type peerClient struct {
+	addr   string
+	client *rpc.Client
+}
+
+// getOrDialClient is clientFor against the node's current view.
 func (n *Node) getOrDialClient(peerID string) (*rpc.Client, error) {
+	return n.clientFor(n.membership.Load(), peerID)
+}
+
+// clientFor returns the connection to peerID at the address v lists for it,
+// dialing one if there is none. A cached connection to a different address
+// (the peer moved) is retired rather than closed — an RPC in flight on it
+// finishes — and replaced. It refuses to dial once Close has closed the
+// cache, so a late caller can't leave a connection nothing will close.
+func (n *Node) clientFor(v *view, peerID string) (*rpc.Client, error) {
+	addr, ok := v.members[peerID]
+	if !ok {
+		return nil, fmt.Errorf("unknown peer %q: no address configured", peerID)
+	}
+
 	n.clientsMu.Lock()
 	defer n.clientsMu.Unlock()
 
-	if client, ok := n.clients[peerID]; ok {
-		return client, nil
+	if n.clientsClosed {
+		return nil, fmt.Errorf("node %s is closed: not dialing peer %q", n.ID, peerID)
 	}
-
-	addr, ok := n.NeighborAddrs[peerID]
-	if !ok {
-		return nil, fmt.Errorf("unknown peer %q: no address configured", peerID)
+	if pc, ok := n.clients[peerID]; ok {
+		if pc.addr == addr {
+			return pc.client, nil
+		}
+		n.retired = append(n.retired, pc.client)
+		delete(n.clients, peerID)
 	}
 
 	client, err := rpc.Dial(addr, n.QuorumConfig.MaxReconnectBackoff)
@@ -568,12 +617,16 @@ func (n *Node) getOrDialClient(peerID string) (*rpc.Client, error) {
 		return nil, fmt.Errorf("dial peer %q at %s: %w", peerID, addr, err)
 	}
 
-	n.clients[peerID] = client
+	n.clients[peerID] = peerClient{addr: addr, client: client}
 	return client, nil
 }
 
 func (n *Node) FetchItem(ctx context.Context, peerID string, key string) ([]*model.DataItem, bool, error) {
-	client, err := n.getOrDialClient(peerID)
+	return n.fetchItem(ctx, n.membership.Load(), peerID, key)
+}
+
+func (n *Node) fetchItem(ctx context.Context, v *view, peerID string, key string) ([]*model.DataItem, bool, error) {
+	client, err := n.clientFor(v, peerID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -584,27 +637,29 @@ const antiEntropyNumBuckets = 16
 
 // Replicate now forwards a sibling set, matching Client.Replicate's widened signature.
 func (n *Node) Replicate(ctx context.Context, peerID string, key string, items []*model.DataItem) error {
-	client, err := n.getOrDialClient(peerID)
+	return n.replicate(ctx, n.membership.Load(), peerID, key, items)
+}
+
+func (n *Node) replicate(ctx context.Context, v *view, peerID string, key string, items []*model.DataItem) error {
+	client, err := n.clientFor(v, peerID)
 	if err != nil {
 		return err
 	}
 	return client.Replicate(ctx, key, items)
 }
 
-// coReplicantPeers returns every configured neighbor as an anti-entropy
+// coReplicantPeers returns every member of v but n as an anti-entropy
 // candidate. It doesn't try to narrow that to the neighbors that share a
 // preference list with n: with defaultVirtualNodesPerPhysical virtual
 // nodes each, every pair of nodes shares some keys, so no neighbor would
 // be dropped. Which keys are reconciled with each peer is decided per key,
 // by sharesReplicaSet.
-func (n *Node) coReplicantPeers() []string {
-	seen := make(map[string]bool)
-	for peerID := range n.NeighborAddrs {
-		seen[peerID] = true
-	}
-	peers := make([]string, 0, len(seen))
-	for id := range seen {
-		peers = append(peers, id)
+func (n *Node) coReplicantPeers(v *view) []string {
+	peers := make([]string, 0, len(v.members))
+	for id := range v.members {
+		if id != n.ID {
+			peers = append(peers, id)
+		}
 	}
 	return peers
 }
@@ -645,9 +700,9 @@ func (n *Node) RunAntiEntropy(ctx context.Context, peerID string) error {
 // preference list — the only keys anti-entropy may reconcile between them.
 // A key outside it doesn't belong on one side or the other, and copying it
 // there would silently add a replica beyond N that no read ever consults.
-func (n *Node) sharesReplicaSet(key, peerID string) bool {
+func (n *Node) sharesReplicaSet(v *view, key, peerID string) bool {
 	var self, peer bool
-	for _, nodeID := range n.Ring.GetPreferenceList(key, n.QuorumConfig.N) {
+	for _, nodeID := range v.ring.GetPreferenceList(key, n.QuorumConfig.N) {
 		self = self || nodeID == n.ID
 		peer = peer || nodeID == peerID
 	}
@@ -677,6 +732,7 @@ var testHookBeforeReconcileInstall func(key string)
 // does. Carrying on would treat a failed local read as "this node holds
 // nothing here", and silently skip pushing the local versions.
 func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.Client, bucketIdx int) error {
+	v := n.membership.Load() // one view for the whole bucket
 	allLocalKeys, err := n.Store.Keys()
 	if err != nil {
 		return fmt.Errorf("list local keys: %w", err)
@@ -695,12 +751,12 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 
 	allKeys := make(map[string]bool, len(localKeys))
 	for k := range localKeys {
-		if n.sharesReplicaSet(k, peerID) {
+		if n.sharesReplicaSet(v, k, peerID) {
 			allKeys[k] = true
 		}
 	}
 	for _, k := range remoteKeys {
-		if n.sharesReplicaSet(k, peerID) {
+		if n.sharesReplicaSet(v, k, peerID) {
 			allKeys[k] = true
 		}
 	}
@@ -725,7 +781,7 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 			}
 		}
 		if toPush := missingFrom(remoteItems, localItems); len(toPush) > 0 {
-			if err := n.Replicate(ctx, peerID, key, toPush); err != nil {
+			if err := n.replicate(ctx, v, peerID, key, toPush); err != nil {
 				return fmt.Errorf("push reconciled %q to %q: %w", key, peerID, err)
 			}
 		}
@@ -822,7 +878,7 @@ func (n *Node) startLoop(ctx context.Context, interval time.Duration, round func
 // in turn, logging (not stopping on) each failure. Once ctx is canceled it
 // starts no further peer: those would only fail.
 func (n *Node) runAntiEntropyRound(ctx context.Context) {
-	for _, peerID := range n.coReplicantPeers() {
+	for _, peerID := range n.coReplicantPeers(n.membership.Load()) {
 		if ctx.Err() != nil {
 			return
 		}

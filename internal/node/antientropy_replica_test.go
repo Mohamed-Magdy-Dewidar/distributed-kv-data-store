@@ -13,7 +13,7 @@ func keyReplicatedBy(t *testing.T, n *Node, prefix string, want ...string) strin
 	t.Helper()
 	for i := range 10000 {
 		key := fmt.Sprintf("%s-%d", prefix, i)
-		got := n.Ring.GetPreferenceList(key, n.QuorumConfig.N)
+		got := n.membership.Load().ring.GetPreferenceList(key, n.QuorumConfig.N)
 		if len(got) == len(want) && !slices.ContainsFunc(want, func(id string) bool { return !slices.Contains(got, id) }) {
 			return key
 		}
