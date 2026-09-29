@@ -90,25 +90,23 @@ func TestGetPreferenceListSingleNode(t *testing.T) {
 	}
 }
 
-func TestRemoveNodeStopsItFromAppearingInPreferenceLists(t *testing.T) {
-	hr := NewHashRing(150)
-	hr.AddNode("node-1")
-	hr.AddNode("node-2")
-	hr.AddNode("node-3")
-
-	hr.RemoveNode("node-2")
+func TestRingBuiltWithoutANodeNeverListsIt(t *testing.T) {
+	hr, err := NewHashRingFromMembers(150, []string{"node-1", "node-3"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for i := 0; i < 50; i++ {
 		key := fmt.Sprintf("key-%d", i)
 		list := hr.GetPreferenceList(key, 3)
 		for _, id := range list {
 			if id == "node-2" {
-				t.Fatalf("key %q: removed node-2 still appears in preference list %v", key, list)
+				t.Fatalf("key %q: node-2 appears in preference list %v", key, list)
 			}
 		}
 		// only 2 distinct nodes remain, so asking for 3 should return 2
 		if len(list) != 2 {
-			t.Errorf("key %q: expected 2 nodes after removal, got %d: %v", key, len(list), list)
+			t.Errorf("key %q: expected 2 nodes without node-2, got %d: %v", key, len(list), list)
 		}
 	}
 }

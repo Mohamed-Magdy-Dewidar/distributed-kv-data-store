@@ -68,12 +68,18 @@ type Node struct {
 	drainWG      sync.WaitGroup
 }
 
-// New builds an in-memory Node and seeds its hash ring with itself plus
-// every configured neighbor. Every node in the cluster must be constructed
-// with the same set of node IDs (this node's own id plus every neighbor's)
-// for all nodes to compute identical preference lists.
+// New builds an in-memory Node whose hash ring holds itself plus every
+// configured neighbor. Every node in the cluster must be constructed with the
+// same set of node IDs (this node's own id plus every neighbor's) for all
+// nodes to compute identical preference lists. It panics if id or a neighbor
+// ID is empty: the IDs come from validated configuration, so that is a
+// programming error (NewPersistent returns it as an error instead).
 func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node {
-	return newNode(id, address, n, w, r, neighborAddrs, store.NewDataStore(id), nil, nil)
+	ring, err := ringFor(id, neighborAddrs)
+	if err != nil {
+		panic(fmt.Sprintf("node %q: %v", id, err))
+	}
+	return newNode(id, address, n, w, r, neighborAddrs, ring, store.NewDataStore(id), nil, nil)
 }
 
 // NewPersistent is New with the node's data kept on disk: it opens (or
@@ -84,6 +90,10 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node
 // the main engine ignores). maxMemtableBytes is both engines' flush
 // threshold. The caller must Close the node to close them cleanly.
 func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
+	ring, err := ringFor(id, neighborAddrs)
+	if err != nil {
+		return nil, fmt.Errorf("node %s: %w", id, err)
+	}
 	e, err := engine.Open(dataDir, maxMemtableBytes)
 	if err != nil {
 		return nil, fmt.Errorf("node %s: open storage at %s: %w", id, dataDir, err)
@@ -93,16 +103,25 @@ func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]str
 		e.Close()
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
-	return newNode(id, address, n, w, r, neighborAddrs, store.NewDataStoreWithPersister(id, e), e, hs), nil
+	return newNode(id, address, n, w, r, neighborAddrs, ring, store.NewDataStoreWithPersister(id, e), e, hs), nil
 }
 
-func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
-	ring := hashring.NewHashRing(defaultVirtualNodesPerPhysical)
-	ring.AddNode(id)
+// ringFor builds the hash ring for a node: a pure function of the member set
+// {id} ∪ keys(neighborAddrs), so every node given the same set builds the
+// same ring whatever order it learned the members in. A neighbor entry for
+// id itself is the same member, not a second one.
+func ringFor(id string, neighborAddrs map[string]string) (*hashring.HashRing, error) {
+	members := make([]string, 0, len(neighborAddrs)+1)
+	members = append(members, id)
 	for peerID := range neighborAddrs {
-		ring.AddNode(peerID)
+		if peerID != id {
+			members = append(members, peerID)
+		}
 	}
+	return hashring.NewHashRingFromMembers(defaultVirtualNodesPerPhysical, members)
+}
 
+func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, ring *hashring.HashRing, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
 	return &Node{
 		ID:            id,
 		Store:         ds,
