@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,26 +97,53 @@ func TestRunOrderingThroughShutdown(t *testing.T) {
 
 // stepGate lets a test pause Run at named steps and release them one at a
 // time, via testHookStep.
+// A gated step closes its reached channel as Run arrives at it, then waits
+// for release. Releasing twice is harmless.
 type stepGate struct {
-	gates map[string]chan struct{}
+	gates   map[string]chan struct{}
+	reached map[string]chan struct{}
+	once    map[string]*sync.Once
 }
 
 func newStepGate(names ...string) *stepGate {
-	g := &stepGate{gates: make(map[string]chan struct{}, len(names))}
+	g := &stepGate{
+		gates:   make(map[string]chan struct{}, len(names)),
+		reached: make(map[string]chan struct{}, len(names)),
+		once:    make(map[string]*sync.Once, len(names)),
+	}
 	for _, n := range names {
 		g.gates[n] = make(chan struct{})
+		g.reached[n] = make(chan struct{})
+		g.once[n] = &sync.Once{}
 	}
 	return g
 }
 
 func (g *stepGate) hook(step string) {
 	if ch, ok := g.gates[step]; ok {
+		close(g.reached[step])
 		<-ch
 	}
 }
 
+// waitReached blocks until Run is held at step, failing the test after 5s.
+func (g *stepGate) waitReached(t *testing.T, step string) {
+	t.Helper()
+	select {
+	case <-g.reached[step]:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Run never reached step %q", step)
+	}
+}
+
 func (g *stepGate) release(step string) {
-	close(g.gates[step])
+	g.once[step].Do(func() { close(g.gates[step]) })
+}
+
+func (g *stepGate) releaseAll() {
+	for step := range g.gates {
+		g.release(step)
+	}
 }
 
 func getReadyz(t *testing.T, httpAddr string) int {
@@ -155,11 +183,22 @@ func TestReadyzReflectsReadiness(t *testing.T) {
 
 	gate := newStepGate("loops-started", "not-ready")
 	testHookStep = gate.hook
-	defer func() { testHookStep = nil }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan error, 1)
 	go func() { runDone <- Run(ctx, cfg) }()
+	// However the test ends, Run is stopped and has returned before the hook
+	// it calls is reset; resetting it earlier would race with Run's step().
+	t.Cleanup(func() {
+		cancel()
+		gate.releaseAll()
+		select {
+		case <-runDone:
+		case <-time.After(10 * time.Second):
+			t.Error("Run did not return after cancel")
+		}
+		testHookStep = nil
+	})
 
 	waitForProbeUp(t, httpAddr)
 	if code := getReadyz(t, httpAddr); code != http.StatusServiceUnavailable {
@@ -179,9 +218,9 @@ func TestReadyzReflectsReadiness(t *testing.T) {
 	}
 
 	cancel()
-	// Run is now paused exactly at "not-ready": setReady(false) has already
-	// run, but nothing has been stopped yet, so the probe server is
-	// definitely still serving.
+	// Wait until Run is held at "not-ready": setReady(false) has run by then,
+	// but nothing has been stopped yet, so the probe server is still serving.
+	gate.waitReached(t, "not-ready")
 	if code := getReadyz(t, httpAddr); code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 once not-ready, got %d", code)
 	}
@@ -190,6 +229,7 @@ func TestReadyzReflectsReadiness(t *testing.T) {
 	if err := <-runDone; err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
+	runDone <- nil // for the cleanup, which waits on it too
 }
 
 // TestStartupFailureWithLockedDataDirReleasesProbePort: opening a
