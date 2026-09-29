@@ -6,6 +6,7 @@ require (
 	github.com/bits-and-blooms/bloom/v3 v3.7.1
 	github.com/gofrs/flock v0.13.1
 	github.com/google/btree v1.1.3
+	go.yaml.in/yaml/v3 v3.0.5
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 )
