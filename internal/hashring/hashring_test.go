@@ -204,7 +204,7 @@ func TestNoNodeIsCatastrophicallyOverOrUnderloaded(t *testing.T) {
 // test builds the ring in two different orders (also varying where the
 // non-colliding "node-3" lands) and requires identical results either way.
 func TestCollidingVnodesResolveDeterministicallyRegardlessOfInsertionOrder(t *testing.T) {
-	const nodeA = "node-21"   // lexicographically lower: must win every collision
+	const nodeA = "node-21" // lexicographically lower: must win every collision
 	const nodeB = "node-2622"
 
 	buildRing := func(order []string) *HashRing {

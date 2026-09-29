@@ -144,7 +144,7 @@ func TestHintAddedAfterDeliveryStaysPending(t *testing.T) {
 	hints, _ := s.Pending("node-2")
 
 	mustAdd(t, s, "node-2", "k", item("v2", map[string]uint32{"node-1": 2})) // lands mid-delivery
-	mustMark(t, s, "node-2", "k", hints[0].Items)                              // only v1 was delivered
+	mustMark(t, s, "node-2", "k", hints[0].Items)                            // only v1 was delivered
 
 	if got, want := pendingView(t, s, "node-2"), map[string][]any{"k": {"v2"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected v2 still pending, got %v", got)
