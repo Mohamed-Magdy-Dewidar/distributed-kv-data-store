@@ -1,0 +1,26 @@
+nodeId: kv-2
+listen:
+  grpc: "localhost:7002"
+  http: "localhost:8082"
+dataDir: "data/local/kv-2"
+cluster:
+  n: 3
+  w: 2
+  r: 2
+  members:
+    - id: kv-0
+      address: localhost:7000
+    - id: kv-1
+      address: localhost:7001
+    - id: kv-2
+      address: localhost:7002
+storage:
+  memtableBytes: 4194304
+intervals:
+  compaction: 30s
+  antiEntropy: 30s
+  hintDelivery: 10s
+timeouts:
+  replication: 5s
+  maxReconnectBackoff: 5s
+  shutdown: 20s
