@@ -82,24 +82,24 @@ func fingerprint(members map[string]string, n int) string {
 // be a member: leaving is expressed by omitting it.
 func validateMembers(members map[string]string, n int) error {
 	if len(members) == 0 {
-		return fmt.Errorf("membership: no members")
+		return invalidf("membership: no members")
 	}
 	if len(members) < n {
-		return fmt.Errorf("membership: %d members, fewer than the replication factor N=%d", len(members), n)
+		return invalidf("membership: %d members, fewer than the replication factor N=%d", len(members), n)
 	}
 	byAddr := make(map[string]string, len(members))
 	for _, id := range slices.Sorted(maps.Keys(members)) {
 		addr := members[id]
 		switch {
 		case id == "":
-			return fmt.Errorf("membership: empty member id")
+			return invalidf("membership: empty member id")
 		case strings.ContainsAny(id, "#\x00"):
-			return fmt.Errorf("membership: member id %q must not contain '#' or NUL", id)
+			return invalidf("membership: member id %q must not contain '#' or NUL", id)
 		case addr == "":
-			return fmt.Errorf("membership: member %q has an empty address", id)
+			return invalidf("membership: member %q has an empty address", id)
 		}
 		if other, dup := byAddr[addr]; dup {
-			return fmt.Errorf("membership: members %q and %q share address %q", other, id, addr)
+			return invalidf("membership: members %q and %q share address %q", other, id, addr)
 		}
 		byAddr[addr] = id
 	}

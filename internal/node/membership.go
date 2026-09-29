@@ -17,6 +17,10 @@ var (
 	// node's current one. The node keeps its view.
 	ErrStaleEpoch = errors.New("stale membership epoch")
 
+	// ErrInvalidMembership is returned (wrapped) by SetMembership for a member
+	// set that breaks the rules in validateMembers. Nothing is changed.
+	ErrInvalidMembership = errors.New("invalid membership")
+
 	// ErrFingerprintMismatch is returned for a membership received from
 	// another node whose claimed fingerprint isn't the one computed from its
 	// members: it was corrupted, or built under a different N or ring scheme.
@@ -27,6 +31,18 @@ var (
 	// One epoch must mean one membership; the node keeps its view.
 	ErrMembershipConflict = errors.New("membership conflict at the same epoch")
 )
+
+// invalidMembershipError is a validation failure; it matches
+// ErrInvalidMembership under errors.Is and reads as its own message.
+type invalidMembershipError struct{ msg string }
+
+func (e *invalidMembershipError) Error() string { return e.msg }
+
+func (e *invalidMembershipError) Is(target error) bool { return target == ErrInvalidMembership }
+
+func invalidf(format string, args ...any) error {
+	return &invalidMembershipError{msg: fmt.Sprintf(format, args...)}
+}
 
 // Membership returns the node's current epoch and a copy of its members
 // (ID → address, this node included unless it has been removed).

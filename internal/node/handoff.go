@@ -30,11 +30,11 @@ import (
 
 // HandoffStatus describes the node's handoff for the newest view it has.
 type HandoffStatus struct {
-	Epoch   uint64 // the view being handed off to (or last handed off to)
-	Done    bool   // every key that had to move has been pushed or hinted
-	Pushed  int    // pushes to a new owner that succeeded
-	Hinted  int    // pushes that failed and were turned into hints instead
-	Pending int    // keys not yet handled
+	Epoch   uint64 `json:"epoch"`   // the view being handed off to (or last handed off to)
+	Done    bool   `json:"done"`    // every key that had to move has been pushed or hinted
+	Pushed  int    `json:"pushed"`  // pushes to a new owner that succeeded
+	Hinted  int    `json:"hinted"`  // pushes that failed and were turned into hints instead
+	Pending int    `json:"pending"` // keys not yet handled
 }
 
 var (

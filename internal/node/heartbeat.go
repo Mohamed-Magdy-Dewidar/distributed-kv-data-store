@@ -17,8 +17,9 @@ import (
 
 // peerHealth is what heartbeats have shown about one peer.
 type peerHealth struct {
-	misses int  // consecutive failed pings
-	dead   bool // misses reached QuorumConfig.MaxMissedHeartbeats
+	misses int    // consecutive failed pings
+	dead   bool   // misses reached QuorumConfig.MaxMissedHeartbeats
+	epoch  uint64 // the membership epoch in its latest ping reply
 }
 
 // errPeerDead is the result a write, read or anti-entropy step gets for a
@@ -148,6 +149,7 @@ func (n *Node) pingPeer(ctx context.Context, v *view, peerID string) {
 		return
 	}
 	n.recordHeartbeat(peerID, true)
+	n.recordPeerEpoch(peerID, reply.Epoch)
 
 	cur := n.membership.Load()
 	switch {

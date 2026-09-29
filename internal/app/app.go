@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,27 +39,34 @@ func step(name string) {
 	}
 }
 
-// probeServer serves /livez (always 200) and /readyz (200 once ready, 503
-// otherwise) on one address — cmd/node's Kubernetes liveness/readiness
-// probes.
+// probeServer serves /livez (always 200) and /readyz (200 once ready and
+// while the node is in its membership, 503 otherwise) on one address —
+// cmd/node's Kubernetes liveness/readiness probes — and the admin API (see
+// admin.go) once the node is set.
 type probeServer struct {
 	httpServer *http.Server
 	ready      atomic.Bool
+	node       atomic.Pointer[node.Node]
+	done       chan struct{} // closed when the server starts stopping
+	stopOnce   sync.Once
 }
 
 func newProbeServer(addr string) *probeServer {
-	p := &probeServer{}
+	p := &probeServer{done: make(chan struct{})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if p.ready.Load() {
+		// A node that has been removed from the membership is not ready: it
+		// should stop receiving traffic while it drains.
+		if nd := p.node.Load(); p.ready.Load() && (nd == nil || nd.IsMember()) {
 			w.WriteHeader(http.StatusOK)
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 	})
+	p.registerAdmin(mux)
 	p.httpServer = &http.Server{Addr: addr, Handler: mux}
 	return p
 }
@@ -81,9 +89,15 @@ func (p *probeServer) setReady(ready bool) {
 	p.ready.Store(ready)
 }
 
+// setNode gives the admin API (and /readyz) the node to act on.
+func (p *probeServer) setNode(nd *node.Node) {
+	p.node.Store(nd)
+}
+
 // stop gracefully shuts the probe server down within probeShutdownTimeout,
 // falling back to an immediate close if that isn't enough.
 func (p *probeServer) stop() error {
+	p.stopOnce.Do(func() { close(p.done) })
 	ctx, cancel := context.WithTimeout(context.Background(), probeShutdownTimeout)
 	defer cancel()
 	if err := p.httpServer.Shutdown(ctx); err != nil {
@@ -144,6 +158,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		step("probe-stopped")
 		return err
 	}
+	probe.setNode(nd)
 
 	listener, err := rpc.Serve(cfg.Listen.GRPC, nd.Store, nd)
 	if err != nil {
