@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"distributed-kv-datastore/internal/hashring"
@@ -74,13 +75,24 @@ func keyReplicatedOnlyBy(t *testing.T, ids []string, n int, excluded ...string) 
 	return "", nil
 }
 
+// sortedClockNodes returns the sorted node IDs a clock names. Clock entries
+// are "<nodeID>#<incarnation>" (see Node.ClockID); this strips the
+// incarnation so they can be compared with ring members.
 func sortedClockNodes(vc *vectorclock.VectorClock) []string {
 	var ids []string
-	for id := range vc.Snapshot() {
-		ids = append(ids, id)
+	for entry := range vc.Snapshot() {
+		ids = append(ids, nodeOfClockEntry(entry))
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// nodeOfClockEntry strips the "#<incarnation>" suffix from a clock entry.
+func nodeOfClockEntry(entry string) string {
+	if i := strings.LastIndex(entry, "#"); i >= 0 {
+		return entry[:i]
+	}
+	return entry
 }
 
 // assertOnlyReplicaVersion checks that replica holds exactly one version of

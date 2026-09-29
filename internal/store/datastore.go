@@ -29,17 +29,32 @@ import (
 // GetLiveItems returns not-found, and Delete returns false with a
 // "storage error: ..." message. In-memory mode never returns an
 // error.
+//
+// A DataStore has two identifiers. id names the node and is recorded in each
+// item's LastUpdatedBy. clockID names the writer in the vector clocks of
+// items this store versions; a node passes its node ID plus incarnation (see
+// internal/identity) so that a replacement node reusing the ID starts a
+// fresh clock entry instead of restarting an old one. The plain constructors
+// use id for both.
 type DataStore struct {
 	id        string
+	clockID   string
 	store     map[string][]*model.DataItem // in-memory mode only; nil when persister != nil
 	persister Persister                    // persister-backed mode only
 	mu        sync.Mutex
 }
 
 func NewDataStore(id string) *DataStore {
+	return NewDataStoreWithClockID(id, id)
+}
+
+// NewDataStoreWithClockID is NewDataStore with vector-clock entries named
+// clockID instead of id.
+func NewDataStoreWithClockID(id, clockID string) *DataStore {
 	return &DataStore{
-		id:    id,
-		store: make(map[string][]*model.DataItem),
+		id:      id,
+		clockID: clockID,
+		store:   make(map[string][]*model.DataItem),
 	}
 }
 
@@ -47,8 +62,15 @@ func NewDataStore(id string) *DataStore {
 // instead of in memory. The caller owns p's lifecycle (opening and closing
 // it).
 func NewDataStoreWithPersister(id string, p Persister) *DataStore {
+	return NewDataStoreWithPersisterAndClockID(id, id, p)
+}
+
+// NewDataStoreWithPersisterAndClockID is NewDataStoreWithPersister with
+// vector-clock entries named clockID instead of id.
+func NewDataStoreWithPersisterAndClockID(id, clockID string, p Persister) *DataStore {
 	return &DataStore{
 		id:        id,
+		clockID:   clockID,
 		persister: p,
 	}
 }
@@ -170,7 +192,7 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *mode
 
 		incoming := &model.DataItem{
 			Value:         value,
-			VectorClock:   vectorclock.BuildFromContext(base, ds.id),
+			VectorClock:   vectorclock.BuildFromContext(base, ds.clockID),
 			LastUpdatedBy: ds.id,
 		}
 		if err := ds.persister.Put(key, incoming); err != nil {
@@ -189,7 +211,7 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *mode
 
 	incoming := &model.DataItem{
 		Value:         value,
-		VectorClock:   vectorclock.BuildFromContext(base, ds.id),
+		VectorClock:   vectorclock.BuildFromContext(base, ds.clockID),
 		LastUpdatedBy: ds.id,
 	}
 
@@ -234,7 +256,7 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 
 	tombstone := &model.DataItem{
 		Value:         nil,
-		VectorClock:   vectorclock.BuildFromContext(base, ds.id),
+		VectorClock:   vectorclock.BuildFromContext(base, ds.clockID),
 		LastUpdatedBy: ds.id,
 		IsDeleted:     true,
 	}

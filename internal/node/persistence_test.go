@@ -58,6 +58,7 @@ func TestPersistentNodeRecoversFromWAL(t *testing.T) {
 	ctx := context.Background()
 
 	nd := openSoloNode(t, dir, 1<<20) // large threshold: nothing flushes
+	clockID := nd.ClockID()
 	for _, v := range []string{"v1", "v2"} {
 		if err := nd.Put(ctx, "k", v, nil); err != nil {
 			t.Fatalf("Put %s failed: %v", v, err)
@@ -75,8 +76,8 @@ func TestPersistentNodeRecoversFromWAL(t *testing.T) {
 
 	reopened := openSoloNode(t, dir, 1<<20)
 	t.Cleanup(func() { reopened.Close() })
-	assertRecovered(t, reopened, "k", "v2", map[string]uint32{"node-1": 2})
-	assertRecovered(t, reopened, "other", "x", map[string]uint32{"node-1": 1})
+	assertRecovered(t, reopened, "k", "v2", map[string]uint32{clockID: 2})
+	assertRecovered(t, reopened, "other", "x", map[string]uint32{clockID: 1})
 }
 
 // TestPersistentNodeRecoversFromSSTables: writes flushed to SSTables must
@@ -88,6 +89,7 @@ func TestPersistentNodeRecoversFromSSTables(t *testing.T) {
 	ctx := context.Background()
 
 	nd := openSoloNode(t, dir, 10) // tiny threshold: every Put flushes
+	clockID := nd.ClockID()
 	for _, v := range []string{"v1", "v2"} {
 		if err := nd.Put(ctx, "k", v, nil); err != nil {
 			t.Fatalf("Put %s failed: %v", v, err)
@@ -112,7 +114,7 @@ func TestPersistentNodeRecoversFromSSTables(t *testing.T) {
 
 	reopened := openSoloNode(t, dir, 10)
 	t.Cleanup(func() { reopened.Close() })
-	assertRecovered(t, reopened, "k", "v2", map[string]uint32{"node-1": 2})
+	assertRecovered(t, reopened, "k", "v2", map[string]uint32{clockID: 2})
 }
 
 // TestNewPersistentClosesMainEngineWhenHintsOpenFails: if hints.Open fails

@@ -15,6 +15,7 @@ import (
 
 	"distributed-kv-datastore/internal/hashring"
 	"distributed-kv-datastore/internal/hints"
+	"distributed-kv-datastore/internal/identity"
 	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/rpc"
@@ -36,7 +37,11 @@ import (
 const defaultVirtualNodesPerPhysical = 150
 
 type Node struct {
+	// ID is the node's identity in the ring, the membership, hint targets and
+	// peer connections. Its writes are versioned under clockID instead: see
+	// ClockID.
 	ID            string
+	clockID       string
 	Store         *store.DataStore
 	Address       string
 	NeighborAddrs map[string]string
@@ -74,13 +79,27 @@ type Node struct {
 // nodes to compute identical preference lists. It panics if id or a neighbor
 // ID is empty: the IDs come from validated configuration, so that is a
 // programming error (NewPersistent returns it as an error instead).
+//
+// It takes a new incarnation each time (see ClockID), so it is meant for
+// tests and demos: nothing survives a restart, and a restarted in-memory node
+// is a new writer.
 func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node {
 	ring, err := ringFor(id, neighborAddrs)
 	if err != nil {
 		panic(fmt.Sprintf("node %q: %v", id, err))
 	}
-	return newNode(id, address, n, w, r, neighborAddrs, ring, store.NewDataStore(id), nil, nil)
+	clockID := identity.ClockID(id, identity.NewIncarnation())
+	return newNode(id, clockID, address, n, w, r, neighborAddrs, ring, store.NewDataStoreWithClockID(id, clockID), nil, nil)
 }
+
+// ClockID is the name this node's writes carry in vector clocks: its node ID
+// plus an incarnation, "<id>#<16 hex chars>". A persistent node's incarnation
+// is created on the first boot of its data directory and kept in its IDENTITY
+// file, so it is the same across restarts; a data directory that is replaced
+// gets a new one. That keeps a replacement node that reuses an ID from
+// restarting the counter of its predecessor's clock entry, which replicas
+// would treat as an older write and drop.
+func (n *Node) ClockID() string { return n.clockID }
 
 // NewPersistent is New with the node's data kept on disk: it opens (or
 // creates) a StorageEngine at dataDir — replaying its WAL and loading its
@@ -89,6 +108,12 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node
 // node's hinted-handoff store, on its own engine at dataDir/hints (which
 // the main engine ignores). maxMemtableBytes is both engines' flush
 // threshold. The caller must Close the node to close them cleanly.
+//
+// Once the engine holds the directory's lock, NewPersistent loads the
+// directory's incarnation from its IDENTITY file, or creates and durably
+// stores one (see internal/identity) before anything can be written. It
+// refuses to start, naming both IDs and the directory, if the file belongs to
+// a different node ID.
 func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
 	ring, err := ringFor(id, neighborAddrs)
 	if err != nil {
@@ -98,12 +123,18 @@ func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]str
 	if err != nil {
 		return nil, fmt.Errorf("node %s: open storage at %s: %w", id, dataDir, err)
 	}
+	incarnation, err := identity.LoadOrCreate(dataDir, id)
+	if err != nil {
+		e.Close()
+		return nil, fmt.Errorf("node %s: %w", id, err)
+	}
 	hs, err := hints.Open(filepath.Join(dataDir, "hints"), maxMemtableBytes)
 	if err != nil {
 		e.Close()
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
-	return newNode(id, address, n, w, r, neighborAddrs, ring, store.NewDataStoreWithPersister(id, e), e, hs), nil
+	clockID := identity.ClockID(id, incarnation)
+	return newNode(id, clockID, address, n, w, r, neighborAddrs, ring, store.NewDataStoreWithPersisterAndClockID(id, clockID, e), e, hs), nil
 }
 
 // ringFor builds the hash ring for a node: a pure function of the member set
@@ -121,9 +152,10 @@ func ringFor(id string, neighborAddrs map[string]string) (*hashring.HashRing, er
 	return hashring.NewHashRingFromMembers(defaultVirtualNodesPerPhysical, members)
 }
 
-func newNode(id, address string, n, w, r int, neighborAddrs map[string]string, ring *hashring.HashRing, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
+func newNode(id, clockID, address string, n, w, r int, neighborAddrs map[string]string, ring *hashring.HashRing, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
 	return &Node{
 		ID:            id,
+		clockID:       clockID,
 		Store:         ds,
 		Address:       address,
 		NeighborAddrs: neighborAddrs,

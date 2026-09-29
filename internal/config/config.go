@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -89,8 +90,14 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// clockIDSeparator joins a node ID and its incarnation in a vector-clock ID,
+// so no node ID may contain it.
+const clockIDSeparator = "#"
+
 // validate checks every rule Load requires before a Config is usable:
 //   - nodeId is present and matches a member's ID
+//   - no node or member ID contains '#', the separator in vector-clock IDs
+//     ("<id>#<incarnation>", see internal/identity)
 //   - every member ID is unique, and every member address is unique
 //   - 1 <= W, R <= N <= len(members)
 //   - every interval and timeout is > 0
@@ -103,11 +110,17 @@ func (c *Config) validate() error {
 	if c.NodeID == "" {
 		return fmt.Errorf("config: nodeId is required (or set KV_NODE_ID)")
 	}
+	if strings.Contains(c.NodeID, clockIDSeparator) {
+		return fmt.Errorf("config: nodeId %q must not contain %q (the clock-ID separator)", c.NodeID, clockIDSeparator)
+	}
 
 	seenID := make(map[string]bool, len(c.Cluster.Members))
 	seenAddr := make(map[string]bool, len(c.Cluster.Members))
 	selfFound := false
 	for _, m := range c.Cluster.Members {
+		if strings.Contains(m.ID, clockIDSeparator) {
+			return fmt.Errorf("config: cluster.members: id %q must not contain %q (the clock-ID separator)", m.ID, clockIDSeparator)
+		}
 		if seenID[m.ID] {
 			return fmt.Errorf("config: cluster.members: duplicate id %q", m.ID)
 		}

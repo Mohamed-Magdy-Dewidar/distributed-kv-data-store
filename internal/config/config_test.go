@@ -51,6 +51,15 @@ func TestValidateRules(t *testing.T) {
 			mutate:    func(c *Config) { c.NodeID = "kv-99" },
 			wantInErr: "nodeId",
 		},
+		"nodeId contains the clock-ID separator": {
+			// "kv#0" is not in the members either: the separator check must fire first.
+			mutate:    func(c *Config) { c.NodeID = "kv#0" },
+			wantInErr: `nodeId "kv#0" must not contain "#"`,
+		},
+		"member id contains the clock-ID separator": {
+			mutate:    func(c *Config) { c.Cluster.Members[1].ID = "kv#1" },
+			wantInErr: `id "kv#1" must not contain "#"`,
+		},
 		"duplicate member id": {
 			mutate: func(c *Config) {
 				c.Cluster.Members[1].ID = c.Cluster.Members[0].ID

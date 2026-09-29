@@ -26,6 +26,7 @@ This project is a Dynamo-style key-value store built as a learning and portfolio
 - **Anti-entropy is unscoped.** Every round rebuilds full Merkle trees per peer, including keys the two nodes don't share, so those buckets stay marked divergent. Correct, but wasteful.
 - **Hints never expire.** Delivery markers accumulate forever.
 - **Hints are skipped during shutdown.** Hint creation is skipped once shutdown has begun. This is safe given the shutdown order, which stops listeners first.
+- **In-memory mode is for tests and demos.** With `dataDir: ""` nothing survives a restart, and each process takes a new writer identity (see "Never restore a node's data dir" under Durability), so a restarted in-memory node comes back empty and is a new writer.
 - **In-memory nodes have no hinted handoff.** With `dataDir: ""`, a write to an unreachable replica converges only through anti-entropy, and no log line marks that a hint was skipped rather than stored.
 - **The shutdown budget bounds only the gRPC stop.** `timeouts.shutdown` limits `rpc.Listener.StopWithin`. The steps after it (stopping background loops, closing storage) are not bounded; they wait for in-flight work such as an anti-entropy round or a flush.
 - **Long RPCs are not waited for at shutdown.** An RPC still running when the shutdown budget expires is left behind. In practice this is only `GetMerkleTree`, because `merkle.Build` cannot be cancelled. It keeps running, read-only, until the process exits.
@@ -33,5 +34,6 @@ This project is a Dynamo-style key-value store built as a learning and portfolio
 
 ## Durability
 
+- **Never restore a node's data dir from a stale backup.** A node's writes are versioned under its node ID plus an incarnation stored in the data dir's `IDENTITY` file, which is what keeps a replacement node on an empty dir from being mistaken for its predecessor. A restored old dir brings back an old incarnation with old counters: replicas that have since seen higher counts for it drop the node's new writes as older, while acknowledging them. Replace the node with an empty dir instead.
 - **Durability is verified on Linux only.** Directory fsync is a no-op on Windows; the code relies on NTFS metadata journaling there.
 - **Crash tests cover process crashes, not power loss.** Kill-and-restart tests prove recovery from a process crash. They do not prove recovery from power loss or a lying disk cache.
