@@ -105,28 +105,7 @@ func write(dataDir string, f file) error {
 	if err != nil {
 		return fmt.Errorf("identity: encode: %w", err)
 	}
-	path := filepath.Join(dataDir, FileName)
-	tmp := path + ".tmp"
-
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return fmt.Errorf("identity: create %s: %w", tmp, err)
-	}
-	if _, err := out.Write(data); err != nil {
-		out.Close()
-		return fmt.Errorf("identity: write %s: %w", tmp, err)
-	}
-	if err := out.Sync(); err != nil {
-		out.Close()
-		return fmt.Errorf("identity: sync %s: %w", tmp, err)
-	}
-	if err := out.Close(); err != nil {
-		return fmt.Errorf("identity: close %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("identity: install %s: %w", path, err)
-	}
-	if err := fsutil.SyncDir(dataDir); err != nil {
+	if err := fsutil.WriteFileAtomic(filepath.Join(dataDir, FileName), data, 0o644); err != nil {
 		return fmt.Errorf("identity: %w", err)
 	}
 	return nil

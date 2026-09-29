@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,30 +14,23 @@ import (
 	"distributed-kv-datastore/internal/rpc"
 )
 
-// viewWithAddr returns a copy of v at the next epoch with id's address
-// changed. The ring is shared: it is immutable, and the member IDs are the
-// same.
-func viewWithAddr(v *view, id, addr string) *view {
-	members := maps.Clone(v.members)
+// membersWithAddr returns a copy of nd's current members with id's address
+// changed (or id added).
+func membersWithAddr(nd *Node, id, addr string) map[string]string {
+	_, members := nd.Membership()
 	members[id] = addr
-	return &view{epoch: v.epoch + 1, members: members, ring: v.ring}
+	return members
 }
 
-// viewAtEpoch returns v with the same members and ring under another epoch.
-func viewAtEpoch(v *view, epoch uint64) *view {
-	return &view{epoch: epoch, members: maps.Clone(v.members), ring: v.ring}
-}
-
-// (a) Swapping views while Put, Get and anti-entropy run must not race, and
-// none of them may fail: both views hold the same members, so every
+// (a) Publishing new views while Put, Get and anti-entropy run must not race,
+// and none of them may fail: every view holds the same members, so every
 // operation is valid whichever one it loads.
-func TestViewSwapsWhileOperationsRun(t *testing.T) {
+func TestNewViewsPublishedWhileOperationsRun(t *testing.T) {
 	addrs := map[string]string{"node-1": "localhost:60811", "node-2": "localhost:60812", "node-3": "localhost:60813"}
 	nodes, _ := startUniformCluster(t, addrs, 3, 2, 2, nil)
 	node1 := nodes["node-1"]
 
-	viewA := node1.membership.Load()
-	viewB := viewAtEpoch(viewA, viewA.epoch+1)
+	_, members := node1.Membership()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -48,11 +40,10 @@ func TestViewSwapsWhileOperationsRun(t *testing.T) {
 	swaps.Add(1)
 	go func() {
 		defer swaps.Done()
-		for i := 0; !stop.Load(); i++ {
-			if i%2 == 0 {
-				node1.setView(viewB)
-			} else {
-				node1.setView(viewA)
+		for epoch := uint64(1); !stop.Load(); epoch++ {
+			if changed, err := node1.SetMembership(epoch, members); err != nil || !changed {
+				t.Errorf("SetMembership(%d): changed=%v err=%v", epoch, changed, err)
+				return
 			}
 		}
 	}()
@@ -116,7 +107,9 @@ func TestAddressChangeDialsNewAddressAndRetiresTheOldClient(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	node1.setView(viewWithAddr(node1.membership.Load(), "node-2", newAddr))
+	if _, err := node1.SetMembership(1, membersWithAddr(node1, "node-2", newAddr)); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := fetch(); got != "new" {
 		t.Fatalf("after the change: got %v from node-2, want the new address's %q (traffic still goes to the old address)", got, "new")

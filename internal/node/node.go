@@ -14,7 +14,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"distributed-kv-datastore/internal/hashring"
 	"distributed-kv-datastore/internal/hints"
 	"distributed-kv-datastore/internal/identity"
 	"distributed-kv-datastore/internal/merkle"
@@ -52,6 +51,11 @@ type Node struct {
 	// it once per operation and use that one snapshot throughout; a published
 	// view is never mutated (see view).
 	membership atomic.Pointer[view]
+
+	// membershipMu serializes SetMembership. persistView, set for persistent
+	// nodes, durably stores a view before SetMembership publishes it.
+	membershipMu sync.Mutex
+	persistView  func(*view) error
 
 	// clients caches one connection per peer, with the address it was dialed
 	// at. A connection whose peer's address has since changed is moved to
@@ -96,7 +100,7 @@ type Node struct {
 // tests and demos: nothing survives a restart, and a restarted in-memory node
 // is a new writer.
 func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node {
-	v, err := initialView(id, address, neighborAddrs)
+	v, err := initialView(id, address, neighborAddrs, n)
 	if err != nil {
 		panic(fmt.Sprintf("node %q: %v", id, err))
 	}
@@ -126,8 +130,13 @@ func (n *Node) ClockID() string { return n.clockID }
 // stores one (see internal/identity) before anything can be written. It
 // refuses to start, naming both IDs and the directory, if the file belongs to
 // a different node ID.
+//
+// If the directory has a MEMBERSHIP file (written by SetMembership), that
+// view is the node's initial one instead of the epoch-0 view built from
+// neighborAddrs. A MEMBERSHIP file that is corrupt, invalid, or doesn't match
+// its own fingerprint (or n) makes NewPersistent fail rather than guess.
 func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
-	v, err := initialView(id, address, neighborAddrs)
+	v, err := initialView(id, address, neighborAddrs, n)
 	if err != nil {
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
@@ -140,28 +149,23 @@ func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]str
 		e.Close()
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
+	// A persisted membership replaces the epoch-0 view built from the
+	// configuration's member list: it is what this node last agreed to.
+	if persisted, found, err := loadMembership(dataDir, n); err != nil {
+		e.Close()
+		return nil, fmt.Errorf("node %s: %w", id, err)
+	} else if found {
+		v = persisted
+	}
 	hs, err := hints.Open(filepath.Join(dataDir, "hints"), maxMemtableBytes)
 	if err != nil {
 		e.Close()
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
 	clockID := identity.ClockID(id, incarnation)
-	return newNode(id, clockID, address, n, w, r, v, store.NewDataStoreWithPersisterAndClockID(id, clockID, e), e, hs), nil
-}
-
-// ringFor builds the hash ring for a node: a pure function of the member set
-// {id} ∪ keys(neighborAddrs), so every node given the same set builds the
-// same ring whatever order it learned the members in. A neighbor entry for
-// id itself is the same member, not a second one.
-func ringFor(id string, neighborAddrs map[string]string) (*hashring.HashRing, error) {
-	members := make([]string, 0, len(neighborAddrs)+1)
-	members = append(members, id)
-	for peerID := range neighborAddrs {
-		if peerID != id {
-			members = append(members, peerID)
-		}
-	}
-	return hashring.NewHashRingFromMembers(defaultVirtualNodesPerPhysical, members)
+	nd := newNode(id, clockID, address, n, w, r, v, store.NewDataStoreWithPersisterAndClockID(id, clockID, e), e, hs)
+	nd.persistView = func(v *view) error { return writeMembership(dataDir, v) }
+	return nd, nil
 }
 
 func newNode(id, clockID, address string, n, w, r int, v *view, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
@@ -178,9 +182,6 @@ func newNode(id, clockID, address string, n, w, r int, v *view, ds *store.DataSt
 	nd.membership.Store(v)
 	return nd
 }
-
-// setView installs v as the node's current view. Tests only, for now.
-func (n *Node) setView(v *view) { n.membership.Store(v) }
 
 // Close releases what n owns, in an order that keeps anything still
 // running from touching what's already closed:

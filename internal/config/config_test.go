@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -211,6 +212,40 @@ func TestLoadParsesDurationsFromPlainStrings(t *testing.T) {
 	}
 	if cfg.Timeouts.Shutdown != 20*time.Second {
 		t.Errorf("expected timeouts.shutdown=20s, got %v", cfg.Timeouts.Shutdown)
+	}
+}
+
+// TestLoadParsesClusterEpoch: cluster.epoch defaults to 0 and reads a
+// uint64 when set; MemberAddrs lists every member, this node included.
+func TestLoadParsesClusterEpoch(t *testing.T) {
+	withEpoch := func(epoch string) string {
+		return strings.Replace(validYAML, "  n: 2\n", "  n: 2\n  epoch: "+epoch+"\n", 1)
+	}
+	cfg, err := Load(writeConfig(t, validYAML))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Cluster.Epoch != 0 {
+		t.Errorf("expected cluster.epoch to default to 0, got %d", cfg.Cluster.Epoch)
+	}
+
+	cfg, err = Load(writeConfig(t, withEpoch("7")))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Cluster.Epoch != 7 {
+		t.Errorf("expected cluster.epoch=7, got %d", cfg.Cluster.Epoch)
+	}
+	want := map[string]string{
+		"kv-0": "kv-0.kv.default.svc.cluster.local:7000",
+		"kv-1": "kv-1.kv.default.svc.cluster.local:7000",
+	}
+	if got := cfg.MemberAddrs(); !reflect.DeepEqual(got, want) {
+		t.Errorf("MemberAddrs = %v, want %v", got, want)
+	}
+
+	if _, err := Load(writeConfig(t, withEpoch("-1"))); err == nil {
+		t.Error("expected a negative cluster.epoch to be rejected")
 	}
 }
 

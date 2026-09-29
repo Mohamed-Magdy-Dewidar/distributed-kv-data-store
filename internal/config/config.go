@@ -26,9 +26,15 @@ type Listen struct {
 }
 
 type Cluster struct {
-	N       int      `yaml:"n"`
-	W       int      `yaml:"w"`
-	R       int      `yaml:"r"`
+	N int `yaml:"n"`
+	W int `yaml:"w"`
+	R int `yaml:"r"`
+
+	// Epoch versions the member list: raise it whenever Members changes. A
+	// node that has already adopted a newer epoch keeps that membership
+	// (its persisted one) and ignores this list; one that holds the same
+	// epoch with a different list refuses to start. Defaults to 0.
+	Epoch   uint64   `yaml:"epoch"`
 	Members []Member `yaml:"members"`
 }
 
@@ -177,6 +183,16 @@ func (c *Config) SelfAddress() string {
 		}
 	}
 	return ""
+}
+
+// MemberAddrs returns every member's address, keyed by ID — this node's
+// included — the shape node.Node.SetMembership takes.
+func (c *Config) MemberAddrs() map[string]string {
+	members := make(map[string]string, len(c.Cluster.Members))
+	for _, m := range c.Cluster.Members {
+		members[m.ID] = m.Address
+	}
+	return members
 }
 
 // NeighborAddrs returns every other member's address, keyed by ID — the

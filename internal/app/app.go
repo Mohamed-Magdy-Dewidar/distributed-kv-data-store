@@ -99,7 +99,8 @@ func (p *probeServer) stop() error {
 // in-memory node when cfg.DataDir is empty, node.NewPersistent
 // otherwise — a locked data dir surfaces here as an error wrapping
 // engine.ErrLocked and naming the dir), then this node's ReplicationTimeout
-// and MaxReconnectBackoff, then its gRPC listener, then its background
+// and MaxReconnectBackoff, then the configured membership (see
+// applyConfiguredMembership), then its gRPC listener, then its background
 // loops (compaction on its own cancelable context; anti-entropy and hint
 // delivery, which Node.Close already knows how to stop and drain), then
 // the probe server is marked ready.
@@ -133,6 +134,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	nd.QuorumConfig.ReplicationTimeout = cfg.Timeouts.Replication
 	nd.QuorumConfig.MaxReconnectBackoff = cfg.Timeouts.MaxReconnectBackoff
+
+	if err := applyConfiguredMembership(nd, cfg); err != nil {
+		nd.Close()
+		step("node-closed")
+		probe.stop()
+		step("probe-stopped")
+		return err
+	}
 
 	listener, err := rpc.Serve(cfg.Listen.GRPC, nd.Store, nd)
 	if err != nil {
@@ -181,6 +190,28 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("app: shutdown: %w", err)
 	}
 	log.Printf("app: node %s shutdown complete", cfg.NodeID)
+	return nil
+}
+
+// applyConfiguredMembership offers the configuration's member list, at
+// cluster.epoch, to nd. The node keeps a newer membership it already holds
+// (persisted from an earlier run): that is logged and startup continues. A
+// list that contradicts the membership held for the same epoch, or is
+// invalid, fails startup, so an operator who changed the members without
+// raising the epoch finds out instead of running on a mismatched ring.
+func applyConfiguredMembership(nd *node.Node, cfg *config.Config) error {
+	changed, err := nd.SetMembership(cfg.Cluster.Epoch, cfg.MemberAddrs())
+	switch {
+	case errors.Is(err, node.ErrStaleEpoch):
+		held, _ := nd.Membership()
+		log.Printf("app: node %s: persisted membership epoch %d is newer than the config's cluster.epoch %d; keeping the persisted membership",
+			cfg.NodeID, held, cfg.Cluster.Epoch)
+		return nil
+	case err != nil:
+		return fmt.Errorf("app: apply cluster.members at cluster.epoch %d: %w", cfg.Cluster.Epoch, err)
+	case changed:
+		log.Printf("app: node %s: adopted membership epoch %d from the config", cfg.NodeID, cfg.Cluster.Epoch)
+	}
 	return nil
 }
 

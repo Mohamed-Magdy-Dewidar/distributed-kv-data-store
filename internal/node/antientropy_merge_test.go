@@ -76,7 +76,9 @@ func TestReconcileSendsNothingForAKeyAlreadyInSync(t *testing.T) {
 		t.Fatalf("serve node-2: %v", err)
 	}
 	t.Cleanup(listener.Stop)
-	node1.setView(viewWithAddr(node1.membership.Load(), "node-2", "localhost:60523"))
+	if _, err := node1.SetMembership(1, membersWithAddr(node1, "node-2", "localhost:60523")); err != nil {
+		t.Fatalf("SetMembership: %v", err)
+	}
 
 	item := node1.Store.Put("k", "in-sync", nil)
 	if err := node1.Replicate(context.Background(), "node-2", "k", []*model.DataItem{item}); err != nil {
