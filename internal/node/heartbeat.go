@@ -90,7 +90,7 @@ func (n *Node) pruneHealth(v *view) {
 // StartHeartbeatLoop pings the other members every interval (see
 // heartbeatRound, and startLoop for scheduling and stopping).
 func (n *Node) StartHeartbeatLoop(ctx context.Context, interval time.Duration) {
-	n.startLoop(ctx, interval, n.heartbeatRound)
+	n.startLoop(ctx, interval, n.heartbeatRound, nil)
 }
 
 // heartbeatRound pings every member of the current view but n, in parallel,

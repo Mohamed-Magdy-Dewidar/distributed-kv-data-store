@@ -28,7 +28,9 @@ type Persister interface {
 	// the key's whole visible set.
 	Restore(key string, items []*model.DataItem) error
 
-	// Keys returns every key currently stored, tombstoned keys included.
+	// Keys returns every key currently stored, tombstoned keys included. It
+	// must be safe to call concurrently with the other methods: DataStore
+	// calls it without holding its lock.
 	Keys() ([]string, error)
 }
 

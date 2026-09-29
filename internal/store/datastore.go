@@ -105,10 +105,14 @@ func reversed(items []*model.DataItem) []*model.DataItem {
 // Needed by anti-entropy to enumerate what a bucket actually contains.
 // In persister-backed mode it returns the error if the persister read
 // fails.
+//
+// In persister-backed mode it does not take ds.mu: listing every key can be
+// long on a big store, and the persister's Keys is safe to call concurrently
+// with its other methods (StorageEngine.Keys only reads a snapshot of its
+// layers), so a scan must not stall every Get and Put behind it. The result
+// is not a point-in-time snapshot: a key written meanwhile may or may not be
+// in it.
 func (ds *DataStore) Keys() ([]string, error) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
 	if ds.persister != nil {
 		keys, err := ds.persister.Keys()
 		if err != nil {
@@ -117,6 +121,9 @@ func (ds *DataStore) Keys() ([]string, error) {
 		}
 		return keys, nil
 	}
+
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
 
 	keys := make([]string, 0, len(ds.store))
 	for k := range ds.store {

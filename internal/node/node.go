@@ -61,6 +61,7 @@ type Node struct {
 	// about each peer that has been pinged; a peer with no entry is alive.
 	// conflictSeen remembers the last membership conflict logged per peer.
 	// adopting makes fetching-and-adopting a newer membership single-flight.
+	aeTrigger           chan struct{} // capacity 1: see TriggerAntiEntropy
 	healthMu            sync.RWMutex
 	health              map[string]*peerHealth
 	conflictSeen        map[string]string
@@ -187,6 +188,7 @@ func newNode(id, clockID, address string, n, w, r int, v *view, ds *store.DataSt
 		Address:      address,
 		QuorumConfig: NewQuorumConfig(n, w, r),
 		clients:      make(map[string]peerClient),
+		aeTrigger:    make(chan struct{}, 1),
 		health:       make(map[string]*peerHealth),
 		conflictSeen: make(map[string]string),
 		engine:       e,
@@ -843,7 +845,7 @@ func missingFrom(set, incoming []*model.DataItem) []*model.DataItem {
 // unreachable) keeps running anti-entropy outward, pulling from and
 // pushing to its peers: "stopped" means unreachable by others, not paused.
 func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration) {
-	n.startLoop(ctx, interval, n.runAntiEntropyRound)
+	n.startLoop(ctx, interval, n.runAntiEntropyRound, n.aeTrigger)
 }
 
 // StartHintDeliveryLoop delivers n's pending hints every interval (see
@@ -853,7 +855,7 @@ func (n *Node) StartHintDeliveryLoop(ctx context.Context, interval time.Duration
 	if n.hints == nil {
 		return
 	}
-	n.startLoop(ctx, interval, n.deliverHints)
+	n.startLoop(ctx, interval, n.deliverHints, nil)
 }
 
 // startLoop runs round on a repeating interval until ctx is canceled or
@@ -866,7 +868,12 @@ func (n *Node) StartHintDeliveryLoop(ctx context.Context, interval time.Duration
 // time; the random offset keeps each node's schedule independent of the
 // others', so rounds don't all land on the cluster at once. Canceling
 // during that first delay stops the loop at once.
-func (n *Node) startLoop(ctx context.Context, interval time.Duration, round func(context.Context)) {
+//
+// A receive on trigger (a nil trigger never fires) starts a round at once,
+// including in place of the first delay, and restarts the interval from then.
+// The round always runs on the loop's own goroutine, so a triggered round can
+// never overlap a scheduled one.
+func (n *Node) startLoop(ctx context.Context, interval time.Duration, round func(context.Context), trigger <-chan struct{}) {
 	n.bgMu.Lock()
 	defer n.bgMu.Unlock()
 	if n.bgStopped {
@@ -882,6 +889,7 @@ func (n *Node) startLoop(ctx context.Context, interval time.Duration, round func
 		defer first.Stop()
 		select {
 		case <-first.C:
+		case <-trigger:
 		case <-ctx.Done():
 			return
 		}
@@ -892,6 +900,8 @@ func (n *Node) startLoop(ctx context.Context, interval time.Duration, round func
 			round(ctx)
 			select {
 			case <-ticker.C:
+			case <-trigger:
+				ticker.Reset(interval)
 			case <-ctx.Done():
 				return
 			}
@@ -899,10 +909,30 @@ func (n *Node) startLoop(ctx context.Context, interval time.Duration, round func
 	}()
 }
 
+// testHookAntiEntropyRound, when set, is called with true as a round starts
+// and false as it ends. Tests only, to observe how rounds overlap. Always nil
+// in production.
+var testHookAntiEntropyRound func(start bool)
+
+// TriggerAntiEntropy asks the anti-entropy loop for a round now instead of at
+// its next interval. It never blocks: triggers that arrive while one is
+// pending or a round is running coalesce into a single further round. It does
+// nothing useful on a node whose anti-entropy loop isn't running.
+func (n *Node) TriggerAntiEntropy() {
+	select {
+	case n.aeTrigger <- struct{}{}:
+	default:
+	}
+}
+
 // runAntiEntropyRound runs RunAntiEntropy against every co-replicant peer
 // in turn, logging (not stopping on) each failure. Once ctx is canceled it
 // starts no further peer: those would only fail.
 func (n *Node) runAntiEntropyRound(ctx context.Context) {
+	if testHookAntiEntropyRound != nil {
+		testHookAntiEntropyRound(true)
+		defer testHookAntiEntropyRound(false)
+	}
 	for _, peerID := range n.coReplicantPeers(n.membership.Load()) {
 		if ctx.Err() != nil {
 			return
