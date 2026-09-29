@@ -29,6 +29,7 @@ This project is a Dynamo-style key-value store built as a learning and portfolio
 ## Operations and cost
 
 - **Anti-entropy is unscoped.** Every round rebuilds full Merkle trees per peer, including keys the two nodes don't share, so those buckets stay marked divergent. Correct, but wasteful.
+- **Load across nodes is skewed.** The hash ring places a node's 150 virtual nodes unevenly. With 25 nodes the balance test (`TestNoNodeIsCatastrophicallyOverOrUnderloaded`) shows between 1.5% and 7.2% of keys per node where an even split would give 4%, and adding vnodes or nodes does not tighten this much. A stronger hash would fix it, but it changes every ring position: it needs a new ring-scheme version in the membership fingerprint (`ring-v1` today) and a planned migration, since nodes on different schemes would disagree about who owns every key.
 - **Hints never expire.** Delivery markers accumulate forever. Hints for a node that has been removed from the membership are kept but never delivered: the store cannot delete, and there is nowhere to send them.
 - **Hints are skipped during shutdown.** Hint creation is skipped once shutdown has begun. This is safe given the shutdown order, which stops listeners first.
 - **In-memory mode is for tests and demos.** With `dataDir: ""` nothing survives a restart, and each process takes a new writer identity (see "Never restore a node's data dir" under Durability), so a restarted in-memory node comes back empty and is a new writer.

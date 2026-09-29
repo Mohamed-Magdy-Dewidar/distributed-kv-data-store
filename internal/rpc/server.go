@@ -155,13 +155,7 @@ func (s *Server) CoordinatePut(ctx context.Context, req *pb.CoordinatePutRequest
 
 	// An unset context stays nil ("build on whatever versions exist"); a set
 	// one stays non-nil even when empty ("build on nothing").
-	var clientContext map[string]uint32
-	if req.Context != nil {
-		clientContext = make(map[string]uint32, len(req.Context.Entries))
-		for node, version := range req.Context.Entries {
-			clientContext[node] = version
-		}
-	}
+	clientContext := contextFromProto(req.Context)
 
 	if err := s.coord.CoordinatePut(ctx, req.Key, value, clientContext); err != nil {
 		switch {

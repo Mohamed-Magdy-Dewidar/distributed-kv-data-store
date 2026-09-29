@@ -6,6 +6,7 @@ import (
 	"net"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 
 	"distributed-kv-datastore/internal/rpc/pb"
 	"distributed-kv-datastore/internal/store"
@@ -31,6 +32,13 @@ func Serve(address string, ds *store.DataStore, coord WriteCoordinator) (*Listen
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterKVReplicationServer(grpcServer, NewServer(ds, coord))
+	// The client-facing service shares the server (so StopWithin covers it),
+	// when the coordinator can serve it. Reflection lets tools like grpcurl
+	// list and call the services without the .proto files.
+	if kv, ok := coord.(KV); ok {
+		pb.RegisterKVClientServer(grpcServer, &clientService{kv: kv})
+	}
+	reflection.Register(grpcServer)
 
 	go func() {
 		_ = grpcServer.Serve(lis) // returns when Stop() is called

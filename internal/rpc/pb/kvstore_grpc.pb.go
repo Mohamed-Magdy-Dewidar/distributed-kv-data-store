@@ -19,6 +19,170 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	KVClient_Get_FullMethodName = "/kvstore.KVClient/Get"
+	KVClient_Put_FullMethodName = "/kvstore.KVClient/Put"
+)
+
+// KVClientClient is the client API for KVClient service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// KVClient is the API for clients of the store, served on the same port as
+// KVReplication.
+//
+// Errors: an empty key is INVALID_ARGUMENT; a canceled or expired call is
+// CANCELED / DEADLINE_EXCEEDED; anything else (quorum not reached, no replica
+// reachable, storage failure) is UNAVAILABLE with the reason in the message.
+//
+// Any error from Put means the outcome is unknown: the write may or may not
+// have been applied. Retrying the Put with the same context is safe; at worst
+// it leaves an extra sibling with the same value, which the next Get shows
+// and a Put with that Get's context collapses.
+type KVClientClient interface {
+	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
+	Put(ctx context.Context, in *PutRequest, opts ...grpc.CallOption) (*PutResponse, error)
+}
+
+type kVClientClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewKVClientClient(cc grpc.ClientConnInterface) KVClientClient {
+	return &kVClientClient{cc}
+}
+
+func (c *kVClientClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetResponse)
+	err := c.cc.Invoke(ctx, KVClient_Get_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *kVClientClient) Put(ctx context.Context, in *PutRequest, opts ...grpc.CallOption) (*PutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PutResponse)
+	err := c.cc.Invoke(ctx, KVClient_Put_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// KVClientServer is the server API for KVClient service.
+// All implementations must embed UnimplementedKVClientServer
+// for forward compatibility.
+//
+// KVClient is the API for clients of the store, served on the same port as
+// KVReplication.
+//
+// Errors: an empty key is INVALID_ARGUMENT; a canceled or expired call is
+// CANCELED / DEADLINE_EXCEEDED; anything else (quorum not reached, no replica
+// reachable, storage failure) is UNAVAILABLE with the reason in the message.
+//
+// Any error from Put means the outcome is unknown: the write may or may not
+// have been applied. Retrying the Put with the same context is safe; at worst
+// it leaves an extra sibling with the same value, which the next Get shows
+// and a Put with that Get's context collapses.
+type KVClientServer interface {
+	Get(context.Context, *GetRequest) (*GetResponse, error)
+	Put(context.Context, *PutRequest) (*PutResponse, error)
+	mustEmbedUnimplementedKVClientServer()
+}
+
+// UnimplementedKVClientServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedKVClientServer struct{}
+
+func (UnimplementedKVClientServer) Get(context.Context, *GetRequest) (*GetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedKVClientServer) Put(context.Context, *PutRequest) (*PutResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Put not implemented")
+}
+func (UnimplementedKVClientServer) mustEmbedUnimplementedKVClientServer() {}
+func (UnimplementedKVClientServer) testEmbeddedByValue()                  {}
+
+// UnsafeKVClientServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to KVClientServer will
+// result in compilation errors.
+type UnsafeKVClientServer interface {
+	mustEmbedUnimplementedKVClientServer()
+}
+
+func RegisterKVClientServer(s grpc.ServiceRegistrar, srv KVClientServer) {
+	// If the following call panics, it indicates UnimplementedKVClientServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&KVClient_ServiceDesc, srv)
+}
+
+func _KVClient_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVClientServer).Get(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KVClient_Get_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVClientServer).Get(ctx, req.(*GetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KVClient_Put_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVClientServer).Put(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KVClient_Put_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVClientServer).Put(ctx, req.(*PutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// KVClient_ServiceDesc is the grpc.ServiceDesc for KVClient service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var KVClient_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "kvstore.KVClient",
+	HandlerType: (*KVClientServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Get",
+			Handler:    _KVClient_Get_Handler,
+		},
+		{
+			MethodName: "Put",
+			Handler:    _KVClient_Put_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "internal/rpc/pb/kvstore.proto",
+}
+
+const (
 	KVReplication_Replicate_FullMethodName     = "/kvstore.KVReplication/Replicate"
 	KVReplication_FetchItem_FullMethodName     = "/kvstore.KVReplication/FetchItem"
 	KVReplication_GetMerkleTree_FullMethodName = "/kvstore.KVReplication/GetMerkleTree"

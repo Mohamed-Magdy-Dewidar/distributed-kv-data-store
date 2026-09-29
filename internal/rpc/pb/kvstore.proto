@@ -95,6 +95,47 @@ message GetMembershipResponse {
   string fingerprint = 3;
 }
 
+// The client-facing API (service KVClient, below). Values are UTF-8 strings.
+
+message GetRequest {
+  string key = 1;
+}
+
+// GetResponse carries every live sibling of the key. context is the causal
+// history to send back with the next Put for this key: it covers all the
+// siblings returned, tombstones included, so a Put that carries it
+// supersedes all of them. It is present even when found is false (the key is
+// missing or deleted).
+message GetResponse {
+  repeated string values = 1;
+  VectorContext context = 2;
+  bool found = 3;
+}
+
+message PutRequest {
+  string key = 1;
+  string value = 2;
+  VectorContext context = 3; // unset = build on the versions the coordinator has; set (even empty) = build on exactly this
+}
+
+message PutResponse {}
+
+// KVClient is the API for clients of the store, served on the same port as
+// KVReplication.
+//
+// Errors: an empty key is INVALID_ARGUMENT; a canceled or expired call is
+// CANCELED / DEADLINE_EXCEEDED; anything else (quorum not reached, no replica
+// reachable, storage failure) is UNAVAILABLE with the reason in the message.
+//
+// Any error from Put means the outcome is unknown: the write may or may not
+// have been applied. Retrying the Put with the same context is safe; at worst
+// it leaves an extra sibling with the same value, which the next Get shows
+// and a Put with that Get's context collapses.
+service KVClient {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Put(PutRequest) returns (PutResponse);
+}
+
 service KVReplication {
   rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
   rpc FetchItem(FetchItemRequest) returns (FetchItemResponse);

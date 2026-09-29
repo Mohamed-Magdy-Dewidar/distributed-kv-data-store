@@ -142,6 +142,15 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node
 // would treat as an older write and drop.
 func (n *Node) ClockID() string { return n.clockID }
 
+// Node serves the client-facing gRPC API, the coordinator side of forwarded
+// writes, and membership; rpc finds each of these by type assertion, so a
+// change that stopped satisfying one would otherwise fail only at run time.
+var (
+	_ rpc.KV                = (*Node)(nil)
+	_ rpc.WriteCoordinator  = (*Node)(nil)
+	_ rpc.MembershipService = (*Node)(nil)
+)
+
 // NewPersistent is New with the node's data kept on disk: it opens (or
 // creates) a StorageEngine at dataDir — replaying its WAL and loading its
 // live SSTables, so a node reopened on the same directory gets its data
