@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"fmt"
 	"net"
 
@@ -44,4 +45,32 @@ func (l *Listener) Addr() string {
 
 func (l *Listener) Stop() {
 	l.grpcServer.GracefulStop()
+}
+
+// StopWithin runs a graceful stop — waiting for in-flight RPCs to finish,
+// as Stop does — but falls back to a forced stop if ctx is done first.
+//
+// With a handler that ignores cancellation, calling Stop() while a
+// GracefulStop() is still in flight sometimes never returns (observed
+// blocked at grpc-go v1.84.0 server.go:1709, on Windows and Linux); with
+// handlers that honour cancellation it was bounded in 20/20 runs. Stop()
+// alone returns immediately even with a blocked handler. StopWithin
+// therefore returns as soon as ctx is done and fires Stop() in the
+// background without waiting on it. Callers must not assume the gRPC
+// server has fully stopped when StopWithin returns; in-flight handlers may
+// still be running.
+func (l *Listener) StopWithin(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		l.grpcServer.GracefulStop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+
+	go l.grpcServer.Stop()
 }
