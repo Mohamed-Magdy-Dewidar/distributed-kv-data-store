@@ -48,7 +48,15 @@ type probeServer struct {
 	node       atomic.Pointer[node.Node]
 	done       chan struct{} // closed when the server starts stopping
 	stopOnce   sync.Once
+
+	lis       net.Listener  // set by start; stop closes it itself
+	serveDone chan struct{} // closed when the Serve goroutine returns
 }
+
+// testHookBeforeProbeServe, when set, runs at the start of the probe
+// server's Serve goroutine. Tests only: it lets one stop the server before
+// Serve has seen its listener. Always nil in production.
+var testHookBeforeProbeServe func()
 
 func newProbeServer(addr string) *probeServer {
 	p := &probeServer{done: make(chan struct{})}
@@ -78,7 +86,13 @@ func (p *probeServer) start() error {
 	if err != nil {
 		return fmt.Errorf("app: probe server listen on %s: %w", p.httpServer.Addr, err)
 	}
+	p.lis, p.serveDone = lis, make(chan struct{})
+	hook := testHookBeforeProbeServe // read here, not in the goroutine
 	go func() {
+		defer close(p.serveDone)
+		if hook != nil {
+			hook()
+		}
 		_ = p.httpServer.Serve(lis) // returns http.ErrServerClosed once Shutdown/Close runs
 	}()
 	return nil
@@ -94,15 +108,27 @@ func (p *probeServer) setNode(nd *node.Node) {
 }
 
 // stop gracefully shuts the probe server down within probeShutdownTimeout,
-// falling back to an immediate close if that isn't enough.
+// falling back to an immediate close if that isn't enough. When it returns,
+// the probe port is free.
+//
+// Shutdown only closes listeners Serve has already registered, and Serve runs
+// in its own goroutine: if stop comes first (Run failing right after start),
+// the listener would stay bound until that goroutine got to run. So stop
+// closes the listener itself (closing it twice is harmless) and waits for the
+// Serve goroutine to return.
 func (p *probeServer) stop() error {
 	p.stopOnce.Do(func() { close(p.done) })
 	ctx, cancel := context.WithTimeout(context.Background(), probeShutdownTimeout)
 	defer cancel()
-	if err := p.httpServer.Shutdown(ctx); err != nil {
-		return p.httpServer.Close()
+	err := p.httpServer.Shutdown(ctx)
+	if err != nil {
+		err = p.httpServer.Close()
 	}
-	return nil
+	if p.lis != nil {
+		p.lis.Close()
+		<-p.serveDone
+	}
+	return err
 }
 
 // Run brings up one node from cfg and blocks until ctx is done, then shuts
