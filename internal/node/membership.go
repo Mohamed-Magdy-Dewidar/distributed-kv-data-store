@@ -17,6 +17,11 @@ var (
 	// node's current one. The node keeps its view.
 	ErrStaleEpoch = errors.New("stale membership epoch")
 
+	// ErrFingerprintMismatch is returned for a membership received from
+	// another node whose claimed fingerprint isn't the one computed from its
+	// members: it was corrupted, or built under a different N or ring scheme.
+	ErrFingerprintMismatch = errors.New("membership fingerprint does not match its members")
+
 	// ErrMembershipConflict is returned by SetMembership for the node's
 	// current epoch with different members, addresses or replication factor.
 	// One epoch must mean one membership; the node keeps its view.
@@ -48,6 +53,15 @@ func (n *Node) Membership() (epoch uint64, members map[string]string) {
 //
 // Calls are serialized. It returns whether the view changed.
 func (n *Node) SetMembership(epoch uint64, members map[string]string) (changed bool, err error) {
+	return n.setMembership(epoch, members, "")
+}
+
+// setMembership is SetMembership for a membership that may have come from
+// another node. If claimedFingerprint is non-empty it must equal the
+// fingerprint computed from members (and this node's N and ring scheme), or
+// the membership is rejected with ErrFingerprintMismatch: a fingerprint off
+// the wire is never trusted, only compared.
+func (n *Node) setMembership(epoch uint64, members map[string]string, claimedFingerprint string) (changed bool, err error) {
 	n.membershipMu.Lock()
 	defer n.membershipMu.Unlock()
 
@@ -57,6 +71,10 @@ func (n *Node) SetMembership(epoch uint64, members map[string]string) (changed b
 	v, err := buildView(epoch, members, n.QuorumConfig.N)
 	if err != nil {
 		return false, err
+	}
+
+	if claimedFingerprint != "" && v.fingerprint != claimedFingerprint {
+		return false, fmt.Errorf("%w: claimed %.12s, computed %.12s", ErrFingerprintMismatch, claimedFingerprint, v.fingerprint)
 	}
 
 	cur := n.membership.Load()
@@ -77,6 +95,7 @@ func (n *Node) SetMembership(epoch uint64, members map[string]string) (changed b
 	}
 	n.membership.Store(v)
 	n.retireClientsNotIn(v)
+	n.pruneHealth(v)
 	return true, nil
 }
 

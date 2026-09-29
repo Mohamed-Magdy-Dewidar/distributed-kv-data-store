@@ -620,6 +620,237 @@ func (*CoordinatePutResponse) Descriptor() ([]byte, []int) {
 	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{11}
 }
 
+// Ping is the heartbeat. The sender announces its own ID, its address (so a
+// receiver that does not list it yet can fetch its membership), and the
+// membership epoch and fingerprint it holds.
+type PingRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SenderId      string                 `protobuf:"bytes,1,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
+	SenderAddress string                 `protobuf:"bytes,2,opt,name=sender_address,json=senderAddress,proto3" json:"sender_address,omitempty"`
+	Epoch         uint64                 `protobuf:"varint,3,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Fingerprint   string                 `protobuf:"bytes,4,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PingRequest) Reset() {
+	*x = PingRequest{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PingRequest) ProtoMessage() {}
+
+func (x *PingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
+func (*PingRequest) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *PingRequest) GetSenderId() string {
+	if x != nil {
+		return x.SenderId
+	}
+	return ""
+}
+
+func (x *PingRequest) GetSenderAddress() string {
+	if x != nil {
+		return x.SenderAddress
+	}
+	return ""
+}
+
+func (x *PingRequest) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *PingRequest) GetFingerprint() string {
+	if x != nil {
+		return x.Fingerprint
+	}
+	return ""
+}
+
+// PingResponse names the answering node, so a caller can tell it reached the
+// node it meant to, and its membership epoch and fingerprint.
+type PingResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	Epoch         uint64                 `protobuf:"varint,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Fingerprint   string                 `protobuf:"bytes,3,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PingResponse) Reset() {
+	*x = PingResponse{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PingResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PingResponse) ProtoMessage() {}
+
+func (x *PingResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
+func (*PingResponse) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *PingResponse) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *PingResponse) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *PingResponse) GetFingerprint() string {
+	if x != nil {
+		return x.Fingerprint
+	}
+	return ""
+}
+
+type GetMembershipRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMembershipRequest) Reset() {
+	*x = GetMembershipRequest{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMembershipRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMembershipRequest) ProtoMessage() {}
+
+func (x *GetMembershipRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMembershipRequest.ProtoReflect.Descriptor instead.
+func (*GetMembershipRequest) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{14}
+}
+
+// GetMembershipResponse is the answering node's current membership. The
+// fingerprint is a claim: a receiver recomputes it from the members.
+type GetMembershipResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Members       map[string]string      `protobuf:"bytes,2,rep,name=members,proto3" json:"members,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // node ID -> address
+	Fingerprint   string                 `protobuf:"bytes,3,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMembershipResponse) Reset() {
+	*x = GetMembershipResponse{}
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMembershipResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMembershipResponse) ProtoMessage() {}
+
+func (x *GetMembershipResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_rpc_pb_kvstore_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMembershipResponse.ProtoReflect.Descriptor instead.
+func (*GetMembershipResponse) Descriptor() ([]byte, []int) {
+	return file_internal_rpc_pb_kvstore_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetMembershipResponse) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *GetMembershipResponse) GetMembers() map[string]string {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+func (x *GetMembershipResponse) GetFingerprint() string {
+	if x != nil {
+		return x.Fingerprint
+	}
+	return ""
+}
+
 var File_internal_rpc_pb_kvstore_proto protoreflect.FileDescriptor
 
 const file_internal_rpc_pb_kvstore_proto_rawDesc = "" +
@@ -666,13 +897,32 @@ const file_internal_rpc_pb_kvstore_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x120\n" +
 	"\acontext\x18\x03 \x01(\v2\x16.kvstore.VectorContextR\acontext\"\x17\n" +
-	"\x15CoordinatePutResponse2\x87\x03\n" +
+	"\x15CoordinatePutResponse\"\x89\x01\n" +
+	"\vPingRequest\x12\x1b\n" +
+	"\tsender_id\x18\x01 \x01(\tR\bsenderId\x12%\n" +
+	"\x0esender_address\x18\x02 \x01(\tR\rsenderAddress\x12\x14\n" +
+	"\x05epoch\x18\x03 \x01(\x04R\x05epoch\x12 \n" +
+	"\vfingerprint\x18\x04 \x01(\tR\vfingerprint\"_\n" +
+	"\fPingResponse\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
+	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12 \n" +
+	"\vfingerprint\x18\x03 \x01(\tR\vfingerprint\"\x16\n" +
+	"\x14GetMembershipRequest\"\xd2\x01\n" +
+	"\x15GetMembershipResponse\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12E\n" +
+	"\amembers\x18\x02 \x03(\v2+.kvstore.GetMembershipResponse.MembersEntryR\amembers\x12 \n" +
+	"\vfingerprint\x18\x03 \x01(\tR\vfingerprint\x1a:\n" +
+	"\fMembersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\x8c\x04\n" +
 	"\rKVReplication\x12B\n" +
 	"\tReplicate\x12\x19.kvstore.ReplicateRequest\x1a\x1a.kvstore.ReplicateResponse\x12B\n" +
 	"\tFetchItem\x12\x19.kvstore.FetchItemRequest\x1a\x1a.kvstore.FetchItemResponse\x12N\n" +
 	"\rGetMerkleTree\x12\x1d.kvstore.GetMerkleTreeRequest\x1a\x1e.kvstore.GetMerkleTreeResponse\x12N\n" +
 	"\rGetBucketKeys\x12\x1d.kvstore.GetBucketKeysRequest\x1a\x1e.kvstore.GetBucketKeysResponse\x12N\n" +
-	"\rCoordinatePut\x12\x1d.kvstore.CoordinatePutRequest\x1a\x1e.kvstore.CoordinatePutResponseB*Z(distributed-kv-datastore/internal/rpc/pbb\x06proto3"
+	"\rCoordinatePut\x12\x1d.kvstore.CoordinatePutRequest\x1a\x1e.kvstore.CoordinatePutResponse\x123\n" +
+	"\x04Ping\x12\x14.kvstore.PingRequest\x1a\x15.kvstore.PingResponse\x12N\n" +
+	"\rGetMembership\x12\x1d.kvstore.GetMembershipRequest\x1a\x1e.kvstore.GetMembershipResponseB*Z(distributed-kv-datastore/internal/rpc/pbb\x06proto3"
 
 var (
 	file_internal_rpc_pb_kvstore_proto_rawDescOnce sync.Once
@@ -686,7 +936,7 @@ func file_internal_rpc_pb_kvstore_proto_rawDescGZIP() []byte {
 	return file_internal_rpc_pb_kvstore_proto_rawDescData
 }
 
-var file_internal_rpc_pb_kvstore_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_internal_rpc_pb_kvstore_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_internal_rpc_pb_kvstore_proto_goTypes = []any{
 	(*DataItem)(nil),              // 0: kvstore.DataItem
 	(*ReplicateRequest)(nil),      // 1: kvstore.ReplicateRequest
@@ -700,30 +950,40 @@ var file_internal_rpc_pb_kvstore_proto_goTypes = []any{
 	(*VectorContext)(nil),         // 9: kvstore.VectorContext
 	(*CoordinatePutRequest)(nil),  // 10: kvstore.CoordinatePutRequest
 	(*CoordinatePutResponse)(nil), // 11: kvstore.CoordinatePutResponse
-	nil,                           // 12: kvstore.DataItem.VectorClockEntry
-	nil,                           // 13: kvstore.VectorContext.EntriesEntry
+	(*PingRequest)(nil),           // 12: kvstore.PingRequest
+	(*PingResponse)(nil),          // 13: kvstore.PingResponse
+	(*GetMembershipRequest)(nil),  // 14: kvstore.GetMembershipRequest
+	(*GetMembershipResponse)(nil), // 15: kvstore.GetMembershipResponse
+	nil,                           // 16: kvstore.DataItem.VectorClockEntry
+	nil,                           // 17: kvstore.VectorContext.EntriesEntry
+	nil,                           // 18: kvstore.GetMembershipResponse.MembersEntry
 }
 var file_internal_rpc_pb_kvstore_proto_depIdxs = []int32{
-	12, // 0: kvstore.DataItem.vector_clock:type_name -> kvstore.DataItem.VectorClockEntry
+	16, // 0: kvstore.DataItem.vector_clock:type_name -> kvstore.DataItem.VectorClockEntry
 	0,  // 1: kvstore.ReplicateRequest.items:type_name -> kvstore.DataItem
 	0,  // 2: kvstore.FetchItemResponse.items:type_name -> kvstore.DataItem
-	13, // 3: kvstore.VectorContext.entries:type_name -> kvstore.VectorContext.EntriesEntry
+	17, // 3: kvstore.VectorContext.entries:type_name -> kvstore.VectorContext.EntriesEntry
 	9,  // 4: kvstore.CoordinatePutRequest.context:type_name -> kvstore.VectorContext
-	1,  // 5: kvstore.KVReplication.Replicate:input_type -> kvstore.ReplicateRequest
-	3,  // 6: kvstore.KVReplication.FetchItem:input_type -> kvstore.FetchItemRequest
-	5,  // 7: kvstore.KVReplication.GetMerkleTree:input_type -> kvstore.GetMerkleTreeRequest
-	7,  // 8: kvstore.KVReplication.GetBucketKeys:input_type -> kvstore.GetBucketKeysRequest
-	10, // 9: kvstore.KVReplication.CoordinatePut:input_type -> kvstore.CoordinatePutRequest
-	2,  // 10: kvstore.KVReplication.Replicate:output_type -> kvstore.ReplicateResponse
-	4,  // 11: kvstore.KVReplication.FetchItem:output_type -> kvstore.FetchItemResponse
-	6,  // 12: kvstore.KVReplication.GetMerkleTree:output_type -> kvstore.GetMerkleTreeResponse
-	8,  // 13: kvstore.KVReplication.GetBucketKeys:output_type -> kvstore.GetBucketKeysResponse
-	11, // 14: kvstore.KVReplication.CoordinatePut:output_type -> kvstore.CoordinatePutResponse
-	10, // [10:15] is the sub-list for method output_type
-	5,  // [5:10] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	18, // 5: kvstore.GetMembershipResponse.members:type_name -> kvstore.GetMembershipResponse.MembersEntry
+	1,  // 6: kvstore.KVReplication.Replicate:input_type -> kvstore.ReplicateRequest
+	3,  // 7: kvstore.KVReplication.FetchItem:input_type -> kvstore.FetchItemRequest
+	5,  // 8: kvstore.KVReplication.GetMerkleTree:input_type -> kvstore.GetMerkleTreeRequest
+	7,  // 9: kvstore.KVReplication.GetBucketKeys:input_type -> kvstore.GetBucketKeysRequest
+	10, // 10: kvstore.KVReplication.CoordinatePut:input_type -> kvstore.CoordinatePutRequest
+	12, // 11: kvstore.KVReplication.Ping:input_type -> kvstore.PingRequest
+	14, // 12: kvstore.KVReplication.GetMembership:input_type -> kvstore.GetMembershipRequest
+	2,  // 13: kvstore.KVReplication.Replicate:output_type -> kvstore.ReplicateResponse
+	4,  // 14: kvstore.KVReplication.FetchItem:output_type -> kvstore.FetchItemResponse
+	6,  // 15: kvstore.KVReplication.GetMerkleTree:output_type -> kvstore.GetMerkleTreeResponse
+	8,  // 16: kvstore.KVReplication.GetBucketKeys:output_type -> kvstore.GetBucketKeysResponse
+	11, // 17: kvstore.KVReplication.CoordinatePut:output_type -> kvstore.CoordinatePutResponse
+	13, // 18: kvstore.KVReplication.Ping:output_type -> kvstore.PingResponse
+	15, // 19: kvstore.KVReplication.GetMembership:output_type -> kvstore.GetMembershipResponse
+	13, // [13:20] is the sub-list for method output_type
+	6,  // [6:13] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_internal_rpc_pb_kvstore_proto_init() }
@@ -737,7 +997,7 @@ func file_internal_rpc_pb_kvstore_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_rpc_pb_kvstore_proto_rawDesc), len(file_internal_rpc_pb_kvstore_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

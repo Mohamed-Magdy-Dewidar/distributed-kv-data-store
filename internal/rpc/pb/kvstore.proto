@@ -67,6 +67,34 @@ message CoordinatePutRequest {
 
 message CoordinatePutResponse {}
 
+// Ping is the heartbeat. The sender announces its own ID, its address (so a
+// receiver that does not list it yet can fetch its membership), and the
+// membership epoch and fingerprint it holds.
+message PingRequest {
+  string sender_id = 1;
+  string sender_address = 2;
+  uint64 epoch = 3;
+  string fingerprint = 4;
+}
+
+// PingResponse names the answering node, so a caller can tell it reached the
+// node it meant to, and its membership epoch and fingerprint.
+message PingResponse {
+  string node_id = 1;
+  uint64 epoch = 2;
+  string fingerprint = 3;
+}
+
+message GetMembershipRequest {}
+
+// GetMembershipResponse is the answering node's current membership. The
+// fingerprint is a claim: a receiver recomputes it from the members.
+message GetMembershipResponse {
+  uint64 epoch = 1;
+  map<string, string> members = 2; // node ID -> address
+  string fingerprint = 3;
+}
+
 service KVReplication {
   rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
   rpc FetchItem(FetchItemRequest) returns (FetchItemResponse);
@@ -75,4 +103,6 @@ service KVReplication {
   // CoordinatePut asks a replica to coordinate a client write: version it
   // once on itself, replicate it, and report whether W was reached.
   rpc CoordinatePut(CoordinatePutRequest) returns (CoordinatePutResponse);
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc GetMembership(GetMembershipRequest) returns (GetMembershipResponse);
 }

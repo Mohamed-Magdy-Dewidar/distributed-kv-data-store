@@ -33,14 +33,18 @@ type WriteCoordinator interface {
 // DataStore/resolve.
 type Server struct {
 	pb.UnimplementedKVReplicationServer
-	ds    *store.DataStore
-	coord WriteCoordinator
+	ds         *store.DataStore
+	coord      WriteCoordinator
+	membership MembershipService // nil unless coord also implements it
 }
 
 // NewServer returns a Server over ds. coord may be nil, in which case
-// CoordinatePut is refused with codes.Unimplemented.
+// CoordinatePut is refused with codes.Unimplemented. If coord also implements
+// MembershipService (node.Node does), Ping and GetMembership are served by
+// it; otherwise they are refused with codes.Unimplemented.
 func NewServer(ds *store.DataStore, coord WriteCoordinator) *Server {
-	return &Server{ds: ds, coord: coord}
+	ms, _ := coord.(MembershipService)
+	return &Server{ds: ds, coord: coord, membership: ms}
 }
 
 // Replicate accepts one or more sibling items from a peer for a single key

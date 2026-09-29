@@ -46,12 +46,20 @@ type Intervals struct {
 	Compaction   time.Duration `yaml:"compaction"`
 	AntiEntropy  time.Duration `yaml:"antiEntropy"`
 	HintDelivery time.Duration `yaml:"hintDelivery"`
+	Heartbeat    time.Duration `yaml:"heartbeat"` // default 1s
 }
 
 type Timeouts struct {
 	Replication         time.Duration `yaml:"replication"`
 	MaxReconnectBackoff time.Duration `yaml:"maxReconnectBackoff"`
 	Shutdown            time.Duration `yaml:"shutdown"`
+	Heartbeat           time.Duration `yaml:"heartbeat"` // default 500ms; must be < intervals.heartbeat
+}
+
+type Health struct {
+	// MaxMissedHeartbeats is how many heartbeats in a row a peer may miss
+	// before it is treated as dead. Default 3.
+	MaxMissedHeartbeats int `yaml:"maxMissedHeartbeats"`
 }
 
 // Config is cmd/node's decoded, validated configuration. NodeID is
@@ -67,6 +75,28 @@ type Config struct {
 
 	Intervals Intervals `yaml:"intervals"`
 	Timeouts  Timeouts  `yaml:"timeouts"`
+	Health    Health    `yaml:"health"`
+}
+
+// Defaults for the heartbeat settings, applied by Load to any that are left
+// unset (zero).
+const (
+	defaultHeartbeatInterval   = time.Second
+	defaultHeartbeatTimeout    = 500 * time.Millisecond
+	defaultMaxMissedHeartbeats = 3
+)
+
+// applyDefaults fills in the settings that have defaults, where unset.
+func (c *Config) applyDefaults() {
+	if c.Intervals.Heartbeat == 0 {
+		c.Intervals.Heartbeat = defaultHeartbeatInterval
+	}
+	if c.Timeouts.Heartbeat == 0 {
+		c.Timeouts.Heartbeat = defaultHeartbeatTimeout
+	}
+	if c.Health.MaxMissedHeartbeats == 0 {
+		c.Health.MaxMissedHeartbeats = defaultMaxMissedHeartbeats
+	}
 }
 
 // Load reads and strictly decodes the YAML file at path (an unknown field
@@ -90,6 +120,7 @@ func Load(path string) (*Config, error) {
 		cfg.NodeID = envID
 	}
 
+	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -106,7 +137,9 @@ const clockIDSeparator = "#"
 //     ("<id>#<incarnation>", see internal/identity)
 //   - every member ID is unique, and every member address is unique
 //   - 1 <= W, R <= N <= len(members)
-//   - every interval and timeout is > 0
+//   - every interval and timeout is > 0, and timeouts.heartbeat is shorter
+//     than intervals.heartbeat
+//   - health.maxMissedHeartbeats is > 0
 //   - storage.memtableBytes is > 0
 //
 // Each error names the offending field, so a misconfigured deployment
@@ -161,10 +194,18 @@ func (c *Config) validate() error {
 		"timeouts.replication":         c.Timeouts.Replication,
 		"timeouts.maxReconnectBackoff": c.Timeouts.MaxReconnectBackoff,
 		"timeouts.shutdown":            c.Timeouts.Shutdown,
+		"intervals.heartbeat":          c.Intervals.Heartbeat,
+		"timeouts.heartbeat":           c.Timeouts.Heartbeat,
 	} {
 		if d <= 0 {
 			return fmt.Errorf("config: %s must be > 0, got %v", name, d)
 		}
+	}
+	if c.Timeouts.Heartbeat >= c.Intervals.Heartbeat {
+		return fmt.Errorf("config: timeouts.heartbeat (%v) must be shorter than intervals.heartbeat (%v)", c.Timeouts.Heartbeat, c.Intervals.Heartbeat)
+	}
+	if c.Health.MaxMissedHeartbeats <= 0 {
+		return fmt.Errorf("config: health.maxMissedHeartbeats must be > 0, got %d", c.Health.MaxMissedHeartbeats)
 	}
 
 	if c.Storage.MemtableBytes <= 0 {

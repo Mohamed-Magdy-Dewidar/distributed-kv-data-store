@@ -48,12 +48,15 @@ func testConfig(t *testing.T, dataDir string) *config.Config {
 			Compaction:   time.Hour, // effectively disabled: these tests don't exercise the loops themselves
 			AntiEntropy:  time.Hour,
 			HintDelivery: time.Hour,
+			Heartbeat:    time.Hour,
 		},
 		Timeouts: config.Timeouts{
 			Replication:         time.Second,
 			MaxReconnectBackoff: time.Second,
 			Shutdown:            2 * time.Second,
+			Heartbeat:           time.Second,
 		},
+		Health: config.Health{MaxMissedHeartbeats: 3},
 	}
 }
 

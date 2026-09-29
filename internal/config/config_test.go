@@ -27,12 +27,15 @@ func validConfig() Config {
 			Compaction:   30 * time.Second,
 			AntiEntropy:  30 * time.Second,
 			HintDelivery: 10 * time.Second,
+			Heartbeat:    time.Second,
 		},
 		Timeouts: Timeouts{
 			Replication:         5 * time.Second,
 			MaxReconnectBackoff: 5 * time.Second,
 			Shutdown:            20 * time.Second,
+			Heartbeat:           500 * time.Millisecond,
 		},
+		Health: Health{MaxMissedHeartbeats: 3},
 	}
 }
 
@@ -120,6 +123,26 @@ func TestValidateRules(t *testing.T) {
 		"memtableBytes not positive": {
 			mutate:    func(c *Config) { c.Storage.MemtableBytes = 0 },
 			wantInErr: "storage.memtableBytes",
+		},
+		"heartbeat interval not positive": {
+			mutate:    func(c *Config) { c.Intervals.Heartbeat = 0 },
+			wantInErr: "intervals.heartbeat",
+		},
+		"heartbeat timeout not positive": {
+			mutate:    func(c *Config) { c.Timeouts.Heartbeat = 0 },
+			wantInErr: "timeouts.heartbeat",
+		},
+		"heartbeat timeout equal to the interval": {
+			mutate:    func(c *Config) { c.Timeouts.Heartbeat = c.Intervals.Heartbeat },
+			wantInErr: "must be shorter than intervals.heartbeat",
+		},
+		"heartbeat timeout longer than the interval": {
+			mutate:    func(c *Config) { c.Timeouts.Heartbeat = 2 * c.Intervals.Heartbeat },
+			wantInErr: "must be shorter than intervals.heartbeat",
+		},
+		"maxMissedHeartbeats not positive": {
+			mutate:    func(c *Config) { c.Health.MaxMissedHeartbeats = 0 },
+			wantInErr: "health.maxMissedHeartbeats",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -212,6 +235,37 @@ func TestLoadParsesDurationsFromPlainStrings(t *testing.T) {
 	}
 	if cfg.Timeouts.Shutdown != 20*time.Second {
 		t.Errorf("expected timeouts.shutdown=20s, got %v", cfg.Timeouts.Shutdown)
+	}
+}
+
+// TestLoadAppliesHeartbeatDefaultsAndReadsOverrides: the heartbeat settings
+// default to 1s / 500ms / 3 misses when absent, and a value that is present
+// wins; an override that breaks a rule is still rejected.
+func TestLoadAppliesHeartbeatDefaultsAndReadsOverrides(t *testing.T) {
+	cfg, err := Load(writeConfig(t, validYAML))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Intervals.Heartbeat != time.Second || cfg.Timeouts.Heartbeat != 500*time.Millisecond || cfg.Health.MaxMissedHeartbeats != 3 {
+		t.Errorf("defaults: interval %v, timeout %v, max missed %d; want 1s, 500ms, 3",
+			cfg.Intervals.Heartbeat, cfg.Timeouts.Heartbeat, cfg.Health.MaxMissedHeartbeats)
+	}
+
+	overridden := validYAML + "health:\n  maxMissedHeartbeats: 5\n"
+	overridden = strings.Replace(overridden, "  hintDelivery: 10s\n", "  hintDelivery: 10s\n  heartbeat: 2s\n", 1)
+	overridden = strings.Replace(overridden, "  shutdown: 20s\n", "  shutdown: 20s\n  heartbeat: 250ms\n", 1)
+	cfg, err = Load(writeConfig(t, overridden))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Intervals.Heartbeat != 2*time.Second || cfg.Timeouts.Heartbeat != 250*time.Millisecond || cfg.Health.MaxMissedHeartbeats != 5 {
+		t.Errorf("overrides: interval %v, timeout %v, max missed %d; want 2s, 250ms, 5",
+			cfg.Intervals.Heartbeat, cfg.Timeouts.Heartbeat, cfg.Health.MaxMissedHeartbeats)
+	}
+
+	tooSlow := strings.Replace(validYAML, "  shutdown: 20s\n", "  shutdown: 20s\n  heartbeat: 3s\n", 1) // default interval is 1s
+	if _, err := Load(writeConfig(t, tooSlow)); err == nil || !strings.Contains(err.Error(), "timeouts.heartbeat") {
+		t.Errorf("expected a heartbeat timeout longer than the default interval to be rejected, got %v", err)
 	}
 }
 

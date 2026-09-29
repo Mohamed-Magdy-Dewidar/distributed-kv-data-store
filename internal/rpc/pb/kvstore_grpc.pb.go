@@ -24,6 +24,8 @@ const (
 	KVReplication_GetMerkleTree_FullMethodName = "/kvstore.KVReplication/GetMerkleTree"
 	KVReplication_GetBucketKeys_FullMethodName = "/kvstore.KVReplication/GetBucketKeys"
 	KVReplication_CoordinatePut_FullMethodName = "/kvstore.KVReplication/CoordinatePut"
+	KVReplication_Ping_FullMethodName          = "/kvstore.KVReplication/Ping"
+	KVReplication_GetMembership_FullMethodName = "/kvstore.KVReplication/GetMembership"
 )
 
 // KVReplicationClient is the client API for KVReplication service.
@@ -37,6 +39,8 @@ type KVReplicationClient interface {
 	// CoordinatePut asks a replica to coordinate a client write: version it
 	// once on itself, replicate it, and report whether W was reached.
 	CoordinatePut(ctx context.Context, in *CoordinatePutRequest, opts ...grpc.CallOption) (*CoordinatePutResponse, error)
+	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+	GetMembership(ctx context.Context, in *GetMembershipRequest, opts ...grpc.CallOption) (*GetMembershipResponse, error)
 }
 
 type kVReplicationClient struct {
@@ -97,6 +101,26 @@ func (c *kVReplicationClient) CoordinatePut(ctx context.Context, in *CoordinateP
 	return out, nil
 }
 
+func (c *kVReplicationClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PingResponse)
+	err := c.cc.Invoke(ctx, KVReplication_Ping_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *kVReplicationClient) GetMembership(ctx context.Context, in *GetMembershipRequest, opts ...grpc.CallOption) (*GetMembershipResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMembershipResponse)
+	err := c.cc.Invoke(ctx, KVReplication_GetMembership_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // KVReplicationServer is the server API for KVReplication service.
 // All implementations must embed UnimplementedKVReplicationServer
 // for forward compatibility.
@@ -108,6 +132,8 @@ type KVReplicationServer interface {
 	// CoordinatePut asks a replica to coordinate a client write: version it
 	// once on itself, replicate it, and report whether W was reached.
 	CoordinatePut(context.Context, *CoordinatePutRequest) (*CoordinatePutResponse, error)
+	Ping(context.Context, *PingRequest) (*PingResponse, error)
+	GetMembership(context.Context, *GetMembershipRequest) (*GetMembershipResponse, error)
 	mustEmbedUnimplementedKVReplicationServer()
 }
 
@@ -132,6 +158,12 @@ func (UnimplementedKVReplicationServer) GetBucketKeys(context.Context, *GetBucke
 }
 func (UnimplementedKVReplicationServer) CoordinatePut(context.Context, *CoordinatePutRequest) (*CoordinatePutResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CoordinatePut not implemented")
+}
+func (UnimplementedKVReplicationServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedKVReplicationServer) GetMembership(context.Context, *GetMembershipRequest) (*GetMembershipResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMembership not implemented")
 }
 func (UnimplementedKVReplicationServer) mustEmbedUnimplementedKVReplicationServer() {}
 func (UnimplementedKVReplicationServer) testEmbeddedByValue()                       {}
@@ -244,6 +276,42 @@ func _KVReplication_CoordinatePut_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _KVReplication_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVReplicationServer).Ping(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KVReplication_Ping_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVReplicationServer).Ping(ctx, req.(*PingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KVReplication_GetMembership_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMembershipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVReplicationServer).GetMembership(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KVReplication_GetMembership_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVReplicationServer).GetMembership(ctx, req.(*GetMembershipRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // KVReplication_ServiceDesc is the grpc.ServiceDesc for KVReplication service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -270,6 +338,14 @@ var KVReplication_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CoordinatePut",
 			Handler:    _KVReplication_CoordinatePut_Handler,
+		},
+		{
+			MethodName: "Ping",
+			Handler:    _KVReplication_Ping_Handler,
+		},
+		{
+			MethodName: "GetMembership",
+			Handler:    _KVReplication_GetMembership_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

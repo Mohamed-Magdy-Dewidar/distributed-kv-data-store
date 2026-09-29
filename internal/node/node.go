@@ -57,6 +57,17 @@ type Node struct {
 	membershipMu sync.Mutex
 	persistView  func(*view) error
 
+	// Heartbeat state (see heartbeat.go). health holds what pings have shown
+	// about each peer that has been pinged; a peer with no entry is alive.
+	// conflictSeen remembers the last membership conflict logged per peer.
+	// adopting makes fetching-and-adopting a newer membership single-flight.
+	healthMu            sync.RWMutex
+	health              map[string]*peerHealth
+	conflictSeen        map[string]string
+	adopting            atomic.Bool
+	membershipConflicts atomic.Uint64 // conflicts noticed, for tests and diagnosis
+	pingsReceived       atomic.Uint64
+
 	// clients caches one connection per peer, with the address it was dialed
 	// at. A connection whose peer's address has since changed is moved to
 	// retired, not closed: an in-flight RPC (an anti-entropy round holds one
@@ -176,6 +187,8 @@ func newNode(id, clockID, address string, n, w, r int, v *view, ds *store.DataSt
 		Address:      address,
 		QuorumConfig: NewQuorumConfig(n, w, r),
 		clients:      make(map[string]peerClient),
+		health:       make(map[string]*peerHealth),
+		conflictSeen: make(map[string]string),
 		engine:       e,
 		hints:        hs,
 	}
@@ -359,6 +372,13 @@ func (n *Node) putAsReplica(ctx context.Context, v *view, key string, value any,
 			if testHookBeforeReplicate != nil {
 				testHookBeforeReplicate(peerID)
 			}
+			if n.isDead(peerID) {
+				// Don't wait out ReplicationTimeout on a peer heartbeats have
+				// given up on: report it as unreachable, so quorum accounting
+				// and hints treat it like any Unavailable.
+				results <- replicateResult{peerID: peerID, err: errPeerDead(peerID)}
+				return
+			}
 			err := n.replicate(replCtx, v, peerID, key, []*model.DataItem{item})
 			results <- replicateResult{peerID: peerID, err: err}
 		}(peerID)
@@ -538,6 +558,10 @@ func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 
 	results := make(chan fetchResult, len(peers))
 	for _, peerID := range peers {
+		if n.isDead(peerID) {
+			results <- fetchResult{peerID: peerID, err: errPeerDead(peerID)} // a failed vote, without an RPC
+			continue
+		}
 		go func(peerID string) {
 			items, found, err := n.fetchItem(ctx, v, peerID, key)
 			if err != nil {
@@ -882,6 +906,9 @@ func (n *Node) runAntiEntropyRound(ctx context.Context) {
 	for _, peerID := range n.coReplicantPeers(n.membership.Load()) {
 		if ctx.Err() != nil {
 			return
+		}
+		if n.isDead(peerID) {
+			continue // heartbeats say it's down; its turn comes back when it answers
 		}
 		if err := n.RunAntiEntropy(ctx, peerID); err != nil {
 			log.Printf("node %s: anti-entropy with %q failed: %v", n.ID, peerID, err)

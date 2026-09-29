@@ -134,6 +134,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	nd.QuorumConfig.ReplicationTimeout = cfg.Timeouts.Replication
 	nd.QuorumConfig.MaxReconnectBackoff = cfg.Timeouts.MaxReconnectBackoff
+	nd.QuorumConfig.HeartbeatTimeout = cfg.Timeouts.Heartbeat
+	nd.QuorumConfig.MaxMissedHeartbeats = cfg.Health.MaxMissedHeartbeats
 
 	if err := applyConfiguredMembership(nd, cfg); err != nil {
 		nd.Close()
@@ -157,6 +159,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	nd.StartCompactionLoop(compactionCtx, cfg.Intervals.Compaction) // no-op in memory
 	nd.StartAntiEntropyLoop(context.Background(), cfg.Intervals.AntiEntropy)
 	nd.StartHintDeliveryLoop(context.Background(), cfg.Intervals.HintDelivery) // no-op in memory
+	nd.StartHeartbeatLoop(context.Background(), cfg.Intervals.Heartbeat)
 	step("loops-started")
 
 	probe.setReady(true)

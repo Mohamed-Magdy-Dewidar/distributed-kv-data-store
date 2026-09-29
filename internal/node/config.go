@@ -10,6 +10,14 @@ const DefaultReplicationTimeout = 5 * time.Second
 // starts with. Deployments set their own (cmd/cluster does).
 const DefaultMaxReconnectBackoff = 5 * time.Second
 
+// DefaultHeartbeatTimeout is the HeartbeatTimeout NewQuorumConfig starts
+// with. Deployments set their own (cmd/node does).
+const DefaultHeartbeatTimeout = 500 * time.Millisecond
+
+// DefaultMaxMissedHeartbeats is the MaxMissedHeartbeats NewQuorumConfig
+// starts with.
+const DefaultMaxMissedHeartbeats = 3
+
 // QuorumConfig holds cluster-wide replication and quorum settings.
 type QuorumConfig struct {
 	N int // replication factor — how many nodes hold each key
@@ -29,8 +37,19 @@ type QuorumConfig struct {
 	// delaying every kind of traffic to that peer (replication fan-out,
 	// anti-entropy, hint delivery), not just the reconnect itself.
 	MaxReconnectBackoff time.Duration
+
+	// HeartbeatTimeout bounds each heartbeat ping (see StartHeartbeatLoop).
+	// It should be shorter than the heartbeat interval, so rounds don't run
+	// into each other.
+	HeartbeatTimeout time.Duration
+
+	// MaxMissedHeartbeats is how many pings in a row a peer may fail to
+	// answer before it is marked dead; the next answered ping marks it alive
+	// again.
+	MaxMissedHeartbeats int
 }
 
 func NewQuorumConfig(n, w, r int) QuorumConfig {
-	return QuorumConfig{N: n, W: w, R: r, ReplicationTimeout: DefaultReplicationTimeout, MaxReconnectBackoff: DefaultMaxReconnectBackoff}
+	return QuorumConfig{N: n, W: w, R: r, ReplicationTimeout: DefaultReplicationTimeout, MaxReconnectBackoff: DefaultMaxReconnectBackoff,
+		HeartbeatTimeout: DefaultHeartbeatTimeout, MaxMissedHeartbeats: DefaultMaxMissedHeartbeats}
 }
