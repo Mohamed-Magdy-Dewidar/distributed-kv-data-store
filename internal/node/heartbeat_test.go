@@ -123,6 +123,9 @@ func (h *hungPeer) GetBucketKeys(ctx context.Context, _ *pb.GetBucketKeysRequest
 func (h *hungPeer) Ping(ctx context.Context, _ *pb.PingRequest) (*pb.PingResponse, error) {
 	return nil, h.block(ctx)
 }
+func (h *hungPeer) CoordinatePut(ctx context.Context, _ *pb.CoordinatePutRequest) (*pb.CoordinatePutResponse, error) {
+	return nil, h.block(ctx)
+}
 
 func startHungPeer(t *testing.T, addr string) {
 	t.Helper()

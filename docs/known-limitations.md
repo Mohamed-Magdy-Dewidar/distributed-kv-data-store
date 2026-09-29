@@ -29,7 +29,7 @@ This project is a Dynamo-style key-value store built as a learning and portfolio
 ## Operations and cost
 
 - **Anti-entropy is unscoped.** Every round rebuilds full Merkle trees per peer, including keys the two nodes don't share, so those buckets stay marked divergent. Correct, but wasteful.
-- **Hints never expire.** Delivery markers accumulate forever.
+- **Hints never expire.** Delivery markers accumulate forever. Hints for a node that has been removed from the membership are kept but never delivered: the store cannot delete, and there is nowhere to send them.
 - **Hints are skipped during shutdown.** Hint creation is skipped once shutdown has begun. This is safe given the shutdown order, which stops listeners first.
 - **In-memory mode is for tests and demos.** With `dataDir: ""` nothing survives a restart, and each process takes a new writer identity (see "Never restore a node's data dir" under Durability), so a restarted in-memory node comes back empty and is a new writer.
 - **In-memory nodes have no hinted handoff.** With `dataDir: ""`, a write to an unreachable replica converges only through anti-entropy, and no log line marks that a hint was skipped rather than stored.

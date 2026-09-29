@@ -527,28 +527,45 @@ func (n *Node) drainReplication(key string, item *model.DataItem, results <-chan
 
 // forwardPut hands a write for a key n doesn't replicate to one of the
 // replicas that do (replicas is key's full preference list), trying them
-// in preference-list order. It moves on to the next replica only when one
-// is Unavailable — the request never reached it. Any other error (a missed
-// quorum, a timeout, a refusal) is returned as-is: that replica may already
-// have applied the write, and retrying elsewhere would version it a second
-// time under a different replica's clock entry.
+// in preference-list order.
+//
+// It moves on to the next replica only when the write was certainly not
+// applied on this one:
+//   - the replica is marked dead by heartbeats, or n can't get a connection
+//     to it at all;
+//   - it is Unavailable — the request never reached it;
+//   - it refuses with FailedPrecondition (rpc.ErrNotReplica): its membership
+//     says it isn't an owner of key, and it checks that before touching the
+//     store or replicating anything.
+//
+// Any other error (a missed quorum, a timeout) is returned as-is: that
+// replica may already have applied the write, and retrying elsewhere would
+// version it a second time under a different replica's clock entry.
+//
+// If no replica takes the write, the error is codes.Unavailable — nothing was
+// applied anywhere — with each replica's failure in the message.
 func (n *Node) forwardPut(ctx context.Context, v *view, key string, value any, clientContext map[string]uint32, replicas []string) error {
-	var unavailable []error
+	var failures []error
 	for _, replicaID := range replicas {
+		if n.isDead(replicaID) {
+			failures = append(failures, fmt.Errorf("replica %q: marked dead by heartbeats", replicaID))
+			continue
+		}
 		client, err := n.clientFor(v, replicaID)
 		if err != nil {
-			return fmt.Errorf("forward put for key %q: %w", key, err)
+			failures = append(failures, fmt.Errorf("replica %q: %w", replicaID, err))
+			continue
 		}
 		err = client.CoordinatePut(ctx, key, value, clientContext)
 		if err == nil {
 			return nil
 		}
-		if status.Code(err) != codes.Unavailable {
+		if code := status.Code(err); code != codes.Unavailable && code != codes.FailedPrecondition {
 			return fmt.Errorf("forward put for key %q to replica %q: %w", key, replicaID, err)
 		}
-		unavailable = append(unavailable, fmt.Errorf("replica %q: %w", replicaID, err))
+		failures = append(failures, fmt.Errorf("replica %q: %w", replicaID, err))
 	}
-	return fmt.Errorf("forward put for key %q: no replica reachable: %w", key, errors.Join(unavailable...))
+	return status.Errorf(codes.Unavailable, "forward put for key %q: no replica accepted the write: %v", key, errors.Join(failures...))
 }
 
 type fetchResult struct {
@@ -990,15 +1007,24 @@ var (
 // in turn (see deliverHintsTo). Failures are logged; whatever wasn't
 // delivered stays pending for the next round. Once ctx is canceled it
 // starts no further target.
+//
+// Targets that aren't in the current view are skipped without even reading
+// their hints: there is nowhere to send them (and the store can't delete, so
+// they stay). So are targets heartbeats have marked dead: they are retried
+// once they answer again.
 func (n *Node) deliverHints(ctx context.Context) {
 	targets, err := n.hints.Targets()
 	if err != nil {
 		log.Printf("node %s: hint delivery: %v", n.ID, err)
 		return
 	}
+	v := n.membership.Load()
 	for _, target := range targets {
 		if ctx.Err() != nil {
 			return
+		}
+		if _, member := v.members[target]; !member || n.isDead(target) {
+			continue
 		}
 		if err := n.deliverHintsTo(ctx, target); err != nil {
 			log.Printf("node %s: delivering hints to %q: %v", n.ID, target, err)
