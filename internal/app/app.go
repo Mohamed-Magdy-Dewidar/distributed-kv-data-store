@@ -160,6 +160,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	nd.StartAntiEntropyLoop(context.Background(), cfg.Intervals.AntiEntropy)
 	nd.StartHintDeliveryLoop(context.Background(), cfg.Intervals.HintDelivery) // no-op in memory
 	nd.StartHeartbeatLoop(context.Background(), cfg.Intervals.Heartbeat)
+	nd.ResumeHandoff() // a no-op unless a restart interrupted a handoff
 	step("loops-started")
 
 	probe.setReady(true)

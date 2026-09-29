@@ -96,6 +96,7 @@ func (n *Node) setMembership(epoch uint64, members map[string]string, claimedFin
 	n.membership.Store(v)
 	n.retireClientsNotIn(v)
 	n.pruneHealth(v)
+	n.startHandoff()
 	return true, nil
 }
 

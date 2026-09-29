@@ -57,6 +57,19 @@ type Node struct {
 	membershipMu sync.Mutex
 	persistView  func(*view) error
 
+	// Handoff state (see handoff.go), guarded by handoffMu. handoffBase is the
+	// last view whose handoff completed; persistHandoff, set for persistent
+	// nodes, records it durably.
+	handoffMu      sync.Mutex
+	handoffBase    *view
+	handoffTarget  *view // the newest view a handoff was started for
+	handoffCancel  context.CancelFunc
+	handoffGen     uint64
+	handoffRunning bool
+	handoffStatus  HandoffStatus
+	handoffChanged chan struct{} // closed and replaced whenever a handoff completes
+	persistHandoff func(*view) error
+
 	// Heartbeat state (see heartbeat.go). health holds what pings have shown
 	// about each peer that has been pinged; a peer with no entry is alive.
 	// conflictSeen remembers the last membership conflict logged per peer.
@@ -117,7 +130,7 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node
 		panic(fmt.Sprintf("node %q: %v", id, err))
 	}
 	clockID := identity.ClockID(id, identity.NewIncarnation())
-	return newNode(id, clockID, address, n, w, r, v, store.NewDataStoreWithClockID(id, clockID), nil, nil)
+	return newNode(id, clockID, address, n, w, r, v, v, store.NewDataStoreWithClockID(id, clockID), nil, nil)
 }
 
 // ClockID is the name this node's writes carry in vector clocks: its node ID
@@ -143,6 +156,10 @@ func (n *Node) ClockID() string { return n.clockID }
 // refuses to start, naming both IDs and the directory, if the file belongs to
 // a different node ID.
 //
+// If the directory has a HANDOFF file, the node's data is taken to be in place
+// for that view; if that is older than the current view, ResumeHandoff moves
+// the rest. Without one, only the configured view counts as handed off.
+//
 // If the directory has a MEMBERSHIP file (written by SetMembership), that
 // view is the node's initial one instead of the epoch-0 view built from
 // neighborAddrs. A MEMBERSHIP file that is corrupt, invalid, or doesn't match
@@ -163,11 +180,21 @@ func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]str
 	}
 	// A persisted membership replaces the epoch-0 view built from the
 	// configuration's member list: it is what this node last agreed to.
+	// The last completed handoff is the base for moving data to that view;
+	// without a HANDOFF file it is the configuration's view, since nothing
+	// has been handed off yet.
+	base := v
 	if persisted, found, err := loadMembership(dataDir, n); err != nil {
 		e.Close()
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	} else if found {
 		v = persisted
+	}
+	if handedOff, found, err := loadHandoff(dataDir, n); err != nil {
+		e.Close()
+		return nil, fmt.Errorf("node %s: %w", id, err)
+	} else if found {
+		base = handedOff
 	}
 	hs, err := hints.Open(filepath.Join(dataDir, "hints"), maxMemtableBytes)
 	if err != nil {
@@ -175,24 +202,28 @@ func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]str
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
 	clockID := identity.ClockID(id, incarnation)
-	nd := newNode(id, clockID, address, n, w, r, v, store.NewDataStoreWithPersisterAndClockID(id, clockID, e), e, hs)
+	nd := newNode(id, clockID, address, n, w, r, v, base, store.NewDataStoreWithPersisterAndClockID(id, clockID, e), e, hs)
 	nd.persistView = func(v *view) error { return writeMembership(dataDir, v) }
+	nd.persistHandoff = func(v *view) error { return writeHandoff(dataDir, v) }
 	return nd, nil
 }
 
-func newNode(id, clockID, address string, n, w, r int, v *view, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
+func newNode(id, clockID, address string, n, w, r int, v, handoffBase *view, ds *store.DataStore, e *engine.StorageEngine, hs *hints.Store) *Node {
 	nd := &Node{
-		ID:           id,
-		clockID:      clockID,
-		Store:        ds,
-		Address:      address,
-		QuorumConfig: NewQuorumConfig(n, w, r),
-		clients:      make(map[string]peerClient),
-		aeTrigger:    make(chan struct{}, 1),
-		health:       make(map[string]*peerHealth),
-		conflictSeen: make(map[string]string),
-		engine:       e,
-		hints:        hs,
+		ID:             id,
+		clockID:        clockID,
+		Store:          ds,
+		Address:        address,
+		QuorumConfig:   NewQuorumConfig(n, w, r),
+		clients:        make(map[string]peerClient),
+		aeTrigger:      make(chan struct{}, 1),
+		handoffBase:    handoffBase,
+		handoffStatus:  HandoffStatus{Epoch: v.epoch, Done: handoffBase.epoch >= v.epoch},
+		handoffChanged: make(chan struct{}),
+		health:         make(map[string]*peerHealth),
+		conflictSeen:   make(map[string]string),
+		engine:         e,
+		hints:          hs,
 	}
 	nd.membership.Store(v)
 	return nd
