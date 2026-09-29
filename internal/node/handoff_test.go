@@ -440,46 +440,62 @@ func TestLeavingNodeWaitsForAnUnreachableTarget(t *testing.T) {
 	}
 }
 
-// (h) A handoff runs while traffic continues and further views arrive.
+// (h) Membership changes while traffic continues. Writes coordinated while
+// nodes disagree about the membership may fail (a node can still be routing
+// by the old view); what must hold is that every write that was acknowledged
+// is, once every handoff has completed, on every one of its owners in the
+// final view. node-4 starts the way docs/membership.md says a new node does,
+// with a view listing every member.
+//
+// Each write has its own key, so no acknowledged value is legitimately
+// superseded by a later one. (A write coordinated with the old view that
+// lands on an old owner after that owner listed its keys for the handoff is
+// left to anti-entropy, which doesn't run here; see known-limitations.md.
+// The coordinator makes its own copy before it adopts the new view and lists
+// its keys, so that would take a write landing within that instant.)
 func TestHandoffRacesWithTrafficAndFurtherViewChanges(t *testing.T) {
 	fastHandoffRetries(t)
 	ids := []string{"node-1", "node-2", "node-3", "node-4"}
-	addrs := map[string]string{}
-	for _, id := range ids {
-		addrs[id] = reserveAddr(t)
-	}
+	addrs := reserveAddrs(t, ids...)
 	nodes := map[string]*Node{}
 	for _, id := range ids[:3] {
 		nodes[id] = newHandoffNode(id, addrs[id], 3, 2, neighborsOf(membersOf(addrs, ids[:3]...), id))
 	}
-	nodes["node-4"] = newHandoffNode("node-4", addrs["node-4"], 3, 2, nil)
+	nodes["node-4"] = newHandoffNode("node-4", addrs["node-4"], 3, 2, neighborsOf(addrs, "node-4"))
 	for _, id := range ids {
 		serveNode(t, nodes[id], addrs[id])
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	var mu sync.Mutex
+	acked := map[string]string{} // key -> value of every acknowledged write
 	for i := range 100 {
-		if err := nodes["node-1"].Put(ctx, fmt.Sprintf("k-%d", i), i, nil); err != nil {
+		key, value := fmt.Sprintf("pre-%03d", i), fmt.Sprintf("v-pre-%03d", i)
+		if err := nodes["node-1"].Put(ctx, key, value, nil); err != nil {
 			t.Fatal(err)
 		}
+		acked[key] = value
 	}
 
 	var stop atomic.Bool
-	errs := make(chan error, 8)
+	var failedWrites, failedReads atomic.Int32
 	var traffic sync.WaitGroup
 	for _, id := range []string{"node-1", "node-2"} {
 		traffic.Add(1)
 		go func() {
 			defer traffic.Done()
 			for i := 0; !stop.Load(); i++ {
-				key := fmt.Sprintf("k-%d", i%100)
-				if err := nodes[id].Put(ctx, key, i, nil); err != nil {
-					errs <- fmt.Errorf("%s Put: %w", id, err)
-					return
+				key := fmt.Sprintf("w-%s-%05d", id, i)
+				if err := nodes[id].Put(ctx, key, "v-"+key, nil); err != nil {
+					failedWrites.Add(1)
+					continue
 				}
+				mu.Lock()
+				acked[key] = "v-" + key
+				mu.Unlock()
 				if _, err := nodes[id].Get(ctx, key); err != nil {
-					errs <- fmt.Errorf("%s Get: %w", id, err)
-					return
+					failedReads.Add(1)
 				}
 			}
 		}()
@@ -494,13 +510,30 @@ func TestHandoffRacesWithTrafficAndFurtherViewChanges(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	stop.Store(true)
+	traffic.Wait()
 	for _, id := range ids {
 		waitHandoff(t, nodes[id], 3)
 	}
-	stop.Store(true)
-	traffic.Wait()
-	close(errs)
-	for err := range errs {
-		t.Error(err)
+	t.Logf("%d writes acknowledged, %d failed while the views differed; %d reads failed",
+		len(acked)-100, failedWrites.Load(), failedReads.Load())
+
+	missing := 0
+	for key, value := range acked {
+		for _, owner := range owners(nodes["node-1"], key, 3) {
+			items, _, err := nodes[owner].Store.Get(key)
+			if err != nil {
+				t.Fatalf("%s: Get(%q): %v", owner, key, err)
+			}
+			if !slices.ContainsFunc(items, func(it *model.DataItem) bool { return it.Value == value }) {
+				if missing < 5 {
+					t.Errorf("acknowledged write %s=%s is missing from its owner %s (holds %v)", key, value, owner, itemValues(items))
+				}
+				missing++
+			}
+		}
+	}
+	if missing > 0 {
+		t.Fatalf("%d acknowledged writes missing from owners in the final view", missing)
 	}
 }
