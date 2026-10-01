@@ -261,7 +261,8 @@ func applyConfiguredMembership(nd *node.Node, cfg *config.Config) error {
 // openNode builds cfg's node on cfg.DataDir. node.New's error is returned
 // as-is (it already names the data dir and wraps engine.ErrLocked when
 // that's the cause). An empty DataDir is refused rather than opened, which
-// would put the node's files in the working directory.
+// would put the node's files in the working directory: config.Load already
+// rejects it, and this guards callers that build a Config without Load.
 func openNode(cfg *config.Config) (*node.Node, error) {
 	if cfg.DataDir == "" {
 		return nil, errors.New("dataDir is required")

@@ -80,7 +80,7 @@ flowchart LR
 | `internal/vectorclock` | Vector clocks and how two of them compare (before, after, equal, concurrent). |
 | `internal/versioning` | Sibling resolution: which versions a new one supersedes, and merging sibling sets. |
 | `internal/model` | `DataItem`: a value, its vector clock and its tombstone flag. |
-| `internal/store` | The versioned key-value store a node writes to, in memory or on the storage engine. |
+| `internal/store` | The versioned key-value store a node writes to, on top of its storage engine. |
 | `internal/hints` | Durable store of hinted-handoff writes, on its own storage engine. |
 | `internal/identity` | The data directory's incarnation, which makes a node's clock ID unique to its data. |
 | `internal/merkle` | Merkle trees over key buckets, and finding the buckets where two trees differ. |

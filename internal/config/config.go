@@ -65,7 +65,7 @@ type Health struct {
 type Config struct {
 	NodeID  string  `yaml:"nodeId"`
 	Listen  Listen  `yaml:"listen"`
-	DataDir string  `yaml:"dataDir"` // required (the node refuses to start without one); used as-is, not joined with NodeID
+	DataDir string  `yaml:"dataDir"` // required; used as-is, not joined with NodeID
 	Cluster Cluster `yaml:"cluster"`
 	Storage Storage `yaml:"storage"`
 
@@ -129,6 +129,7 @@ const clockIDSeparator = "#"
 
 // validate checks every rule Load requires before a Config is usable:
 //   - nodeId is present and matches a member's ID
+//   - dataDir is present
 //   - no node or member ID contains '#', the separator in vector-clock IDs
 //     ("<id>#<incarnation>", see internal/identity)
 //   - every member ID is unique, and every member address is unique
@@ -170,6 +171,10 @@ func (c *Config) validate() error {
 	}
 	if !selfFound {
 		return fmt.Errorf("config: nodeId %q is not in cluster.members", c.NodeID)
+	}
+
+	if c.DataDir == "" {
+		return fmt.Errorf("config: dataDir is required")
 	}
 
 	n, w, r := c.Cluster.N, c.Cluster.W, c.Cluster.R

@@ -13,8 +13,9 @@ import (
 // starting point for tests that mutate exactly one field.
 func validConfig() Config {
 	return Config{
-		NodeID: "kv-0",
-		Listen: Listen{GRPC: ":7000", HTTP: ":8080"},
+		NodeID:  "kv-0",
+		Listen:  Listen{GRPC: ":7000", HTTP: ":8080"},
+		DataDir: "/var/lib/kv",
 		Cluster: Cluster{
 			N: 2, W: 1, R: 1,
 			Members: []Member{
@@ -50,6 +51,10 @@ func TestValidateRules(t *testing.T) {
 		"nodeId empty": {
 			mutate:    func(c *Config) { c.NodeID = "" },
 			wantInErr: "nodeId",
+		},
+		"dataDir empty": {
+			mutate:    func(c *Config) { c.DataDir = "" },
+			wantInErr: "dataDir",
 		},
 		"nodeId not in members": {
 			mutate:    func(c *Config) { c.NodeID = "kv-99" },
