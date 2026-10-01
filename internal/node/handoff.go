@@ -48,6 +48,12 @@ var (
 	// moves. Tests only: it lets one pause or interrupt a handoff. Always nil
 	// in production.
 	testHookHandoffKey func(ctx context.Context, nodeID string, epoch uint64, key string)
+
+	// testHookHandoffPush, when set, runs before each handoff push; a non-nil
+	// error fails that push as if the RPC had. Tests only: it makes a push
+	// fail so the key has to reach its owner some other way. Always nil in
+	// production.
+	testHookHandoffPush func(nodeID, target, key string) error
 )
 
 // HandoffStatus returns the state of the handoff to the newest view.
@@ -268,6 +274,11 @@ func (n *Node) handoffPush(ctx context.Context, gen uint64, newest *view, key st
 }
 
 func (n *Node) pushOnce(ctx context.Context, newest *view, target, key string, siblings []*model.DataItem) error {
+	if testHookHandoffPush != nil {
+		if err := testHookHandoffPush(n.ID, target, key); err != nil {
+			return err
+		}
+	}
 	if n.isDead(target) {
 		return errPeerDead(target)
 	}

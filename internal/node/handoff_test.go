@@ -10,10 +10,14 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/vectorclock"
@@ -455,6 +459,34 @@ func TestLeavingNodeWaitsForAnUnreachableTarget(t *testing.T) {
 // its keys, so that would take a write landing within that instant.)
 func TestHandoffRacesWithTrafficAndFurtherViewChanges(t *testing.T) {
 	fastHandoffRetries(t)
+
+	// Every handoff push of one pre-written key to node-4 fails, from
+	// whichever node makes it. node-4 joins after the keys were written, so it
+	// has no copy of its own: the only way one arrives is a hint a failed
+	// push leaves behind. Installed before the nodes exist, so it is reset
+	// only after they are closed and no handoff can still read it.
+	var injectedMu sync.Mutex
+	var injected struct {
+		key      string
+		failures int
+	}
+	testHookHandoffPush = func(from, to, key string) error {
+		if to != "node-4" || !strings.HasPrefix(key, "pre-") {
+			return nil
+		}
+		injectedMu.Lock()
+		defer injectedMu.Unlock()
+		if injected.key == "" {
+			injected.key = key
+		}
+		if key != injected.key {
+			return nil
+		}
+		injected.failures++
+		return status.Error(codes.Unavailable, "test: injected handoff push failure")
+	}
+	t.Cleanup(func() { testHookHandoffPush = nil })
+
 	ids := []string{"node-1", "node-2", "node-3", "node-4"}
 	addrs := reserveAddrs(t, ids...)
 	nodes := map[string]*Node{}
@@ -464,6 +496,9 @@ func TestHandoffRacesWithTrafficAndFurtherViewChanges(t *testing.T) {
 	nodes["node-4"] = newHandoffNode(t, "node-4", addrs["node-4"], 3, 2, neighborsOf(addrs, "node-4"))
 	for _, id := range ids {
 		serveNode(t, nodes[id], addrs[id])
+		// As every real node does: a push that fails becomes a hint, and
+		// only this loop carries it to its owner.
+		nodes[id].StartHintDeliveryLoop(context.Background(), 20*time.Millisecond)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -518,6 +553,26 @@ func TestHandoffRacesWithTrafficAndFurtherViewChanges(t *testing.T) {
 	t.Logf("%d writes acknowledged, %d failed while the views differed; %d reads failed",
 		len(acked)-100, failedWrites.Load(), failedReads.Load())
 
+	injectedMu.Lock()
+	inj := injected
+	injectedMu.Unlock()
+	if inj.failures == 0 {
+		t.Fatal("setup: no handoff push was failed; the test proves nothing about hints")
+	}
+	t.Logf("failed %d handoff pushes of %s to node-4", inj.failures, inj.key)
+
+	// Give the hint loops time to deliver; whatever is still missing after
+	// that is reported below, key by key.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && !noHintsPending(t, nodes) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if items, _, err := nodes["node-4"].Store.Get(inj.key); err != nil {
+		t.Fatalf("node-4: Get(%q): %v", inj.key, err)
+	} else if !slices.ContainsFunc(items, func(it *model.DataItem) bool { return it.Value == acked[inj.key] }) {
+		t.Errorf("node-4 never received %s, whose every handoff push to it failed (holds %v)", inj.key, itemValues(items))
+	}
+
 	missing := 0
 	for key, value := range acked {
 		for _, owner := range owners(nodes["node-1"], key, 3) {
@@ -536,4 +591,21 @@ func TestHandoffRacesWithTrafficAndFurtherViewChanges(t *testing.T) {
 	if missing > 0 {
 		t.Fatalf("%d acknowledged writes missing from owners in the final view", missing)
 	}
+}
+
+// noHintsPending reports whether no node in nodes holds an undelivered hint.
+func noHintsPending(t *testing.T, nodes map[string]*Node) bool {
+	t.Helper()
+	for _, nd := range nodes {
+		targets, err := nd.hints.Targets()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, target := range targets {
+			if pendingKeys(t, nd, target) > 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
