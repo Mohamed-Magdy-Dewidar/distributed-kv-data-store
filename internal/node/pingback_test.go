@@ -228,8 +228,23 @@ func TestAPingBacksOldConnectionIsClosedAfterAGracePeriod(t *testing.T) {
 	}
 
 	eventually(t, 3*time.Second, "the old connection to leave the retired list", func() bool { return !isRetired(a, old) })
-	_, err := old.Ping(context.Background(), rpc.PingInfo{SenderID: "node-a"})
+
+	// closeRetiredLater drops the connection from the list and only then,
+	// outside the lock, closes it: wait for the close, not just the removal.
+	// A Ping on a closed connection fails Canceled; each attempt's own
+	// deadline shows up as DeadlineExceeded, never as Canceled.
+	deadline := time.Now().Add(3 * time.Second)
+	var err error
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err = old.Ping(ctx, rpc.PingInfo{SenderID: "node-a"})
+		cancel()
+		if status.Code(err) == codes.Canceled || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if status.Code(err) != codes.Canceled {
-		t.Fatalf("a Ping over the old connection returned %v, want Canceled (connection closed)", err)
+		t.Fatalf("a Ping over the old connection still returned %v after 3s, want Canceled (connection closed)", err)
 	}
 }
