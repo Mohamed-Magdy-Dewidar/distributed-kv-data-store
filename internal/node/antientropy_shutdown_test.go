@@ -17,9 +17,9 @@ func TestCloseWaitsForAnAntiEntropyRoundInProgress(t *testing.T) {
 	a := reserveAddrs(t, "node-1", "node-2")
 	a1, a2 := a["node-1"], a["node-2"]
 
-	node1, err := NewPersistent("node-1", a1, 2, 2, 1, map[string]string{"node-2": a2}, dir, 1<<20)
+	node1, err := New("node-1", a1, 2, 2, 1, map[string]string{"node-2": a2}, dir, 1<<20)
 	if err != nil {
-		t.Fatalf("NewPersistent failed: %v", err)
+		t.Fatalf("New failed: %v", err)
 	}
 	serveAt(t, a1, node1.Store, node1)
 	node2 := startTestNode(t, "node-2", a2, map[string]string{"node-1": a1})
@@ -53,7 +53,7 @@ func TestCloseWaitsForAnAntiEntropyRoundInProgress(t *testing.T) {
 		t.Fatalf("Close failed: %v", err)
 	}
 
-	reopened, err := NewPersistent("node-1", a1, 2, 2, 1, map[string]string{"node-2": a2}, dir, 1<<20)
+	reopened, err := New("node-1", a1, 2, 2, 1, map[string]string{"node-2": a2}, dir, 1<<20)
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestCloseWaitsForAnAntiEntropyRoundInProgress(t *testing.T) {
 // run (as Close runs it), no new loop may start — it would run against a
 // closed engine with nothing left to wait for it.
 func TestStartAntiEntropyLoopAfterStopDoesNothing(t *testing.T) {
-	n := New("node-1", "unused", 1, 1, 1, nil)
+	n := newTestNode(t, "node-1", "unused", 1, 1, 1, nil)
 	n.StopBackgroundLoops()
 	n.StartAntiEntropyLoop(context.Background(), time.Millisecond)
 
@@ -86,7 +86,7 @@ func TestStartAntiEntropyLoopAfterStopDoesNothing(t *testing.T) {
 // window must not wait the delay out — at a 30s anti-entropy interval that
 // would hold shutdown for up to 30s.
 func TestStopBackgroundLoopsDuringFirstDelayReturnsPromptly(t *testing.T) {
-	n := New("node-1", "unused", 1, 1, 1, nil)
+	n := newTestNode(t, "node-1", "unused", 1, 1, 1, nil)
 	n.StartAntiEntropyLoop(context.Background(), time.Hour)
 
 	stopped := make(chan struct{})

@@ -12,7 +12,7 @@ import (
 func TestW1FansOutToLivePeerEvenThoughLocalWriteAloneSatisfiesW(t *testing.T) {
 	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := persistentCoordinator(t, t.TempDir(), peersOf("node-1"), 1)
-	node2 := New("node-2", addrs["node-2"], 3, 1, 1, peersOf("node-2"))
+	node2 := newTestNode(t, "node-2", addrs["node-2"], 3, 1, 1, peersOf("node-2"))
 	serveNode(t, node2, addrs["node-2"])
 
 	if err := node1.Put(context.Background(), "k", "v", nil); err != nil {

@@ -19,20 +19,6 @@ import (
 
 var clockIDPattern = regexp.MustCompile(`^node-1#[0-9a-f]{16}$`)
 
-func TestInMemoryNodesTakeANewIncarnationEach(t *testing.T) {
-	a := New("node-1", "unused", 1, 1, 1, nil)
-	b := New("node-1", "unused", 1, 1, 1, nil)
-	if !clockIDPattern.MatchString(a.ClockID()) || !clockIDPattern.MatchString(b.ClockID()) {
-		t.Fatalf("clock IDs %q, %q are not node-1#<16 hex>", a.ClockID(), b.ClockID())
-	}
-	if a.ClockID() == b.ClockID() {
-		t.Fatalf("two in-memory nodes shared clock ID %q", a.ClockID())
-	}
-	if a.ID != "node-1" {
-		t.Fatalf("node ID changed to %q", a.ID)
-	}
-}
-
 // The incarnation survives a reopen of the same dir, a wiped dir gets a
 // different one, and LastUpdatedBy stays the plain node ID.
 func TestPersistentIncarnationSurvivesReopenAndChangesOnWipe(t *testing.T) {
@@ -117,13 +103,13 @@ func TestDataDirWithoutIdentityGetsOneAndKeepsOldHistory(t *testing.T) {
 	}
 }
 
-func TestNewPersistentRefusesADirOwnedByAnotherNodeID(t *testing.T) {
+func TestNewRefusesADirOwnedByAnotherNodeID(t *testing.T) {
 	dir := t.TempDir()
 	openSoloNode(t, dir, 1<<20).Close() // node-1 claims dir
 
-	_, err := NewPersistent("node-2", "unused", 1, 1, 1, nil, dir, 1<<20)
+	_, err := New("node-2", "unused", 1, 1, 1, nil, dir, 1<<20)
 	if err == nil {
-		t.Fatal("expected NewPersistent to refuse a dir owned by node-1")
+		t.Fatal("expected New to refuse a dir owned by node-1")
 	}
 	for _, want := range []string{"node-1", "node-2", dir} {
 		if !strings.Contains(err.Error(), want) {
@@ -132,7 +118,7 @@ func TestNewPersistentRefusesADirOwnedByAnotherNodeID(t *testing.T) {
 	}
 
 	// The refusal released the dir's lock: the rightful owner can open it.
-	again, err := NewPersistent("node-1", "unused", 1, 1, 1, nil, dir, 1<<20)
+	again, err := New("node-1", "unused", 1, 1, 1, nil, dir, 1<<20)
 	if errors.Is(err, engine.ErrLocked) {
 		t.Fatalf("the refused open left the dir locked: %v", err)
 	}
@@ -155,13 +141,13 @@ func TestReusedNodeIDOnAnEmptyDataDirDoesNotLoseWrites(t *testing.T) {
 	dir := t.TempDir()
 	const n, w, r = 2, 2, 2
 
-	node2 := New("node-2", addrs["node-2"], n, w, r, map[string]string{"node-1": addrs["node-1"]})
+	node2 := newTestNode(t, "node-2", addrs["node-2"], n, w, r, map[string]string{"node-1": addrs["node-1"]})
 	serveNode(t, node2, addrs["node-2"])
 
 	start := func() (*Node, *rpc.Listener) {
-		nd, err := NewPersistent("node-1", addrs["node-1"], n, w, r, map[string]string{"node-2": addrs["node-2"]}, dir, 1<<20)
+		nd, err := New("node-1", addrs["node-1"], n, w, r, map[string]string{"node-2": addrs["node-2"]}, dir, 1<<20)
 		if err != nil {
-			t.Fatalf("NewPersistent: %v", err)
+			t.Fatalf("New: %v", err)
 		}
 		l, err := rpc.Serve(addrs["node-1"], nd.Store, nd)
 		if err != nil {

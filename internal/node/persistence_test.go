@@ -18,9 +18,9 @@ import (
 // neighbors) at dir, so Node.Put and Node.Get run entirely locally.
 func openSoloNode(t *testing.T, dir string, maxMemtableBytes int) *Node {
 	t.Helper()
-	nd, err := NewPersistent("node-1", "unused", 1, 1, 1, nil, dir, maxMemtableBytes)
+	nd, err := New("node-1", "unused", 1, 1, 1, nil, dir, maxMemtableBytes)
 	if err != nil {
-		t.Fatalf("NewPersistent failed: %v", err)
+		t.Fatalf("New failed: %v", err)
 	}
 	return nd
 }
@@ -117,14 +117,14 @@ func TestPersistentNodeRecoversFromSSTables(t *testing.T) {
 	assertRecovered(t, reopened, "k", "v2", map[string]uint32{clockID: 2})
 }
 
-// TestNewPersistentClosesMainEngineWhenHintsOpenFails: if hints.Open fails
+// TestNewClosesMainEngineWhenHintsOpenFails: if hints.Open fails
 // (here because another engine already holds the hints dir's lock),
-// NewPersistent must close the main engine it already opened — releasing
+// New must close the main engine it already opened — releasing
 // its own lock — rather than leaking a locked, orphaned StorageEngine.
-func TestNewPersistentClosesMainEngineWhenHintsOpenFails(t *testing.T) {
+func TestNewClosesMainEngineWhenHintsOpenFails(t *testing.T) {
 	dir := t.TempDir()
 
-	// Pre-lock the hints dir ourselves, so NewPersistent's internal
+	// Pre-lock the hints dir ourselves, so New's internal
 	// hints.Open call fails with engine.ErrLocked.
 	blocker, err := engine.Open(filepath.Join(dir, "hints"), 1<<20)
 	if err != nil {
@@ -132,8 +132,8 @@ func TestNewPersistentClosesMainEngineWhenHintsOpenFails(t *testing.T) {
 	}
 	defer blocker.Close()
 
-	if _, err := NewPersistent("node-1", "unused", 1, 1, 1, nil, dir, 1<<20); err == nil {
-		t.Fatal("expected NewPersistent to fail while the hints dir is locked")
+	if _, err := New("node-1", "unused", 1, 1, 1, nil, dir, 1<<20); err == nil {
+		t.Fatal("expected New to fail while the hints dir is locked")
 	} else if !errors.Is(err, engine.ErrLocked) {
 		t.Fatalf("expected the error to wrap engine.ErrLocked, got %v", err)
 	}
@@ -143,7 +143,7 @@ func TestNewPersistentClosesMainEngineWhenHintsOpenFails(t *testing.T) {
 	// fail with ErrLocked.
 	e, err := engine.Open(dir, 1<<20)
 	if err != nil {
-		t.Fatalf("expected the main engine's dir to be unlocked after the failed NewPersistent, got %v", err)
+		t.Fatalf("expected the main engine's dir to be unlocked after the failed New, got %v", err)
 	}
 	if err := e.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
@@ -151,15 +151,11 @@ func TestNewPersistentClosesMainEngineWhenHintsOpenFails(t *testing.T) {
 }
 
 // TestCloseIsIdempotentAndClosesPeerClients: Close closes every cached
-// peer connection, has no engine to close on an in-memory node, and can
-// be called again safely — on a persistent node too, where closing the
+// peer connection and can be called again safely, although closing the
 // engine's WAL twice would otherwise fail.
 func TestCloseIsIdempotentAndClosesPeerClients(t *testing.T) {
 	a := knownAddrs("node-1", "node-2") // never served
-	nd := New("node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"]})
-	if nd.engine != nil {
-		t.Fatal("expected an in-memory node to have no storage engine")
-	}
+	nd := newTestNode(t, "node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"]})
 	client, err := nd.getOrDialClient("node-2")
 	if err != nil {
 		t.Fatalf("dial node-2: %v", err)
@@ -175,12 +171,5 @@ func TestCloseIsIdempotentAndClosesPeerClients(t *testing.T) {
 	}
 	if _, _, err := client.FetchItem(context.Background(), "k"); status.Code(err) != codes.Canceled {
 		t.Fatalf("expected the cached client's connection to be closed (codes.Canceled), got %v", err)
-	}
-
-	persistent := openSoloNode(t, t.TempDir(), 1<<20)
-	for i := 1; i <= 2; i++ {
-		if err := persistent.Close(); err != nil {
-			t.Fatalf("persistent Close #%d failed: %v", i, err)
-		}
 	}
 }

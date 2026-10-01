@@ -76,9 +76,9 @@ func coldStart(t *testing.T) (a, b, c *Node) {
 	slowBackoff(t)
 	addrs := reserveAddrs(t, "node-a")
 	maps.Copy(addrs, knownAddrs("node-b", "node-c"))
-	a = New("node-a", addrs["node-a"], 3, 2, 2, neighborsOf(addrs, "node-a"))
-	b = New("node-b", addrs["node-b"], 3, 2, 2, neighborsOf(addrs, "node-b"))
-	c = New("node-c", addrs["node-c"], 3, 2, 2, neighborsOf(addrs, "node-c"))
+	a = newTestNode(t, "node-a", addrs["node-a"], 3, 2, 2, neighborsOf(addrs, "node-a"))
+	b = newTestNode(t, "node-b", addrs["node-b"], 3, 2, 2, neighborsOf(addrs, "node-b"))
+	c = newTestNode(t, "node-c", addrs["node-c"], 3, 2, 2, neighborsOf(addrs, "node-c"))
 	for _, nd := range []*Node{a, b, c} {
 		nd.QuorumConfig.HeartbeatTimeout = 500 * time.Millisecond
 		nd.QuorumConfig.MaxMissedHeartbeats = 3
@@ -171,8 +171,8 @@ func TestPingFromAWrongAddressTriggersNothing(t *testing.T) {
 func TestPingFromAReachablePeerTriggersNoPingBack(t *testing.T) {
 	pingBacks := countPingBacks(t)
 	addrs := reserveAddrs(t, "node-a", "node-b")
-	a := New("node-a", addrs["node-a"], 2, 1, 1, neighborsOf(addrs, "node-a"))
-	b := New("node-b", addrs["node-b"], 2, 1, 1, neighborsOf(addrs, "node-b"))
+	a := newTestNode(t, "node-a", addrs["node-a"], 2, 1, 1, neighborsOf(addrs, "node-a"))
+	b := newTestNode(t, "node-b", addrs["node-b"], 2, 1, 1, neighborsOf(addrs, "node-b"))
 	serveClosing(t, a, addrs["node-a"])
 	serveClosing(t, b, addrs["node-b"])
 

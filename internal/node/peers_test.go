@@ -103,9 +103,9 @@ func TestWaitDrainedNeedsPeersOnlyForANodeOutsideTheView(t *testing.T) {
 // is still alive (one miss is below MaxMissedHeartbeats).
 func TestPeerReachableFollowsTheLatestPing(t *testing.T) {
 	addrs := reserveAddrs(t, "node-1", "node-2") // node-2 isn't pinged until it is served
-	a := New("node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
+	a := newTestNode(t, "node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
 	fastHealth(a)
-	b := New("node-2", addrs["node-2"], 2, 1, 1, neighborsOf(addrs, "node-2"))
+	b := newTestNode(t, "node-2", addrs["node-2"], 2, 1, 1, neighborsOf(addrs, "node-2"))
 
 	if st := a.PeerStatuses()["node-2"]; st.Reachable || !st.Alive {
 		t.Fatalf("before any ping: %+v, want alive and not reachable", st)

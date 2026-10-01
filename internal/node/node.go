@@ -57,14 +57,13 @@ type Node struct {
 	// view is never mutated (see view).
 	membership atomic.Pointer[view]
 
-	// membershipMu serializes SetMembership. persistView, set for persistent
-	// nodes, durably stores a view before SetMembership publishes it.
+	// membershipMu serializes SetMembership. persistView durably stores a
+	// view before SetMembership publishes it.
 	membershipMu sync.Mutex
 	persistView  func(*view) error
 
 	// Handoff state (see handoff.go), guarded by handoffMu. handoffBase is the
-	// last view whose handoff completed; persistHandoff, set for persistent
-	// nodes, records it durably.
+	// last view whose handoff completed; persistHandoff records it durably.
 	handoffMu      sync.Mutex
 	handoffBase    *view
 	handoffTarget  *view // the newest view a handoff was started for
@@ -101,8 +100,8 @@ type Node struct {
 	retired       []*rpc.Client
 	clientsClosed bool
 
-	engine    *engine.StorageEngine // persistent nodes only (NewPersistent); nil in memory
-	hints     *hints.Store          // persistent nodes only; nil in memory (no hinted handoff)
+	engine    *engine.StorageEngine
+	hints     *hints.Store
 	closeOnce sync.Once
 	closeErr  error
 
@@ -123,28 +122,9 @@ type Node struct {
 	drainWG      sync.WaitGroup
 }
 
-// New builds an in-memory Node whose hash ring holds itself plus every
-// configured neighbor. Every node in the cluster must be constructed with the
-// same set of node IDs (this node's own id plus every neighbor's) for all
-// nodes to compute identical preference lists. It panics if id or a neighbor
-// ID is empty: the IDs come from validated configuration, so that is a
-// programming error (NewPersistent returns it as an error instead).
-//
-// It takes a new incarnation each time (see ClockID), so it is meant for
-// tests and demos: nothing survives a restart, and a restarted in-memory node
-// is a new writer.
-func New(id, address string, n, w, r int, neighborAddrs map[string]string) *Node {
-	v, err := initialView(id, address, neighborAddrs, n)
-	if err != nil {
-		panic(fmt.Sprintf("node %q: %v", id, err))
-	}
-	clockID := identity.ClockID(id, identity.NewIncarnation())
-	return newNode(id, clockID, address, n, w, r, v, v, store.NewDataStoreWithClockID(id, clockID), nil, nil)
-}
-
 // ClockID is the name this node's writes carry in vector clocks: its node ID
-// plus an incarnation, "<id>#<16 hex chars>". A persistent node's incarnation
-// is created on the first boot of its data directory and kept in its IDENTITY
+// plus an incarnation, "<id>#<16 hex chars>". The incarnation is created on
+// the first boot of the node's data directory and kept in its IDENTITY
 // file, so it is the same across restarts; a data directory that is replaced
 // gets a new one. That keeps a replacement node that reuses an ID from
 // restarting the counter of its predecessor's clock entry, which replicas
@@ -160,15 +140,19 @@ var (
 	_ rpc.MembershipService = (*Node)(nil)
 )
 
-// NewPersistent is New with the node's data kept on disk: it opens (or
-// creates) a StorageEngine at dataDir — replaying its WAL and loading its
-// live SSTables, so a node reopened on the same directory gets its data
-// back — and runs the node's DataStore on top of it. It also opens the
-// node's hinted-handoff store, on its own engine at dataDir/hints (which
+// New builds the node id, with its data kept in dataDir. Its hash ring holds
+// itself plus every neighbor in neighborAddrs; every node in the cluster must
+// be built with the same set of node IDs for all of them to compute the same
+// preference lists.
+//
+// It opens (or creates) a StorageEngine at dataDir — replaying its WAL and
+// loading its live SSTables, so a node reopened on the same directory gets
+// its data back — and runs the node's DataStore on top of it. It also opens
+// the node's hinted-handoff store, on its own engine at dataDir/hints (which
 // the main engine ignores). maxMemtableBytes is both engines' flush
 // threshold. The caller must Close the node to close them cleanly.
 //
-// Once the engine holds the directory's lock, NewPersistent loads the
+// Once the engine holds the directory's lock, New loads the
 // directory's incarnation from its IDENTITY file, or creates and durably
 // stores one (see internal/identity) before anything can be written. It
 // refuses to start, naming both IDs and the directory, if the file belongs to
@@ -181,8 +165,8 @@ var (
 // If the directory has a MEMBERSHIP file (written by SetMembership), that
 // view is the node's initial one instead of the epoch-0 view built from
 // neighborAddrs. A MEMBERSHIP file that is corrupt, invalid, or doesn't match
-// its own fingerprint (or n) makes NewPersistent fail rather than guess.
-func NewPersistent(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
+// its own fingerprint (or n) makes New fail rather than guess.
+func New(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
 	v, err := initialView(id, address, neighborAddrs, n)
 	if err != nil {
 		return nil, fmt.Errorf("node %s: %w", id, err)
@@ -258,7 +242,7 @@ func newNode(id, clockID, address string, n, w, r int, v, handoffBase *view, ds 
 //     No new drain starts from here.
 //  3. Close its cached peer connections, retired ones included, and refuse
 //     to dial any more — nothing above uses them now.
-//  4. For a persistent node, close the hint store, then the StorageEngine
+//  4. Close the hint store, then the StorageEngine
 //     (which waits for in-flight flushes, stops compaction, and closes the
 //     Manifest and WAL). The two don't depend on each other.
 //
@@ -293,28 +277,21 @@ func (n *Node) Close() error {
 		n.retired = nil
 		n.clientsMu.Unlock()
 
-		if n.hints != nil {
-			if err := n.hints.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("close hint store: %w", err))
-			}
+		if err := n.hints.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close hint store: %w", err))
 		}
-		if n.engine != nil {
-			if err := n.engine.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("close storage engine: %w", err))
-			}
+		if err := n.engine.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close storage engine: %w", err))
 		}
 		n.closeErr = errors.Join(errs...)
 	})
 	return n.closeErr
 }
 
-// StartCompactionLoop compacts a persistent node's SSTables every interval
-// until ctx is canceled (see StorageEngine.StartCompactionLoop). It's a
-// no-op for an in-memory node, which has nothing to compact.
+// StartCompactionLoop compacts the node's SSTables every interval until ctx
+// is canceled (see StorageEngine.StartCompactionLoop).
 func (n *Node) StartCompactionLoop(ctx context.Context, interval time.Duration) {
-	if n.engine != nil {
-		n.engine.StartCompactionLoop(ctx, interval)
-	}
+	n.engine.StartCompactionLoop(ctx, interval)
 }
 
 // isReplicaFor reports whether n itself is one of the N nodes the hash
@@ -537,7 +514,7 @@ func (n *Node) drainReplication(key string, item *model.DataItem, results <-chan
 				unavailable = append(unavailable, res.peerID)
 			}
 		}
-		if !keep || n.hints == nil || len(unavailable) == 0 {
+		if !keep || len(unavailable) == 0 {
 			return
 		}
 		if testHookBeforeStoringHints != nil {
@@ -926,12 +903,8 @@ func (n *Node) StartAntiEntropyLoop(ctx context.Context, interval time.Duration)
 }
 
 // StartHintDeliveryLoop delivers n's pending hints every interval (see
-// deliverHints, and startLoop for scheduling and stopping). It does
-// nothing on an in-memory node, which holds no hints.
+// deliverHints, and startLoop for scheduling and stopping).
 func (n *Node) StartHintDeliveryLoop(ctx context.Context, interval time.Duration) {
-	if n.hints == nil {
-		return
-	}
 	n.startLoop(ctx, interval, n.deliverHints, nil)
 }
 

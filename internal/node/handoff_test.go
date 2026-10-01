@@ -34,11 +34,11 @@ func handoffHook(t *testing.T, hook func(ctx context.Context, nodeID string, epo
 	t.Cleanup(func() { testHookHandoffKey = nil })
 }
 
-// newHandoffNode is an in-memory node with quick reconnects and a bounded
+// newHandoffNode is a node (see newTestNode) with quick reconnects and a bounded
 // push timeout. The heartbeat and anti-entropy loops are not started: handoff
 // is the only thing that moves data.
-func newHandoffNode(id, addr string, n, w int, neighbors map[string]string) *Node {
-	nd := New(id, addr, n, w, 1, neighbors)
+func newHandoffNode(t *testing.T, id, addr string, n, w int, neighbors map[string]string) *Node {
+	nd := newTestNode(t, id, addr, n, w, 1, neighbors)
 	nd.QuorumConfig.MaxReconnectBackoff = 50 * time.Millisecond
 	nd.QuorumConfig.ReplicationTimeout = 2 * time.Second
 	return nd
@@ -100,9 +100,9 @@ func TestScaleUpMovesEveryKeyToItsNewOwners(t *testing.T) {
 	}
 	nodes := map[string]*Node{}
 	for _, id := range ids[:4] {
-		nodes[id] = newHandoffNode(id, addrs[id], 3, 3, neighborsOf(membersOf(addrs, ids[:4]...), id))
+		nodes[id] = newHandoffNode(t, id, addrs[id], 3, 3, neighborsOf(membersOf(addrs, ids[:4]...), id))
 	}
-	nodes["node-5"] = newHandoffNode("node-5", addrs["node-5"], 3, 3, nil) // outside the cluster so far
+	nodes["node-5"] = newHandoffNode(t, "node-5", addrs["node-5"], 3, 3, nil) // outside the cluster so far
 	for _, id := range ids {
 		serveNode(t, nodes[id], addrs[id])
 	}
@@ -165,7 +165,7 @@ func TestLeavingNodePushesToEveryNewOwner(t *testing.T) {
 	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes := map[string]*Node{}
 	for id := range addrs {
-		nodes[id] = newHandoffNode(id, addrs[id], 2, 2, neighborsOf(addrs, id))
+		nodes[id] = newHandoffNode(t, id, addrs[id], 2, 2, neighborsOf(addrs, id))
 		serveNode(t, nodes[id], addrs[id])
 	}
 	x := nodes["node-3"]
@@ -206,9 +206,9 @@ func TestNewerViewKeepsTheBaseOfTheCancelledHandoff(t *testing.T) {
 	fastHandoffRetries(t)
 	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes := map[string]*Node{
-		"node-1": newHandoffNode("node-1", addrs["node-1"], 2, 1, map[string]string{"node-2": addrs["node-2"]}),
-		"node-2": newHandoffNode("node-2", addrs["node-2"], 2, 1, map[string]string{"node-1": addrs["node-1"]}),
-		"node-3": newHandoffNode("node-3", addrs["node-3"], 2, 1, nil),
+		"node-1": newHandoffNode(t, "node-1", addrs["node-1"], 2, 1, map[string]string{"node-2": addrs["node-2"]}),
+		"node-2": newHandoffNode(t, "node-2", addrs["node-2"], 2, 1, map[string]string{"node-1": addrs["node-1"]}),
+		"node-3": newHandoffNode(t, "node-3", addrs["node-3"], 2, 1, nil),
 	}
 	for id, nd := range nodes {
 		serveNode(t, nd, addrs[id])
@@ -269,9 +269,9 @@ func TestNewerViewKeepsTheBaseOfTheCancelledHandoff(t *testing.T) {
 // openHandoffNode opens node-1 persistent, alone in its configuration.
 func openHandoffNode(t *testing.T, dir, addr string) *Node {
 	t.Helper()
-	nd, err := NewPersistent("node-1", addr, 1, 1, 1, nil, dir, 1<<20)
+	nd, err := New("node-1", addr, 1, 1, 1, nil, dir, 1<<20)
 	if err != nil {
-		t.Fatalf("NewPersistent: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	nd.QuorumConfig.MaxReconnectBackoff = 50 * time.Millisecond
 	nd.QuorumConfig.ReplicationTimeout = 2 * time.Second
@@ -284,7 +284,7 @@ func TestHandoffResumesAfterRestartAndIsRecordedWhenDone(t *testing.T) {
 	fastHandoffRetries(t)
 	addrs := reserveAddrs(t, "node-1", "node-2")
 	dir := t.TempDir()
-	node2 := newHandoffNode("node-2", addrs["node-2"], 1, 1, nil)
+	node2 := newHandoffNode(t, "node-2", addrs["node-2"], 1, 1, nil)
 	serveNode(t, node2, addrs["node-2"])
 	both := membersOf(addrs, "node-1", "node-2")
 
@@ -388,7 +388,7 @@ func TestUnreachableTargetBecomesAHintForANodeThatStays(t *testing.T) {
 		t.Fatalf("expected only hints for the unreachable owner, got %+v", st)
 	}
 
-	node2 := newHandoffNode("node-2", addrs["node-2"], 1, 1, nil)
+	node2 := newHandoffNode(t, "node-2", addrs["node-2"], 1, 1, nil)
 	serveNode(t, node2, addrs["node-2"])
 	eventually(t, 10*time.Second, "the hints to reach node-2", func() bool {
 		nd.deliverHints(context.Background())
@@ -407,7 +407,7 @@ func TestLeavingNodeWaitsForAnUnreachableTarget(t *testing.T) {
 	fastHandoffRetries(t)
 	addrs := reserveAddrs(t, "node-1")
 	maps.Copy(addrs, knownAddrs("node-2")) // down, then started later
-	nd := newHandoffNode("node-1", addrs["node-1"], 1, 1, map[string]string{"node-2": addrs["node-2"]})
+	nd := newHandoffNode(t, "node-1", addrs["node-1"], 1, 1, map[string]string{"node-2": addrs["node-2"]})
 
 	expected := map[string][]string{}
 	for i := 0; len(expected) < 30; i++ {
@@ -430,7 +430,7 @@ func TestLeavingNodeWaitsForAnUnreachableTarget(t *testing.T) {
 		t.Fatalf("status with the target down: %+v", st)
 	}
 
-	node2 := newHandoffNode("node-2", addrs["node-2"], 1, 1, nil)
+	node2 := newHandoffNode(t, "node-2", addrs["node-2"], 1, 1, nil)
 	serveNode(t, node2, addrs["node-2"])
 	waitHandoff(t, nd, 1)
 	for key, want := range expected {
@@ -459,9 +459,9 @@ func TestHandoffRacesWithTrafficAndFurtherViewChanges(t *testing.T) {
 	addrs := reserveAddrs(t, ids...)
 	nodes := map[string]*Node{}
 	for _, id := range ids[:3] {
-		nodes[id] = newHandoffNode(id, addrs[id], 3, 2, neighborsOf(membersOf(addrs, ids[:3]...), id))
+		nodes[id] = newHandoffNode(t, id, addrs[id], 3, 2, neighborsOf(membersOf(addrs, ids[:3]...), id))
 	}
-	nodes["node-4"] = newHandoffNode("node-4", addrs["node-4"], 3, 2, neighborsOf(addrs, "node-4"))
+	nodes["node-4"] = newHandoffNode(t, "node-4", addrs["node-4"], 3, 2, neighborsOf(addrs, "node-4"))
 	for _, id := range ids {
 		serveNode(t, nodes[id], addrs[id])
 	}

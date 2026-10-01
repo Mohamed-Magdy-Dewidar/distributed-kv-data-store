@@ -16,7 +16,7 @@ func hintedWrite(t *testing.T, keys ...string) (node1 *Node, addrs map[string]st
 	addrs, peersOf = hintCluster(t, "node-3") // node-3 is started later, on this known address
 	node1 = persistentCoordinator(t, t.TempDir(), peersOf("node-1"), 2)
 	node1.QuorumConfig.ReplicationTimeout = 300 * time.Millisecond // a down target costs one of these per round
-	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
+	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
 	for _, key := range keys {
 		if err := node1.Put(context.Background(), key, "v-"+key, nil); err != nil {
 			t.Fatalf("Put %q failed: %v", key, err)
@@ -64,7 +64,7 @@ func waitReachable(t *testing.T, from *Node, target string) {
 // the hints.
 func TestHintsAreDeliveredOnceTheTargetIsBack(t *testing.T) {
 	node1, addrs, peersOf := hintedWrite(t, "a", "b")
-	node3 := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
+	node3 := newTestNode(t, "node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
 	serveNode(t, node3, addrs["node-3"])
 	waitReachable(t, node1, "node-3")
 
@@ -119,7 +119,7 @@ func TestUnreachableTargetIsSkippedForTheRestOfTheRound(t *testing.T) {
 // using it.
 func TestStopWaitsForAHintDeliveryInProgress(t *testing.T) {
 	node1, addrs, peersOf := hintedWrite(t, "a")
-	node3 := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
+	node3 := newTestNode(t, "node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
 	serveNode(t, node3, addrs["node-3"])
 	waitReachable(t, node1, "node-3")
 
@@ -174,19 +174,4 @@ func TestStopDuringHintLoopFirstDelayReturnsPromptly(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("StopBackgroundLoops is still waiting out the hint loop's first delay")
 	}
-}
-
-// TestHintDeliveryLoopIsNoOpInMemory: an in-memory node holds no hints, so
-// no delivery loop starts.
-func TestHintDeliveryLoopIsNoOpInMemory(t *testing.T) {
-	n := New("node-1", "unused", 1, 1, 1, nil)
-	n.StartHintDeliveryLoop(context.Background(), time.Millisecond)
-
-	n.bgMu.Lock()
-	loops := len(n.bgCancels)
-	n.bgMu.Unlock()
-	if loops != 0 {
-		t.Fatalf("expected no hint-delivery loop on an in-memory node, %d started", loops)
-	}
-	n.Close()
 }

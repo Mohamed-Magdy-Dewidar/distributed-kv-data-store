@@ -161,8 +161,8 @@ func sameMembership(a, b *Node) bool {
 func TestHeartbeatMarksAStoppedPeerDeadAndARestartedOneAlive(t *testing.T) {
 	addrs := reserveAddrs(t, "node-1")
 	addrs["node-2"] = knownAddr() // stopped and restarted on the same address
-	node1 := New("node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
-	node2 := New("node-2", addrs["node-2"], 2, 1, 1, neighborsOf(addrs, "node-2"))
+	node1 := newTestNode(t, "node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
+	node2 := newTestNode(t, "node-2", addrs["node-2"], 2, 1, 1, neighborsOf(addrs, "node-2"))
 	fastHealth(node1)
 	listener, err := rpc.Serve(addrs["node-2"], node2.Store, node2)
 	if err != nil {
@@ -200,10 +200,10 @@ func TestHeartbeatMarksAStoppedPeerDeadAndARestartedOneAlive(t *testing.T) {
 func hungCluster(t *testing.T) *Node {
 	t.Helper()
 	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
-	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 3, neighborsOf(addrs, "node-2")), addrs["node-2"])
+	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 2, 3, neighborsOf(addrs, "node-2")), addrs["node-2"])
 	startHungPeer(t, addrs["node-3"])
 
-	nd, err := NewPersistent("node-1", addrs["node-1"], 3, 2, 3, neighborsOf(addrs, "node-1"), t.TempDir(), 1<<20)
+	nd, err := New("node-1", addrs["node-1"], 3, 2, 3, neighborsOf(addrs, "node-1"), t.TempDir(), 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func startLoopCluster(t *testing.T, ids ...string) (map[string]*Node, map[string
 	addrs := reserveAddrs(t, ids...)
 	nodes := map[string]*Node{}
 	for _, id := range ids {
-		nd := New(id, addrs[id], 2, 1, 1, neighborsOf(addrs, id))
+		nd := newTestNode(t, id, addrs[id], 2, 1, 1, neighborsOf(addrs, id))
 		fastHealth(nd)
 		serveNode(t, nd, addrs[id])
 		nodes[id] = nd
@@ -321,7 +321,7 @@ func TestNewMemberIsDiscoveredFromItsFirstPing(t *testing.T) {
 	}
 
 	addrs["node-4"] = reserveAddr(t)
-	node4 := New("node-4", addrs["node-4"], 2, 1, 1, neighborsOf(addrs, "node-4"))
+	node4 := newTestNode(t, "node-4", addrs["node-4"], 2, 1, 1, neighborsOf(addrs, "node-4"))
 	fastHealth(node4)
 	serveNode(t, node4, addrs["node-4"])
 	if _, err := node4.SetMembership(1, addrs); err != nil {
@@ -376,13 +376,13 @@ func TestImpostorAtAMembersAddressIsDeadAndNotTrusted(t *testing.T) {
 
 	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	// node-3 really is node-3, at an epoch far ahead of node-1's...
-	node3 := New("node-3", addrs["node-3"], 2, 1, 1, neighborsOf(addrs, "node-3"))
+	node3 := newTestNode(t, "node-3", addrs["node-3"], 2, 1, 1, neighborsOf(addrs, "node-3"))
 	if _, err := node3.SetMembership(9, addrs); err != nil {
 		t.Fatal(err)
 	}
 	serveNode(t, node3, addrs["node-3"])
 	// ...but node-1 is told that "node-2" lives at node-3's address.
-	node1 := New("node-1", addrs["node-1"], 2, 1, 1, map[string]string{"node-2": addrs["node-3"]})
+	node1 := newTestNode(t, "node-1", addrs["node-1"], 2, 1, 1, map[string]string{"node-2": addrs["node-3"]})
 	fastHealth(node1)
 	beat(t, node1)
 
@@ -405,7 +405,7 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 // A membership taken off the wire is adopted only if its claimed fingerprint
 // is the one computed from its members.
 func TestFetchedMembershipWithAWrongFingerprintIsRejected(t *testing.T) {
-	nd, base := twoNode()
+	nd, base := twoNode(t)
 	held := nd.membership.Load()
 	next := withMember(base, "node-3", "h3:1")
 
@@ -426,7 +426,7 @@ func TestFetchedMembershipWithAWrongFingerprintIsRejected(t *testing.T) {
 
 // Only one fetch-and-adopt runs at a time; the others are dropped.
 func TestFetchAndAdoptIsSingleFlight(t *testing.T) {
-	nd, _ := twoNode()
+	nd, _ := twoNode(t)
 	release := make(chan struct{})
 	var fetches atomic.Int32
 	started := make(chan struct{}, 2)
@@ -461,7 +461,7 @@ func TestHeartbeatsMembershipChangesAndTrafficTogether(t *testing.T) {
 	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes := map[string]*Node{}
 	for id, addr := range addrs {
-		nd := New(id, addr, 3, 2, 2, neighborsOf(addrs, id))
+		nd := newTestNode(t, id, addr, 3, 2, 2, neighborsOf(addrs, id))
 		fastHealth(nd)
 		nd.QuorumConfig.HeartbeatTimeout = 300 * time.Millisecond // no false deaths under -race
 		serveNode(t, nd, addr)
@@ -544,7 +544,7 @@ func TestStopBackgroundLoopsStopsTheHeartbeatLoop(t *testing.T) {
 func TestHeartbeatMarksARawTCPBlackHoleDead(t *testing.T) {
 	addrs := reserveAddrs(t, "node-1", "node-2")
 	tcpBlackHole(t, addrs["node-2"])
-	node1 := New("node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
+	node1 := newTestNode(t, "node-1", addrs["node-1"], 2, 1, 1, neighborsOf(addrs, "node-1"))
 	fastHealth(node1)
 	beat(t, node1)
 	eventually(t, 5*time.Second, "the black hole to be marked dead", func() bool { return node1.isDead("node-2") })

@@ -15,8 +15,8 @@ func aeRoundHook(t *testing.T, hook func(start bool)) {
 	t.Cleanup(func() { testHookAntiEntropyRound = nil })
 }
 
-func aloneNode() *Node {
-	return New("node-1", "unused", 1, 1, 1, nil)
+func aloneNode(t *testing.T) *Node {
+	return newTestNode(t, "node-1", "unused", 1, 1, 1, nil)
 }
 
 // A trigger starts a round well before the interval (here an hour).
@@ -27,7 +27,7 @@ func TestTriggerAntiEntropyStartsARoundBeforeTheInterval(t *testing.T) {
 			rounds.Add(1)
 		}
 	})
-	nd := aloneNode()
+	nd := aloneNode(t)
 	nd.StartAntiEntropyLoop(context.Background(), time.Hour)
 	t.Cleanup(nd.StopBackgroundLoops)
 
@@ -56,7 +56,7 @@ func TestTriggeredRoundsNeverOverlapScheduledOnes(t *testing.T) {
 		}
 		time.Sleep(15 * time.Millisecond) // long enough for an overlapping round to be seen
 	})
-	nd := aloneNode()
+	nd := aloneNode(t)
 	nd.StartAntiEntropyLoop(context.Background(), 20*time.Millisecond)
 	t.Cleanup(nd.StopBackgroundLoops)
 
@@ -96,7 +96,7 @@ func TestTriggersCoalesce(t *testing.T) {
 			}
 		}
 	})
-	nd := aloneNode()
+	nd := aloneNode(t)
 	nd.StartAntiEntropyLoop(context.Background(), time.Hour)
 	t.Cleanup(nd.StopBackgroundLoops)
 

@@ -253,7 +253,7 @@ func (n *Node) handoffPush(ctx context.Context, gen uint64, newest *view, key st
 		if ctx.Err() != nil {
 			return
 		}
-		if staysInView && n.hints != nil {
+		if staysInView {
 			herr := n.addHints(target, key, siblings)
 			if herr == nil {
 				n.updateHandoff(gen, func(s *HandoffStatus) { s.Hinted++ })
@@ -315,12 +315,10 @@ func (n *Node) finishHandoff(gen uint64, newest *view) {
 	if gen != n.handoffGen {
 		return
 	}
-	if n.persistHandoff != nil {
-		if err := n.persistHandoff(newest); err != nil {
-			// The data has moved; only the record is missing, and repeating a
-			// handoff after a restart is harmless. Carry on in memory.
-			log.Printf("node %s: could not persist handoff to epoch %d: %v", n.ID, newest.epoch, err)
-		}
+	if err := n.persistHandoff(newest); err != nil {
+		// The data has moved; only the record is missing, and repeating a
+		// handoff after a restart is harmless. Carry on in memory.
+		log.Printf("node %s: could not persist handoff to epoch %d: %v", n.ID, newest.epoch, err)
 	}
 	n.handoffBase = newest
 	n.handoffRunning = false
@@ -331,7 +329,7 @@ func (n *Node) finishHandoff(gen uint64, newest *view) {
 	n.TriggerAntiEntropy()
 }
 
-// handoffFileName is the last completed handoff in a persistent node's data dir.
+// handoffFileName is the last completed handoff in the node's data dir.
 const handoffFileName = "HANDOFF"
 
 type handoffFile struct {

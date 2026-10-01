@@ -16,7 +16,7 @@ import (
 
 // testConfig returns a valid single-node config (N=W=R=1, no peers) with
 // free ports and short-but-not-instant timeouts, suitable for driving Run
-// directly in tests. dataDir == "" gives an in-memory node.
+// directly in tests.
 func testConfig(t *testing.T, dataDir string) *config.Config {
 	t.Helper()
 	grpcAddr := knownAddr() // Run binds its addresses itself; see ports_test.go
@@ -50,7 +50,7 @@ func testConfig(t *testing.T, dataDir string) *config.Config {
 // the exact sequence — both the specific steps and their order, which is
 // deliberately not just startup reversed (see Run's doc comment).
 func TestRunOrderingThroughShutdown(t *testing.T) {
-	cfg := testConfig(t, "")
+	cfg := testConfig(t, t.TempDir())
 
 	stepCh := make(chan string, 32)
 	testHookStep = func(s string) { stepCh <- s }
@@ -178,7 +178,7 @@ func waitForProbeUp(t *testing.T, httpAddr string) {
 // — checked while the probe server is still definitely up (paused exactly
 // at the "not-ready" step), not merely inferred from timing.
 func TestReadyzReflectsReadiness(t *testing.T) {
-	cfg := testConfig(t, "")
+	cfg := testConfig(t, t.TempDir())
 	httpAddr := cfg.Listen.HTTP
 
 	gate := newStepGate("loops-started", "not-ready")

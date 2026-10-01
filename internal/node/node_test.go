@@ -5,7 +5,28 @@ import (
 	"testing"
 
 	"distributed-kv-datastore/internal/model"
+	"distributed-kv-datastore/internal/storetest"
 )
+
+// newTestNode builds node id with New on a fresh t.TempDir(), with the
+// memtable size storetest uses. It is closed when the test ends: after
+// anything registered later (a listener serving it stops first) and before
+// its directory is removed, which Windows can do only once its files are
+// closed.
+func newTestNode(t testing.TB, id, address string, n, w, r int, neighbors map[string]string) *Node {
+	t.Helper()
+	dir := t.TempDir()
+	nd, err := New(id, address, n, w, r, neighbors, dir, storetest.MemtableBytes)
+	if err != nil {
+		t.Fatalf("New(%s): %v", id, err)
+	}
+	t.Cleanup(func() {
+		if err := nd.Close(); err != nil {
+			t.Errorf("close %s: %v", id, err)
+		}
+	})
+	return nd
+}
 
 func startTestNode(t *testing.T, id, address string, neighbors map[string]string) *Node {
 	t.Helper()
@@ -14,7 +35,7 @@ func startTestNode(t *testing.T, id, address string, neighbors map[string]string
 	// these pre-partitioning tests' original "every node has every key"
 	// assumption — none of them go through replicaSetFor's hash-ring
 	// selection anyway (they call Store.Put/Replicate/FetchItem directly).
-	n := New(id, address, 2, 2, 1, neighbors)
+	n := newTestNode(t, id, address, 2, 2, 1, neighbors)
 
 	serveAt(t, address, n.Store, n)
 

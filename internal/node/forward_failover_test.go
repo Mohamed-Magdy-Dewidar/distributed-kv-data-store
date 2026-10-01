@@ -58,7 +58,7 @@ func newForwardCluster(t *testing.T, serve func(replicas []string) []string, pic
 	}
 	nodes := map[string]*Node{}
 	for _, id := range ids {
-		nodes[id] = New(id, addrs[id], 2, 1, 1, neighborsOf(addrs, id))
+		nodes[id] = newTestNode(t, id, addrs[id], 2, 1, 1, neighborsOf(addrs, id))
 		nodes[id].QuorumConfig.MaxReconnectBackoff = 50 * time.Millisecond
 	}
 	for _, id := range served {

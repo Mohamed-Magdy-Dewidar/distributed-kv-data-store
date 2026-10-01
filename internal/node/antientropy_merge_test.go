@@ -67,10 +67,10 @@ func TestReconcileSendsNothingForAKeyAlreadyInSync(t *testing.T) {
 	p1, p2 := newFlakyPersister(), newFlakyPersister()
 	node1, _ := reconcileSetup(t, p1)
 
-	// reconcileSetup's node-2 already serves an in-memory store; this one
+	// reconcileSetup's node-2 already serves its own engine's store; this one
 	// serves p2 on its own port so the fault reaches its gRPC handler.
 	addr2 := reserveAddr(t)
-	node2 := New("node-2", addr2, 2, 2, 1, map[string]string{"node-1": node1.Address})
+	node2 := newTestNode(t, "node-2", addr2, 2, 2, 1, map[string]string{"node-1": node1.Address})
 	node2.Store = store.NewDataStoreWithPersister("node-2", p2)
 	serveAt(t, addr2, node2.Store, node2)
 	if _, err := node1.SetMembership(1, membersWithAddr(node1, "node-2", addr2)); err != nil {

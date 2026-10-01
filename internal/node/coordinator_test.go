@@ -56,7 +56,7 @@ func startTestCluster(t *testing.T, addrs map[string]string, overrides map[strin
 			}
 		}
 
-		n := New(id, addr, replicationFactor, w, r, neighbors)
+		n := newTestNode(t, id, addr, replicationFactor, w, r, neighbors)
 		listener := serveAt(t, addr, n.Store, n)
 
 		nodes[id] = n
@@ -148,7 +148,7 @@ func TestGetQuorumMetDespiteOneNodeDown(t *testing.T) {
 // on a partitioned cluster). Get from node-1 must fan out over the real
 // network to both peers and, via versioning.MergeSiblings, surface both values
 // as siblings — proving the merge works across an actual RPC fan-out, not
-// just against in-memory data.
+// just against local data.
 func TestGetSurfacesGenuineSiblingConflictsAcrossNodes(t *testing.T) {
 	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
 	nodes, _ := startTestCluster(t, addrs, map[string]quorumOverride{

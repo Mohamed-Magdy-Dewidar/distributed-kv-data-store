@@ -275,7 +275,7 @@ func TestPutReportsFailedRollback(t *testing.T) {
 }
 
 // reconcileSetup starts node-1 (persister-backed by p) and node-2
-// (in-memory), full replication between them.
+// (on its own storage engine), full replication between them.
 func reconcileSetup(t *testing.T, p *flakyPersister) (*Node, *Node) {
 	t.Helper()
 	a := reserveAddrs(t, "node-1", "node-2")

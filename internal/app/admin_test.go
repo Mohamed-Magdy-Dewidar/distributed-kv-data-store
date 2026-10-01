@@ -56,8 +56,16 @@ func membershipJSON(epoch uint64, members map[string]string) string {
 	return string(b)
 }
 
-func fastNode(id, addr string, neighbors map[string]string) *node.Node {
-	nd := node.New(id, addr, 1, 1, 1, neighbors)
+// fastNode is node id on a fresh t.TempDir(), with short heartbeat and
+// reconnect timeouts. It is closed when the test ends, before its directory
+// is removed.
+func fastNode(t *testing.T, id, addr string, neighbors map[string]string) *node.Node {
+	t.Helper()
+	nd, err := node.New(id, addr, 1, 1, 1, neighbors, t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatalf("node.New(%s): %v", id, err)
+	}
+	t.Cleanup(func() { nd.Close() })
 	nd.QuorumConfig.HeartbeatTimeout = 40 * time.Millisecond
 	nd.QuorumConfig.MaxReconnectBackoff = 50 * time.Millisecond
 	nd.QuorumConfig.ReplicationTimeout = time.Second
@@ -78,7 +86,7 @@ func eventuallyTrue(t *testing.T, within time.Duration, what string, cond func()
 // (a) POST /admin/membership maps SetMembership's outcomes onto statuses.
 func TestPostMembershipStatusMapping(t *testing.T) {
 	addr := knownAddr() // never served
-	nd := fastNode("kv-0", addr, nil)
+	nd := fastNode(t, "kv-0", addr, nil)
 	base := adminServer(t, nd)
 	own := map[string]string{"kv-0": addr}
 
@@ -133,8 +141,8 @@ func TestPostMembershipStatusMapping(t *testing.T) {
 // heartbeats have shown of the peers.
 func TestGetMembershipReflectsViewHandoffAndPeers(t *testing.T) {
 	ax, ay := knownAddr(), reserveAddr(t) // kv-1 is served; kv-0 isn't
-	x := fastNode("kv-0", ax, map[string]string{"kv-1": ay})
-	y := fastNode("kv-1", ay, map[string]string{"kv-0": ax})
+	x := fastNode(t, "kv-0", ax, map[string]string{"kv-1": ay})
+	y := fastNode(t, "kv-1", ay, map[string]string{"kv-0": ax})
 	serveRPC(t, y, ay)
 	members := map[string]string{"kv-0": ax, "kv-1": ay}
 	for _, nd := range []*node.Node{x, y} {
@@ -172,7 +180,7 @@ func TestGetMembershipReflectsViewHandoffAndPeers(t *testing.T) {
 // (c) /readyz says 503 once the view no longer includes this node.
 func TestReadyzIsNotReadyOnceRemovedFromTheMembership(t *testing.T) {
 	ax, ay := knownAddr(), knownAddr() // neither is served
-	nd := fastNode("kv-0", ax, map[string]string{"kv-1": ay})
+	nd := fastNode(t, "kv-0", ax, map[string]string{"kv-1": ay})
 	base := adminServer(t, nd)
 
 	if status, _ := call(t, "GET", base+"/readyz", ""); status != 200 {
@@ -206,7 +214,7 @@ func TestParseHandoffWait(t *testing.T) {
 // status while a leaving node's target is down, 200 once it is up.
 func TestHandoffWait(t *testing.T) {
 	ax, ay := knownAddr(), knownAddr() // kv-1 is down, then started
-	x := fastNode("kv-0", ax, map[string]string{"kv-1": ay})
+	x := fastNode(t, "kv-0", ax, map[string]string{"kv-1": ay})
 	for i := range 20 {
 		x.Store.Put(fmt.Sprintf("key-%02d", i), "v", nil)
 	}
@@ -238,7 +246,7 @@ func TestHandoffWait(t *testing.T) {
 		t.Fatalf("handoff status while blocked: %v", h)
 	}
 
-	y := fastNode("kv-1", ay, map[string]string{"kv-0": ax})
+	y := fastNode(t, "kv-1", ay, map[string]string{"kv-0": ax})
 	if _, err := y.SetMembership(1, map[string]string{"kv-1": ay}); err != nil {
 		t.Fatal(err)
 	}
@@ -262,9 +270,9 @@ func TestHandoffWait(t *testing.T) {
 // members that remain must have been seen at the new epoch too.
 func TestDrainedNeedsTheRemainingMembersToAcknowledge(t *testing.T) {
 	ax, ay, az := knownAddr(), reserveAddr(t), knownAddr() // kv-2 is down, then started
-	x := fastNode("kv-0", ax, map[string]string{"kv-1": ay, "kv-2": az})
-	y := fastNode("kv-1", ay, map[string]string{"kv-0": ax, "kv-2": az})
-	z := fastNode("kv-2", az, map[string]string{"kv-0": ax, "kv-1": ay})
+	x := fastNode(t, "kv-0", ax, map[string]string{"kv-1": ay, "kv-2": az})
+	y := fastNode(t, "kv-1", ay, map[string]string{"kv-0": ax, "kv-2": az})
+	z := fastNode(t, "kv-2", az, map[string]string{"kv-0": ax, "kv-1": ay})
 	serveRPC(t, y, ay)
 	remaining := map[string]string{"kv-1": ay, "kv-2": az}
 	for _, nd := range []*node.Node{x, y, z} {

@@ -55,7 +55,7 @@ func countHintAttempts(t *testing.T) map[string]*atomic.Int32 {
 func hintNode(t *testing.T) (*Node, map[string]string) {
 	t.Helper()
 	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
-	nd, err := NewPersistent("node-1", addrs["node-1"], 1, 1, 1, neighborsOf(addrs, "node-1"), t.TempDir(), 1<<20)
+	nd, err := New("node-1", addrs["node-1"], 1, 1, 1, neighborsOf(addrs, "node-1"), t.TempDir(), 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

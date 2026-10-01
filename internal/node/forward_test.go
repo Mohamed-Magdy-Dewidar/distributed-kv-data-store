@@ -32,7 +32,7 @@ func startUniformCluster(t *testing.T, addrs map[string]string, n, w, r int, sto
 				neighbors[peerID] = peerAddr
 			}
 		}
-		nd := New(id, addr, n, w, r, neighbors)
+		nd := newTestNode(t, id, addr, n, w, r, neighbors)
 		if ds, ok := stores[id]; ok {
 			nd.Store = ds
 		}
@@ -213,7 +213,7 @@ func TestForwardDoesNotFailOverWhenReplicaFailsTheWrite(t *testing.T) {
 func TestCoordinatePutRefusesWhenNotAReplica(t *testing.T) {
 	key, _ := keyReplicatedOnlyBy(t, []string{"node-1", "node-2", "node-3"}, 2, "node-1")
 	a := knownAddrs("node-1", "node-2", "node-3") // never dialed
-	nd := New("node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"], "node-3": a["node-3"]})
+	nd := newTestNode(t, "node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"], "node-3": a["node-3"]})
 	if err := nd.CoordinatePut(context.Background(), key, "v", nil); !errors.Is(err, rpc.ErrNotReplica) {
 		t.Fatalf("expected rpc.ErrNotReplica, got %v", err)
 	}

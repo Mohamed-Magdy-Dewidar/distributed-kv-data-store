@@ -47,9 +47,9 @@ func serveNode(t *testing.T, nd *Node, addr string) {
 // write quorum w. It isn't served: nothing needs to reach it.
 func persistentCoordinator(t *testing.T, dir string, peers map[string]string, w int) *Node {
 	t.Helper()
-	nd, err := NewPersistent("node-1", "unused", 3, w, 1, peers, dir, 1<<20)
+	nd, err := New("node-1", "unused", 3, w, 1, peers, dir, 1<<20)
 	if err != nil {
-		t.Fatalf("NewPersistent failed: %v", err)
+		t.Fatalf("New failed: %v", err)
 	}
 	t.Cleanup(func() { nd.Close() })
 	return nd
@@ -84,7 +84,7 @@ func TestUnreachableReplicaGetsHintEvenWhenItsFailureArrivesAfterQuorum(t *testi
 	dir := t.TempDir()
 	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 2)
-	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
+	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
 	// node-3 is never started: Unavailable.
 
 	release := make(chan struct{})
@@ -118,8 +118,8 @@ func TestReplicaFailingOtherwiseGetsNoHint(t *testing.T) {
 	dir := t.TempDir()
 	addrs, peersOf := hintCluster(t)
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 2)
-	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
-	node3 := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
+	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
+	node3 := newTestNode(t, "node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
 	node3.Store = store.NewDataStoreWithPersister("node-3", failingPersister{})
 	serveNode(t, node3, addrs["node-3"])
 
@@ -141,7 +141,7 @@ func TestRolledBackWriteGetsNoHint(t *testing.T) {
 	dir := t.TempDir()
 	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 3)
-	serveNode(t, New("node-2", addrs["node-2"], 3, 3, 1, peersOf("node-2")), addrs["node-2"])
+	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 3, 1, peersOf("node-2")), addrs["node-2"])
 
 	if err := node1.Put(context.Background(), "k", "v", nil); err == nil {
 		t.Fatal("test setup: expected the write to miss W=3 with node-3 down")
@@ -157,22 +157,6 @@ func TestRolledBackWriteGetsNoHint(t *testing.T) {
 	}
 }
 
-// TestInMemoryCoordinatorDoesNotAttemptHints: an in-memory node has
-// nowhere durable to keep a hint; a write with a replica down still
-// succeeds on quorum, and the drain finishes without trying to store one.
-func TestInMemoryCoordinatorDoesNotAttemptHints(t *testing.T) {
-	addrs, peersOf := hintCluster(t, "node-3")
-	node1 := New("node-1", addrs["node-1"], 3, 2, 1, peersOf("node-1"))
-	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
-
-	if err := node1.Put(context.Background(), "k", "v", nil); err != nil {
-		t.Fatalf("Put failed: %v", err)
-	}
-	if err := node1.Close(); err != nil { // waits for the drain
-		t.Fatalf("Close failed: %v", err)
-	}
-}
-
 // TestCloseWaitsForADrainStoringHints: a write's drain is about to store a
 // hint when the node is closed. Close must wait for it, so the hint lands
 // in the still-open hint store rather than being lost.
@@ -180,7 +164,7 @@ func TestCloseWaitsForADrainStoringHints(t *testing.T) {
 	dir := t.TempDir()
 	addrs, peersOf := hintCluster(t, "node-3")
 	node1 := persistentCoordinator(t, dir, peersOf("node-1"), 2)
-	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
+	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
 
 	reached := make(chan struct{})
 	release := make(chan struct{})
@@ -217,10 +201,10 @@ func TestCloseWaitsForADrainStoringHints(t *testing.T) {
 // runs detached from that cancellation, so node-3 still gets the write.
 func TestSlowReplicaStillReceivesWriteAfterCallerCancels(t *testing.T) {
 	addrs, peersOf := hintCluster(t)
-	node1 := New("node-1", addrs["node-1"], 3, 2, 1, peersOf("node-1"))
+	node1 := newTestNode(t, "node-1", addrs["node-1"], 3, 2, 1, peersOf("node-1"))
 	t.Cleanup(func() { node1.Close() })
-	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
-	node3 := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
+	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
+	node3 := newTestNode(t, "node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
 	serveNode(t, node3, addrs["node-3"])
 
 	release := make(chan struct{})
@@ -253,10 +237,10 @@ func TestSlowReplicaStillReceivesWriteAfterCallerCancels(t *testing.T) {
 // abandoned rather than delivered.
 func TestReplicationTimeoutBoundsStragglers(t *testing.T) {
 	addrs, peersOf := hintCluster(t)
-	node1 := New("node-1", addrs["node-1"], 3, 2, 1, peersOf("node-1"))
+	node1 := newTestNode(t, "node-1", addrs["node-1"], 3, 2, 1, peersOf("node-1"))
 	node1.QuorumConfig.ReplicationTimeout = 100 * time.Millisecond
-	serveNode(t, New("node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
-	node3 := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
+	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
+	node3 := newTestNode(t, "node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"))
 	serveNode(t, node3, addrs["node-3"])
 
 	testHookBeforeReplicate = func(peerID string) {

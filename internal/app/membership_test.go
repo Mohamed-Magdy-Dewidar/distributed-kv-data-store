@@ -46,7 +46,7 @@ func captureLog(t *testing.T) *syncBuffer {
 // dir, as an earlier run that had adopted it would have.
 func seedMembership(t *testing.T, cfg *config.Config, epoch uint64, members map[string]string) {
 	t.Helper()
-	nd, err := node.NewPersistent(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R,
+	nd, err := node.New(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R,
 		cfg.NeighborAddrs(), cfg.DataDir, cfg.Storage.MemtableBytes)
 	if err != nil {
 		t.Fatalf("seed: open node: %v", err)
@@ -64,7 +64,7 @@ func seedMembership(t *testing.T, cfg *config.Config, epoch uint64, members map[
 // node starts with.
 func persistedMembership(t *testing.T, cfg *config.Config) (uint64, map[string]string) {
 	t.Helper()
-	nd, err := node.NewPersistent(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R,
+	nd, err := node.New(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R,
 		cfg.NeighborAddrs(), cfg.DataDir, cfg.Storage.MemtableBytes)
 	if err != nil {
 		t.Fatalf("reopen node: %v", err)
@@ -165,7 +165,7 @@ func TestRunAdoptsAndPersistsAHigherConfigEpoch(t *testing.T) {
 
 // A config whose member list is invalid for the node's N fails startup.
 func TestRunFailsOnInvalidConfiguredMembership(t *testing.T) {
-	cfg := testConfig(t, "")
+	cfg := testConfig(t, t.TempDir())
 	cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R = 2, 1, 1 // but only one member
 
 	if err := runUntilReadyThenStop(t, cfg); err == nil || !strings.Contains(err.Error(), "replication factor") {

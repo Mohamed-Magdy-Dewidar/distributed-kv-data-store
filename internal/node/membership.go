@@ -57,8 +57,8 @@ func (n *Node) Membership() (epoch uint64, members map[string]string) {
 //
 //   - members are validated first (see validateMembers); a bad set is an error
 //     and changes nothing.
-//   - epoch newer than the current one: the new view is written to disk (a
-//     persistent node) and only then published, so a view that was announced
+//   - epoch newer than the current one: the new view is written to disk and
+//     only then published, so a view that was announced
 //     is one the node will still hold after a restart. If it can't be
 //     written, nothing is published. Clients of members that are gone are
 //     retired (not closed: an RPC in flight may be using one; Close closes
@@ -104,10 +104,8 @@ func (n *Node) setMembership(epoch uint64, members map[string]string, claimedFin
 			ErrMembershipConflict, epoch, cur.fingerprint, v.fingerprint)
 	}
 
-	if n.persistView != nil {
-		if err := n.persistView(v); err != nil {
-			return false, fmt.Errorf("persist membership epoch %d: %w", epoch, err)
-		}
+	if err := n.persistView(v); err != nil {
+		return false, fmt.Errorf("persist membership epoch %d: %w", epoch, err)
 	}
 	n.membership.Store(v)
 	n.retireClientsNotIn(v)
@@ -130,7 +128,7 @@ func (n *Node) retireClientsNotIn(v *view) {
 	}
 }
 
-// membershipFileName is the persisted view in a persistent node's data dir.
+// membershipFileName is the persisted view in the node's data dir.
 const membershipFileName = "MEMBERSHIP"
 
 type membershipFile struct {

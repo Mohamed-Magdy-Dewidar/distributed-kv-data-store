@@ -26,7 +26,7 @@ func kvClusterClients(t *testing.T, ids ...string) (map[string]*Node, map[string
 	nodes := map[string]*Node{}
 	clients := map[string]pb.KVClientClient{}
 	for _, id := range ids {
-		nodes[id] = New(id, addrs[id], 3, 3, 1, neighborsOf(addrs, id))
+		nodes[id] = newTestNode(t, id, addrs[id], 3, 3, 1, neighborsOf(addrs, id))
 		serveNode(t, nodes[id], addrs[id])
 		conn, err := grpc.NewClient(addrs[id], grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
@@ -204,7 +204,7 @@ func TestClientErrorCodes(t *testing.T) {
 	// Only node-1 is up; W=3 can't be met.
 	addrs := reserveAddrs(t, "node-1")
 	maps.Copy(addrs, knownAddrs("node-2", "node-3")) // down
-	nd := New("node-1", addrs["node-1"], 3, 3, 1, neighborsOf(addrs, "node-1"))
+	nd := newTestNode(t, "node-1", addrs["node-1"], 3, 3, 1, neighborsOf(addrs, "node-1"))
 	nd.QuorumConfig.ReplicationTimeout = time.Second
 	nd.QuorumConfig.MaxReconnectBackoff = 50 * time.Millisecond
 	serveNode(t, nd, addrs["node-1"])
@@ -232,7 +232,7 @@ func TestClientErrorCodes(t *testing.T) {
 // 6. grpcurl and friends can find the service without the .proto files.
 func TestReflectionListsTheClientService(t *testing.T) {
 	addr := reserveAddr(t)
-	serveNode(t, New("node-1", addr, 1, 1, 1, nil), addr)
+	serveNode(t, newTestNode(t, "node-1", addr, 1, 1, 1, nil), addr)
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)

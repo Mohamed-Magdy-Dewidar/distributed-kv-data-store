@@ -65,7 +65,7 @@ type Health struct {
 type Config struct {
 	NodeID  string  `yaml:"nodeId"`
 	Listen  Listen  `yaml:"listen"`
-	DataDir string  `yaml:"dataDir"` // "" means in-memory; otherwise used as-is, not joined with NodeID
+	DataDir string  `yaml:"dataDir"` // required (the node refuses to start without one); used as-is, not joined with NodeID
 	Cluster Cluster `yaml:"cluster"`
 	Storage Storage `yaml:"storage"`
 
@@ -231,7 +231,7 @@ func (c *Config) MemberAddrs() map[string]string {
 }
 
 // NeighborAddrs returns every other member's address, keyed by ID — the
-// shape node.New/node.NewPersistent take for neighborAddrs.
+// shape node.New takes for neighborAddrs.
 func (c *Config) NeighborAddrs() map[string]string {
 	neighbors := make(map[string]string, len(c.Cluster.Members)-1)
 	for _, m := range c.Cluster.Members {

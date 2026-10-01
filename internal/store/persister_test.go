@@ -77,11 +77,9 @@ func (f *fakePersister) Keys() ([]string, error) {
 	return keys, nil
 }
 
-// bothModes runs fn against an in-memory DataStore and a persister-backed
-// one, as separate subtests: every behavior it checks must hold in both.
-func bothModes(t *testing.T, id string, fn func(t *testing.T, ds *DataStore)) {
-	t.Run("in-memory", func(t *testing.T) { fn(t, NewDataStoreWithClockID(id, id)) })
-	t.Run("persister", func(t *testing.T) { fn(t, NewDataStoreWithPersister(id, newFakePersister())) })
+// newFakeStore returns a DataStore for id on a fresh fakePersister.
+func newFakeStore(id string) *DataStore {
+	return NewDataStoreWithPersister(id, newFakePersister())
 }
 
 func values(items []*model.DataItem) []any {
@@ -92,103 +90,85 @@ func values(items []*model.DataItem) []any {
 	return out
 }
 
-func TestPersisterModeKeepsNoInMemoryCopy(t *testing.T) {
-	p := newFakePersister()
-	ds := NewDataStoreWithPersister("node-1", p)
+func TestPutGetAndSequentialUpdate(t *testing.T) {
+	ds := newFakeStore("node-1")
 	ds.Put("foo", "bar", nil)
+	ds.Put("foo", "baz", nil) // no context: builds on what's there, so it supersedes
 
-	if ds.store != nil {
-		t.Fatalf("expected no in-memory map in persister mode, got %v", ds.store)
+	items, found, _ := ds.Get("foo")
+	if !found || !reflect.DeepEqual(values(items), []any{"baz"}) {
+		t.Fatalf("expected [baz], got found=%v %v", found, values(items))
 	}
-	if items := p.data["foo"]; len(items) != 1 || items[0].Value != "bar" {
-		t.Fatalf("expected the write to reach the persister, got %v", values(items))
+	if vc := items[0].VectorClock.Snapshot(); vc["node-1"] != 2 {
+		t.Errorf("expected vc[node-1]=2, got %v", vc)
+	}
+	if _, found, _ := ds.Get("missing"); found {
+		t.Error("expected a missing key to be not found")
 	}
 }
 
-func TestBothModesPutGetAndSequentialUpdate(t *testing.T) {
-	bothModes(t, "node-1", func(t *testing.T, ds *DataStore) {
-		ds.Put("foo", "bar", nil)
-		ds.Put("foo", "baz", nil) // no context: builds on what's there, so it supersedes
-
-		items, found, _ := ds.Get("foo")
-		if !found || !reflect.DeepEqual(values(items), []any{"baz"}) {
-			t.Fatalf("expected [baz], got found=%v %v", found, values(items))
-		}
-		if vc := items[0].VectorClock.Snapshot(); vc["node-1"] != 2 {
-			t.Errorf("expected vc[node-1]=2, got %v", vc)
-		}
-		if _, found, _ := ds.Get("missing"); found {
-			t.Error("expected a missing key to be not found")
-		}
-	})
-}
-
-// TestBothModesReturnSiblingsInTheSameOrder: in-memory mode keeps
-// siblings oldest first; persister mode must present the persister's
-// newest-first order the same way.
-func TestBothModesReturnSiblingsInTheSameOrder(t *testing.T) {
+// TestSiblingsComeBackOldestFirst: the persister returns siblings newest
+// first; DataStore must present them oldest first.
+func TestSiblingsComeBackOldestFirst(t *testing.T) {
 	base := map[string]uint32{"node-1": 1}
-	bothModes(t, "node-1", func(t *testing.T, ds *DataStore) {
-		ds.Put("foo", "first", base)
-		for _, item := range []*model.DataItem{
-			{Value: "second", VectorClock: vectorclock.BuildFromContext(base, "node-2")},
-			{Value: "third", VectorClock: vectorclock.BuildFromContext(base, "node-3")},
-		} {
-			if err := ds.MergeReplicated("foo", item); err != nil {
-				t.Fatalf("expected MergeReplicated to succeed, got %v", err)
-			}
+	ds := newFakeStore("node-1")
+	ds.Put("foo", "first", base)
+	for _, item := range []*model.DataItem{
+		{Value: "second", VectorClock: vectorclock.BuildFromContext(base, "node-2")},
+		{Value: "third", VectorClock: vectorclock.BuildFromContext(base, "node-3")},
+	} {
+		if err := ds.MergeReplicated("foo", item); err != nil {
+			t.Fatalf("expected MergeReplicated to succeed, got %v", err)
 		}
+	}
 
-		items, _, _ := ds.Get("foo")
-		if want := []any{"first", "second", "third"}; !reflect.DeepEqual(values(items), want) {
-			t.Fatalf("expected siblings oldest first %v, got %v", want, values(items))
-		}
-	})
+	items, _, _ := ds.Get("foo")
+	if want := []any{"first", "second", "third"}; !reflect.DeepEqual(values(items), want) {
+		t.Fatalf("expected siblings oldest first %v, got %v", want, values(items))
+	}
 }
 
-func TestBothModesDeleteAndLiveItems(t *testing.T) {
-	bothModes(t, "node-1", func(t *testing.T, ds *DataStore) {
-		if ok, msg := ds.Delete("missing", nil); ok || msg != "Key not found" {
-			t.Fatalf("expected Delete of a missing key to report not found, got %v %q", ok, msg)
-		}
+func TestDeleteAndLiveItems(t *testing.T) {
+	ds := newFakeStore("node-1")
+	if ok, msg := ds.Delete("missing", nil); ok || msg != "Key not found" {
+		t.Fatalf("expected Delete of a missing key to report not found, got %v %q", ok, msg)
+	}
 
-		ds.Put("foo", "bar", nil)
-		if ok, msg := ds.Delete("foo", nil); !ok || msg != "Key deleted" {
-			t.Fatalf("expected Delete to succeed, got %v %q", ok, msg)
-		}
+	ds.Put("foo", "bar", nil)
+	if ok, msg := ds.Delete("foo", nil); !ok || msg != "Key deleted" {
+		t.Fatalf("expected Delete to succeed, got %v %q", ok, msg)
+	}
 
-		if _, found := ds.GetLiveItems("foo"); found {
-			t.Error("expected no live items after Delete")
-		}
-		raw, found, _ := ds.Get("foo")
-		if !found || len(raw) != 1 || !raw[0].IsDeleted {
-			t.Fatalf("expected Get to return the tombstone, got found=%v %v", found, raw)
-		}
-		if keys, _ := ds.Keys(); !reflect.DeepEqual(keys, []string{"foo"}) {
-			t.Errorf("expected Keys to include the tombstoned key, got %v", keys)
-		}
-	})
+	if _, found := ds.GetLiveItems("foo"); found {
+		t.Error("expected no live items after Delete")
+	}
+	raw, found, _ := ds.Get("foo")
+	if !found || len(raw) != 1 || !raw[0].IsDeleted {
+		t.Fatalf("expected Get to return the tombstone, got found=%v %v", found, raw)
+	}
+	if keys, _ := ds.Keys(); !reflect.DeepEqual(keys, []string{"foo"}) {
+		t.Errorf("expected Keys to include the tombstoned key, got %v", keys)
+	}
 }
 
-func TestBothModesRestoreVersionsReplacesOrRemoves(t *testing.T) {
-	bothModes(t, "node-1", func(t *testing.T, ds *DataStore) {
-		ds.Put("foo", "v1", nil)
-		prev, _, _ := ds.Get("foo")
-		ds.Put("foo", "v2", nil)
+func TestRestoreVersionsReplacesOrRemoves(t *testing.T) {
+	ds := newFakeStore("node-1")
+	ds.Put("foo", "v1", nil)
+	prev, _, _ := ds.Get("foo")
+	ds.Put("foo", "v2", nil)
 
-		ds.RestoreVersions("foo", prev)
-		if items, _, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"v1"}) {
-			t.Fatalf("expected rollback to restore [v1], got %v", values(items))
-		}
+	ds.RestoreVersions("foo", prev)
+	if items, _, _ := ds.Get("foo"); !reflect.DeepEqual(values(items), []any{"v1"}) {
+		t.Fatalf("expected rollback to restore [v1], got %v", values(items))
+	}
 
-		ds.RestoreVersions("foo", nil)
-		if _, found, _ := ds.Get("foo"); found {
-			t.Fatal("expected RestoreVersions(nil) to remove the key")
-		}
-		if keys, _ := ds.Keys(); len(keys) != 0 {
-			t.Errorf("expected no keys after removal, got %v", keys)
-		}
-	})
+	ds.RestoreVersions("foo", nil)
+	if _, found, _ := ds.Get("foo"); found {
+		t.Fatal("expected RestoreVersions(nil) to remove the key")
+	}
+	if keys, _ := ds.Keys(); len(keys) != 0 {
+		t.Errorf("expected no keys after removal, got %v", keys)
+	}
 }
 
 func TestRestoreVersionsHandsPersisterNewestFirst(t *testing.T) {
@@ -267,25 +247,5 @@ func TestIncompleteRestoreIsReturned(t *testing.T) {
 
 	if err := ds.RestoreVersions("foo", nil); !errors.Is(err, ErrRestoreIncomplete) {
 		t.Fatalf("expected an error wrapping ErrRestoreIncomplete, got %v", err)
-	}
-}
-
-// TestInMemoryModeNeverReturnsErrors: the widened read signatures only
-// ever carry an error in persister-backed mode.
-func TestInMemoryModeNeverReturnsErrors(t *testing.T) {
-	ds := NewDataStoreWithClockID("node-1", "node-1")
-	ds.Put("foo", "bar", nil)
-
-	if _, _, err := ds.Get("foo"); err != nil {
-		t.Errorf("Get: unexpected error %v", err)
-	}
-	if _, _, err := ds.Get("missing"); err != nil {
-		t.Errorf("Get of a missing key: unexpected error %v", err)
-	}
-	if _, err := ds.Keys(); err != nil {
-		t.Errorf("Keys: unexpected error %v", err)
-	}
-	if err := ds.RestoreVersions("foo", nil); err != nil {
-		t.Errorf("RestoreVersions: unexpected error %v", err)
 	}
 }

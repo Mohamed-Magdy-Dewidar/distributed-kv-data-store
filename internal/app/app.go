@@ -1,5 +1,5 @@
 // Package app wires cmd/node's config into one running node: an HTTP
-// probe server, the node itself (in-memory or persistent), its gRPC
+// probe server, the node itself, its gRPC
 // listener, and its background loops — brought up in order, torn down in
 // a different, specific order on shutdown (see Run).
 package app
@@ -134,9 +134,8 @@ func (p *probeServer) stop() error {
 // Run brings up one node from cfg and blocks until ctx is done, then shuts
 // everything down and returns.
 //
-// Startup order: probe server, then the node itself (node.New for an
-// in-memory node when cfg.DataDir is empty, node.NewPersistent
-// otherwise — a locked data dir surfaces here as an error wrapping
+// Startup order: probe server, then the node itself (node.New on
+// cfg.DataDir — a locked data dir surfaces here as an error wrapping
 // engine.ErrLocked and naming the dir), then this node's ReplicationTimeout
 // and MaxReconnectBackoff, then the configured membership (see
 // applyConfiguredMembership), then its gRPC listener, then its background
@@ -196,9 +195,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	step("grpc-serving")
 
 	compactionCtx, stopCompaction := context.WithCancel(context.Background())
-	nd.StartCompactionLoop(compactionCtx, cfg.Intervals.Compaction) // no-op in memory
+	nd.StartCompactionLoop(compactionCtx, cfg.Intervals.Compaction)
 	nd.StartAntiEntropyLoop(context.Background(), cfg.Intervals.AntiEntropy)
-	nd.StartHintDeliveryLoop(context.Background(), cfg.Intervals.HintDelivery) // no-op in memory
+	nd.StartHintDeliveryLoop(context.Background(), cfg.Intervals.HintDelivery)
 	nd.StartHeartbeatLoop(context.Background(), cfg.Intervals.Heartbeat)
 	nd.ResumeHandoff() // a no-op unless a restart interrupted a handoff
 	step("loops-started")
@@ -259,14 +258,14 @@ func applyConfiguredMembership(nd *node.Node, cfg *config.Config) error {
 	return nil
 }
 
-// openNode builds cfg's node: in-memory when DataDir is empty, persistent
-// otherwise. node.New has no error to report; node.NewPersistent's is
-// returned as-is (it already names the data dir and wraps engine.ErrLocked
-// when that's the cause).
+// openNode builds cfg's node on cfg.DataDir. node.New's error is returned
+// as-is (it already names the data dir and wraps engine.ErrLocked when
+// that's the cause). An empty DataDir is refused rather than opened, which
+// would put the node's files in the working directory.
 func openNode(cfg *config.Config) (*node.Node, error) {
 	if cfg.DataDir == "" {
-		return node.New(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R, cfg.NeighborAddrs()), nil
+		return nil, errors.New("dataDir is required")
 	}
-	return node.NewPersistent(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R,
+	return node.New(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R,
 		cfg.NeighborAddrs(), cfg.DataDir, cfg.Storage.MemtableBytes)
 }

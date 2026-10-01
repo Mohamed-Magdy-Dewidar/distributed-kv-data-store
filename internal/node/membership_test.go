@@ -18,9 +18,9 @@ import (
 )
 
 // twoNode is a node-1 in a cluster of node-1 and node-2 with N=2.
-func twoNode() (*Node, map[string]string) {
+func twoNode(t *testing.T) (*Node, map[string]string) {
 	members := map[string]string{"node-1": "h1:1", "node-2": "h2:1"}
-	return New("node-1", "h1:1", 2, 1, 1, map[string]string{"node-2": "h2:1"}), members
+	return newTestNode(t, "node-1", "h1:1", 2, 1, 1, map[string]string{"node-2": "h2:1"}), members
 }
 
 func withMember(members map[string]string, id, addr string) map[string]string {
@@ -39,7 +39,7 @@ func assertMembership(t *testing.T, nd *Node, epoch uint64, members map[string]s
 
 // (a) One epoch means one membership.
 func TestSetMembershipEpochRules(t *testing.T) {
-	nd, base := twoNode()
+	nd, base := twoNode(t)
 	three := withMember(base, "node-3", "h3:1")
 
 	if changed, err := nd.SetMembership(5, three); err != nil || !changed {
@@ -78,7 +78,7 @@ func TestSetMembershipEpochRules(t *testing.T) {
 
 // (b) A member set that breaks the rules changes nothing.
 func TestSetMembershipValidation(t *testing.T) {
-	nd, base := twoNode()
+	nd, base := twoNode(t)
 	if _, err := nd.SetMembership(3, base); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestSetMembershipValidation(t *testing.T) {
 
 // This node may leave: omitting it from the members is valid.
 func TestSetMembershipAllowsOmittingSelf(t *testing.T) {
-	nd, _ := twoNode()
+	nd, _ := twoNode(t)
 	others := map[string]string{"node-2": "h2:1", "node-3": "h3:1"}
 	if changed, err := nd.SetMembership(1, others); err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
@@ -182,9 +182,9 @@ var fixedAddrs = knownAddrs("node-1", "node-2", "node-3", "other")
 
 func openTwoNode(t *testing.T, dir string) *Node {
 	t.Helper()
-	nd, err := NewPersistent("node-1", fixedAddrs["node-1"], 2, 1, 1, map[string]string{"node-2": fixedAddrs["node-2"]}, dir, 1<<20)
+	nd, err := New("node-1", fixedAddrs["node-1"], 2, 1, 1, map[string]string{"node-2": fixedAddrs["node-2"]}, dir, 1<<20)
 	if err != nil {
-		t.Fatalf("NewPersistent: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	return nd
 }
@@ -252,9 +252,9 @@ func TestSetMembershipDoesNotPublishWhenPersistFails(t *testing.T) {
 // (f) Removing a member retires its client without closing it; Close closes it.
 func TestRemovedMembersClientIsRetiredNotClosed(t *testing.T) {
 	addrs := reserveAddrs(t, "node-1", "node-2", "node-3")
-	node1 := New("node-1", addrs["node-1"], 2, 1, 1, map[string]string{"node-2": addrs["node-2"], "node-3": addrs["node-3"]})
+	node1 := newTestNode(t, "node-1", addrs["node-1"], 2, 1, 1, map[string]string{"node-2": addrs["node-2"], "node-3": addrs["node-3"]})
 	for _, id := range []string{"node-2", "node-3"} {
-		peer := New(id, addrs[id], 2, 1, 1, nil)
+		peer := newTestNode(t, id, addrs[id], 2, 1, 1, nil)
 		peer.Store.Put("k", id, nil)
 		serveNode(t, peer, addrs[id])
 	}
@@ -300,7 +300,7 @@ func TestRemovedMembersClientIsRetiredNotClosed(t *testing.T) {
 // (g) Concurrent callers for one epoch: exactly one wins, and the view is the
 // winner's.
 func TestConcurrentSetMembershipHasOneWinnerPerEpoch(t *testing.T) {
-	nd, base := twoNode()
+	nd, base := twoNode(t)
 	const callers = 8
 
 	for epoch := uint64(1); epoch <= 20; epoch++ {
@@ -386,7 +386,7 @@ func writeRawMembership(t *testing.T, dir string, content any) {
 }
 
 // (i) A MEMBERSHIP file the node can't trust stops it from starting.
-func TestNewPersistentRefusesAnUntrustworthyMembershipFile(t *testing.T) {
+func TestNewRefusesAnUntrustworthyMembershipFile(t *testing.T) {
 	good := map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["node-2"]}
 	other := map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["other"]}
 	dupAddr := map[string]string{"node-1": fixedAddrs["node-1"], "node-2": fixedAddrs["node-1"]}
@@ -408,10 +408,10 @@ func TestNewPersistentRefusesAnUntrustworthyMembershipFile(t *testing.T) {
 			dir := t.TempDir()
 			writeRawMembership(t, dir, tc.content)
 
-			nd, err := NewPersistent("node-1", fixedAddrs["node-1"], 2, 1, 1, map[string]string{"node-2": fixedAddrs["node-2"]}, dir, 1<<20)
+			nd, err := New("node-1", fixedAddrs["node-1"], 2, 1, 1, map[string]string{"node-2": fixedAddrs["node-2"]}, dir, 1<<20)
 			if err == nil {
 				nd.Close()
-				t.Fatal("expected NewPersistent to refuse the file")
+				t.Fatal("expected New to refuse the file")
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) || !strings.Contains(err.Error(), membershipFileName) {
 				t.Fatalf("error %q should name the file and mention %q", err, tc.wantErr)

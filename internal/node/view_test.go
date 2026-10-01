@@ -81,11 +81,11 @@ func TestNewViewsPublishedWhileOperationsRun(t *testing.T) {
 func TestAddressChangeDialsNewAddressAndRetiresTheOldClient(t *testing.T) {
 	a := reserveAddrs(t, "node-1", "old", "new")
 	oldAddr, newAddr := a["old"], a["new"]
-	node1 := New("node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": oldAddr})
+	node1 := newTestNode(t, "node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": oldAddr})
 
 	// Two distinguishable servers: the one at the old address holds "old".
-	oldPeer := New("node-2", oldAddr, 2, 1, 1, map[string]string{"node-1": a["node-1"]})
-	newPeer := New("node-2", newAddr, 2, 1, 1, map[string]string{"node-1": a["node-1"]})
+	oldPeer := newTestNode(t, "node-2", oldAddr, 2, 1, 1, map[string]string{"node-1": a["node-1"]})
+	newPeer := newTestNode(t, "node-2", newAddr, 2, 1, 1, map[string]string{"node-1": a["node-1"]})
 	oldPeer.Store.Put("k", "old", nil)
 	newPeer.Store.Put("k", "new", nil)
 	serveNode(t, oldPeer, oldAddr)
@@ -151,7 +151,7 @@ func TestAddressChangeDialsNewAddressAndRetiresTheOldClient(t *testing.T) {
 // can't leave a connection nobody will close.
 func TestDialAfterCloseIsRefused(t *testing.T) {
 	a := knownAddrs("node-1", "node-2") // never served
-	node1 := New("node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"]})
+	node1 := newTestNode(t, "node-1", a["node-1"], 2, 1, 1, map[string]string{"node-2": a["node-2"]})
 	if err := node1.Close(); err != nil {
 		t.Fatal(err)
 	}
