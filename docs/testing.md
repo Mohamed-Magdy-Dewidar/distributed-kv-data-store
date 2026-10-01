@@ -54,6 +54,21 @@ cold-start entry in [known-limitations.md](known-limitations.md).
 cache does not see changes to code the test package doesn't import (such as
 `cmd/node`). On failure, each node's log is printed.
 
+### Running on Linux
+
+The full suite, e2e included, has been run three times in a row on Linux, all
+passing, in the `golang:1.26` container. `TestGracefulShutdown` runs there; on
+Windows, which cannot send SIGTERM, it is skipped. The source is copied
+onto a named volume and `TMPDIR` points into it, so the build, the test
+binaries and the nodes' data directories are on ext4 inside Docker Desktop's
+Linux VM: a virtualized Linux filesystem, not bare metal, and not a bind mount
+of the Windows drive. `df -T /work` prints the filesystem type at the start of
+the run.
+
+```sh
+docker run --rm -v "${PWD}:/src:ro" -v kv-e2e-work:/work golang:1.26 sh -c "find /work -mindepth 1 -delete && cp -r /src/. /work/ && mkdir -p /work/tmp && cd /work && df -T /work && TMPDIR=/work/tmp go test -race -count=1 -v ./..."
+```
+
 ### What the crash tests do not prove
 
 They kill processes. The operating system still flushes what a killed process
