@@ -80,7 +80,7 @@ func (f *fakePersister) Keys() ([]string, error) {
 // bothModes runs fn against an in-memory DataStore and a persister-backed
 // one, as separate subtests: every behavior it checks must hold in both.
 func bothModes(t *testing.T, id string, fn func(t *testing.T, ds *DataStore)) {
-	t.Run("in-memory", func(t *testing.T) { fn(t, NewDataStore(id)) })
+	t.Run("in-memory", func(t *testing.T) { fn(t, NewDataStoreWithClockID(id, id)) })
 	t.Run("persister", func(t *testing.T) { fn(t, NewDataStoreWithPersister(id, newFakePersister())) })
 }
 
@@ -273,7 +273,7 @@ func TestIncompleteRestoreIsReturned(t *testing.T) {
 // TestInMemoryModeNeverReturnsErrors: the widened read signatures only
 // ever carry an error in persister-backed mode.
 func TestInMemoryModeNeverReturnsErrors(t *testing.T) {
-	ds := NewDataStore("node-1")
+	ds := NewDataStoreWithClockID("node-1", "node-1")
 	ds.Put("foo", "bar", nil)
 
 	if _, _, err := ds.Get("foo"); err != nil {

@@ -12,6 +12,7 @@ import (
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/rpc/pb"
 	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/storetest"
 	"distributed-kv-datastore/internal/vectorclock"
 )
 
@@ -41,7 +42,7 @@ func replicateRequest(t *testing.T) *pb.ReplicateRequest {
 }
 
 func TestReplicateAcceptsAndStoresOnSuccess(t *testing.T) {
-	ds := store.NewDataStore("node-1")
+	ds := storetest.NewStore(t, "node-1")
 	resp, err := NewServer(ds, nil).Replicate(context.Background(), replicateRequest(t))
 	if err != nil || !resp.Accepted {
 		t.Fatalf("expected Accepted with no error, got resp=%v err=%v", resp, err)
@@ -68,7 +69,7 @@ func TestReplicateReturnsErrorWhenPersistFails(t *testing.T) {
 // TestFetchItemReportsMissingKeyAsNotFound: a key that genuinely doesn't
 // exist is Found=false with no error — only a failed read is an error.
 func TestFetchItemReportsMissingKeyAsNotFound(t *testing.T) {
-	resp, err := NewServer(store.NewDataStore("node-1"), nil).FetchItem(context.Background(), &pb.FetchItemRequest{Key: "missing"})
+	resp, err := NewServer(storetest.NewStore(t, "node-1"), nil).FetchItem(context.Background(), &pb.FetchItemRequest{Key: "missing"})
 	if err != nil || resp.Found {
 		t.Fatalf("expected Found=false with no error, got resp=%v err=%v", resp, err)
 	}
@@ -142,7 +143,7 @@ func TestCoordinatePutPreservesNilVersusEmptyContext(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			coord := &recordingCoordinator{}
-			_, err := NewServer(store.NewDataStore("node-1"), coord).CoordinatePut(context.Background(),
+			_, err := NewServer(storetest.NewStore(t, "node-1"), coord).CoordinatePut(context.Background(),
 				&pb.CoordinatePutRequest{Key: "foo", Value: []byte(`"v"`), Context: tc.req})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -174,7 +175,7 @@ func TestCoordinatePutNeverReturnsUnavailable(t *testing.T) {
 		"no coordinator": {coord: nil, want: codes.Unimplemented},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := NewServer(store.NewDataStore("node-1"), tc.coord).CoordinatePut(context.Background(),
+			_, err := NewServer(storetest.NewStore(t, "node-1"), tc.coord).CoordinatePut(context.Background(),
 				&pb.CoordinatePutRequest{Key: "foo", Value: []byte(`"v"`)})
 			if code := status.Code(err); code != tc.want {
 				t.Fatalf("expected %v, got %v (%v)", tc.want, code, err)

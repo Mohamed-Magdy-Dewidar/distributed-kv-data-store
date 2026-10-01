@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/storetest"
 )
 
 // blockingCoordinator's CoordinatePut signals started, then blocks until
@@ -31,7 +31,7 @@ func (c *blockingCoordinator) CoordinatePut(context.Context, string, any, map[st
 func TestStopWithinReturnsWithinDeadlineDespiteBlockedRPC(t *testing.T) {
 	coord := &blockingCoordinator{started: make(chan struct{}), release: make(chan struct{})}
 
-	listener, err := Serve("localhost:0", store.NewDataStore("node-1"), coord)
+	listener, err := Serve("localhost:0", storetest.NewStore(t, "node-1"), coord)
 	if err != nil {
 		t.Fatalf("Serve failed: %v", err)
 	}

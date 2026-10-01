@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 
 	"distributed-kv-datastore/internal/rpc/pb"
-	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/storetest"
 )
 
 // serveOn starts a raw gRPC server at addr and returns its actual address and
@@ -27,7 +27,7 @@ func serveOn(t *testing.T, addr string) (actualAddr string, stop func()) {
 		t.Fatalf("listen on %s: %v", addr, err)
 	}
 	server := grpc.NewServer()
-	pb.RegisterKVReplicationServer(server, NewServer(store.NewDataStore("peer"), nil))
+	pb.RegisterKVReplicationServer(server, NewServer(storetest.NewStore(t, "peer"), nil))
 	go func() { _ = server.Serve(lis) }()
 	return lis.Addr().String(), server.Stop
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/storetest"
 )
 
 // delayServe holds every Listener's Serve goroutine until the returned
@@ -45,7 +45,7 @@ func TestStopFreesThePortEvenBeforeServeStarts(t *testing.T) {
 				t.Fatal(err)
 			}
 			addr := lis.Addr().String()
-			l := ServeListener(lis, store.NewDataStore("n"), nil)
+			l := ServeListener(lis, storetest.NewStore(t, "n"), nil)
 
 			// Stop runs while Serve is held; it can only return once Serve has
 			// run and returned, so let Serve go a moment after stop starts.

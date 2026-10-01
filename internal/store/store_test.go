@@ -8,7 +8,7 @@ import (
 )
 
 func TestBasicPutGet(t *testing.T) {
-	ds := NewDataStore("node-1")
+	ds := NewDataStoreWithPersister("node-1", newFakePersister())
 	ds.Put("foo", "bar", nil)
 
 	items, ok, _ := ds.Get("foo")
@@ -28,7 +28,7 @@ func TestBasicPutGet(t *testing.T) {
 }
 
 func TestSequentialUpdateSameNodeDoesNotCreateSibling(t *testing.T) {
-	ds := NewDataStore("node-1")
+	ds := NewDataStoreWithPersister("node-1", newFakePersister())
 	ds.Put("foo", "bar", nil)
 	ds.Put("foo", "baz", nil)
 
@@ -45,7 +45,7 @@ func TestSequentialUpdateSameNodeDoesNotCreateSibling(t *testing.T) {
 }
 
 func TestGetMissingKey(t *testing.T) {
-	ds := NewDataStore("node-1")
+	ds := NewDataStoreWithPersister("node-1", newFakePersister())
 	items, ok, _ := ds.Get("does-not-exist")
 	if ok {
 		t.Errorf("expected ok=false for missing key")
@@ -56,7 +56,7 @@ func TestGetMissingKey(t *testing.T) {
 }
 
 func TestDeleteTombstoneVsGetLiveItems(t *testing.T) {
-	ds := NewDataStore("node-1")
+	ds := NewDataStoreWithPersister("node-1", newFakePersister())
 	ds.Put("foo", "bar", nil)
 
 	deleted, _ := ds.Delete("foo", nil)
@@ -79,7 +79,7 @@ func TestDeleteTombstoneVsGetLiveItems(t *testing.T) {
 }
 
 func TestDeleteMissingKey(t *testing.T) {
-	ds := NewDataStore("node-1")
+	ds := NewDataStoreWithPersister("node-1", newFakePersister())
 	deleted, msg := ds.Delete("never-existed", nil)
 	if deleted {
 		t.Errorf("expected delete of missing key to fail")
@@ -90,7 +90,7 @@ func TestDeleteMissingKey(t *testing.T) {
 }
 
 func TestConcurrentWritersSameNodeSerialize(t *testing.T) {
-	ds := NewDataStore("node-1")
+	ds := NewDataStoreWithPersister("node-1", newFakePersister())
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
@@ -114,11 +114,12 @@ func TestMergeReplicatedCreatesSiblingsOnGenuineConflict(t *testing.T) {
 	// This proves DataStore.MergeReplicated itself (not just the pure
 	// resolve() function) correctly creates siblings end-to-end through
 	// its own locking, matching what Node.Replicate will call in practice.
-	ds := NewDataStore("node-2")
+	ds := NewDataStoreWithPersister("node-2", newFakePersister())
 	base := map[string]uint32{"node-1": 1, "node-2": 1}
 
-	ds.store["foo"] = []*model.DataItem{
-		{Value: "local-value", VectorClock: vectorclock.BuildFromContext(base, "node-2")},
+	local := &model.DataItem{Value: "local-value", VectorClock: vectorclock.BuildFromContext(base, "node-2")}
+	if err := ds.MergeReplicated("foo", local); err != nil {
+		t.Fatal(err)
 	}
 
 	incoming := &model.DataItem{

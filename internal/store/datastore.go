@@ -11,7 +11,8 @@ import (
 )
 
 // DataStore runs in one of two modes, fixed at construction:
-//   - in-memory (NewDataStore): versions live in store, nothing persists.
+//   - in-memory (NewDataStoreWithClockID): versions live in store, nothing
+//     persists. Only node.New uses it, and it goes away with node.New.
 //   - persister-backed (NewDataStoreWithPersister): every read and write
 //     goes through to persister, and store is nil — there is no second,
 //     in-memory copy.
@@ -44,12 +45,8 @@ type DataStore struct {
 	mu        sync.Mutex
 }
 
-func NewDataStore(id string) *DataStore {
-	return NewDataStoreWithClockID(id, id)
-}
-
-// NewDataStoreWithClockID is NewDataStore with vector-clock entries named
-// clockID instead of id.
+// NewDataStoreWithClockID returns an in-memory DataStore whose vector-clock
+// entries are named clockID.
 func NewDataStoreWithClockID(id, clockID string) *DataStore {
 	return &DataStore{
 		id:      id,

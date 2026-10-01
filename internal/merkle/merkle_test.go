@@ -6,6 +6,7 @@ import (
 
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/store"
+	"distributed-kv-datastore/internal/storetest"
 )
 
 const testNumBuckets = 16 // satisfies 4^k (k=2)
@@ -20,8 +21,8 @@ func mustBuild(t *testing.T, ds *store.DataStore, numBuckets int) *Tree {
 }
 
 func TestIdenticalDataProducesIdenticalTrees(t *testing.T) {
-	dsA := store.NewDataStore("node-1")
-	dsB := store.NewDataStore("node-1") // same node ID: identical vector clocks on identical writes
+	dsA := storetest.NewStore(t, "node-1")
+	dsB := storetest.NewStore(t, "node-1") // same node ID: identical vector clocks on identical writes
 
 	for i := 0; i < 30; i++ {
 		key := keyN(i)
@@ -43,8 +44,8 @@ func TestIdenticalDataProducesIdenticalTrees(t *testing.T) {
 }
 
 func TestSingleChangedKeyOnlyAffectsItsOwnBucket(t *testing.T) {
-	dsA := store.NewDataStore("node-1")
-	dsB := store.NewDataStore("node-1")
+	dsA := storetest.NewStore(t, "node-1")
+	dsB := storetest.NewStore(t, "node-1")
 
 	for i := 0; i < 30; i++ {
 		key := keyN(i)
@@ -86,8 +87,8 @@ func TestSingleChangedKeyOnlyAffectsItsOwnBucket(t *testing.T) {
 // stop after finding the first mismatch and correctly explores every
 // subtree whose hash disagrees, independently.
 func TestTwoDivergentLeavesInDifferentSubtreesAreBothFound(t *testing.T) {
-	dsA := store.NewDataStore("node-1")
-	dsB := store.NewDataStore("node-1")
+	dsA := storetest.NewStore(t, "node-1")
+	dsB := storetest.NewStore(t, "node-1")
 
 	for i := 0; i < 30; i++ {
 		key := keyN(i)
@@ -137,8 +138,8 @@ func TestTwoDivergentLeavesInDifferentSubtreesAreBothFound(t *testing.T) {
 }
 
 func TestDivergentBucketsEmptyForIdenticalTrees(t *testing.T) {
-	dsA := store.NewDataStore("node-1")
-	dsB := store.NewDataStore("node-1")
+	dsA := storetest.NewStore(t, "node-1")
+	dsB := storetest.NewStore(t, "node-1")
 
 	dsA.Put("foo", "bar", nil)
 	dsB.Put("foo", "bar", nil)
@@ -158,7 +159,7 @@ func TestDivergentBucketsPanicsOnMismatchedNumBuckets(t *testing.T) {
 		}
 	}()
 
-	dsA := store.NewDataStore("node-1")
+	dsA := storetest.NewStore(t, "node-1")
 	dsA.Put("foo", "bar", nil)
 
 	treeA := mustBuild(t, dsA, 16)
@@ -193,7 +194,7 @@ func TestBuildPanicsOnInvalidBucketCount(t *testing.T) {
 		}
 	}()
 
-	ds := store.NewDataStore("node-1")
+	ds := storetest.NewStore(t, "node-1")
 	Build(ds, 8) // power of 2, but not power of 4 — should be rejected
 }
 
