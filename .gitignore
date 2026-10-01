@@ -9,6 +9,8 @@
 *.dylib
 *.test
 *.out
+# The node binary the README quick start builds (kvnode.exe is covered by *.exe)
+/kvnode
 
 # Go workspace file (if you ever use go work)
 go.work
