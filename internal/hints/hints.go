@@ -61,8 +61,6 @@ func Open(dir string, maxMemtableBytes int) (*Store, error) {
 	return &Store{engine: e}, nil
 }
 
-// Close closes the underlying engine. The caller must first make sure
-// nothing is still adding or delivering hints.
 func (s *Store) Close() error {
 	return s.engine.Close()
 }

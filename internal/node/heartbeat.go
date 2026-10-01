@@ -17,8 +17,8 @@ import (
 
 // peerHealth is what heartbeats have shown about one peer.
 type peerHealth struct {
-	misses int    // consecutive failed pings
-	dead   bool   // misses reached QuorumConfig.MaxMissedHeartbeats
+	misses int
+	dead   bool
 	epoch  uint64 // the membership epoch in its latest ping reply
 
 	// reachable is whether the most recent ping to the peer was answered.
@@ -143,7 +143,7 @@ func (n *Node) pingPeer(ctx context.Context, v *view, peerID string) {
 		Fingerprint:   own.fingerprint,
 	})
 	if ctx.Err() != nil {
-		return // shutting down: not the peer's fault
+		return
 	}
 	if err != nil {
 		n.recordHeartbeat(peerID, false)

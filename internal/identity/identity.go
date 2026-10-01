@@ -26,7 +26,6 @@ import (
 	"distributed-kv-datastore/internal/storage/fsutil"
 )
 
-// FileName is the identity file in a data directory.
 const FileName = "IDENTITY"
 
 const incarnationBytes = 8 // 16 hex characters
@@ -36,11 +35,10 @@ type file struct {
 	Incarnation string `json:"incarnation"`
 }
 
-// NewIncarnation returns a fresh random incarnation: 16 hex characters.
 func NewIncarnation() string {
 	var b [incarnationBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic(fmt.Sprintf("identity: read random bytes: %v", err)) // crypto/rand does not fail in practice
+		panic(fmt.Sprintf("identity: read random bytes: %v", err))
 	}
 	return hex.EncodeToString(b[:])
 }

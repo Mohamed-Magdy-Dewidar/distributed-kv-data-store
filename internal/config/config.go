@@ -34,6 +34,8 @@ type Cluster struct {
 	// node that has already adopted a newer epoch keeps that membership
 	// (its persisted one) and ignores this list; one that holds the same
 	// epoch with a different list refuses to start. Defaults to 0.
+	
+	// so epoch is like a term number that all nodes needs to agree on
 	Epoch   uint64   `yaml:"epoch"`
 	Members []Member `yaml:"members"`
 }
@@ -57,15 +59,9 @@ type Timeouts struct {
 }
 
 type Health struct {
-	// MaxMissedHeartbeats is how many heartbeats in a row a peer may miss
-	// before it is treated as dead. Default 3.
-	MaxMissedHeartbeats int `yaml:"maxMissedHeartbeats"`
+	MaxMissedHeartbeats int `yaml:"maxMissedHeartbeats"` // 3 missed heatbeats and node is considered dead
 }
 
-// Config is cmd/node's decoded, validated configuration. NodeID is
-// overridden by the KV_NODE_ID environment variable when it's set,
-// overlaid after decoding and before validation — so either the YAML
-// value or the env var, whichever wins, is what gets validated.
 type Config struct {
 	NodeID  string  `yaml:"nodeId"`
 	Listen  Listen  `yaml:"listen"`
@@ -215,8 +211,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// SelfAddress returns the address cluster.members lists for c.NodeID.
-// Load's validation already guarantees a match exists.
+
 func (c *Config) SelfAddress() string {
 	for _, m := range c.Cluster.Members {
 		if m.ID == c.NodeID {
