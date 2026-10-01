@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -93,6 +94,11 @@ func (n *Node) pruneHealth(v *view) {
 			delete(n.conflictSeen, id)
 		}
 	}
+	for id := range n.mismatchSeen {
+		if _, ok := v.members[id]; !ok {
+			delete(n.mismatchSeen, id)
+		}
+	}
 }
 
 // StartHeartbeatLoop pings the other members every interval (see
@@ -172,9 +178,11 @@ func (n *Node) pingPeer(ctx context.Context, v *view, peerID string) {
 // HandlePing implements rpc.MembershipService: it answers with this node's ID
 // and membership, and reacts to the sender's. A sender with a newer epoch has
 // its membership fetched in the background, from the address it announced
-// (with a one-off connection: the sender may not be a member here yet).
+// (with a one-off connection: the sender may not be a member here yet). A
+// member this node last failed to reach is pinged back (see pingBack).
 func (n *Node) HandlePing(_ context.Context, from rpc.PingInfo) rpc.PingReply {
 	n.pingsReceived.Add(1)
+	n.pingBack(from)
 	cur := n.membership.Load()
 	switch {
 	case from.Epoch > cur.epoch && from.SenderAddress != "":
@@ -186,6 +194,132 @@ func (n *Node) HandlePing(_ context.Context, from rpc.PingInfo) rpc.PingReply {
 		n.noteConflict(from.SenderID, cur.epoch, from.Fingerprint)
 	}
 	return rpc.PingReply{NodeID: n.ID, Epoch: cur.epoch, Fingerprint: cur.fingerprint}
+}
+
+// testHookPingBack, when set, runs each time pingBack starts a ping-back to
+// peerID. Tests only; always nil in production.
+var testHookPingBack func(peerID string)
+
+// pingBack reacts to a ping from a member this node's own latest ping to it
+// failed (or that it hasn't pinged yet): it pings the sender at once, in the
+// background, over a newly dialed connection, instead of leaving it to the
+// next heartbeat round and to whenever the reconnect backoff those failed
+// pings built up on the cached connection allows a reconnect. A peer that was
+// down when this node started, or that restarted, is then reachable and alive
+// again as soon as its first ping arrives.
+//
+// The connection is replaced, not reset: grpc's ClientConn.ResetConnectBackoff
+// reads the connection's subchannel map without holding its lock, a data race
+// with the connection setting itself up (seen in grpc v1.84).
+//
+// The inbound ping marks nothing itself: liveness comes only from pings this
+// node sends, so a peer that can reach this node but that it can't reach is
+// still marked dead. Nothing is done for a sender that isn't in the current
+// view, or whose address isn't the one the view lists for it (logged once per
+// peer and address). At most one ping-back per peer runs at a time; it is
+// background work, so StopBackgroundLoops waits for it.
+func (n *Node) pingBack(from rpc.PingInfo) {
+	peerID := from.SenderID
+	addr, member := n.membership.Load().members[peerID]
+	if !member || peerID == n.ID {
+		return
+	}
+	if from.SenderAddress != addr {
+		n.noteAddressMismatch(peerID, from.SenderAddress, addr)
+		return
+	}
+
+	n.healthMu.Lock()
+	delete(n.mismatchSeen, peerID)
+	h := n.health[peerID]
+	if (h != nil && h.reachable) || n.pingingBack[peerID] {
+		n.healthMu.Unlock()
+		return
+	}
+	n.pingingBack[peerID] = true
+	n.healthMu.Unlock()
+
+	done := func() {
+		n.healthMu.Lock()
+		delete(n.pingingBack, peerID)
+		n.healthMu.Unlock()
+	}
+	started := n.goBackground(func(ctx context.Context) {
+		defer done()
+		if old := n.retireClient(peerID); old != nil {
+			n.closeRetiredLater(old)
+		}
+		n.pingPeer(ctx, n.membership.Load(), peerID)
+	})
+	if !started {
+		done()
+		return
+	}
+	if testHookPingBack != nil {
+		testHookPingBack(peerID)
+	}
+}
+
+// retireClient moves the cached connection to peerID, if there is one, to
+// the retired list and returns it, so the next clientFor dials a new one,
+// which has no reconnect backoff. Like a connection replaced because its peer
+// moved, it isn't closed at once: an RPC in flight on it finishes.
+func (n *Node) retireClient(peerID string) *rpc.Client {
+	n.clientsMu.Lock()
+	defer n.clientsMu.Unlock()
+	pc, ok := n.clients[peerID]
+	if !ok {
+		return nil
+	}
+	n.retired = append(n.retired, pc.client)
+	delete(n.clients, peerID)
+	return pc.client
+}
+
+// closeRetiredLater closes a connection retired by a ping-back, and drops it
+// from the retired list, after twice ReplicationTimeout: long enough for the
+// replica RPCs that were using it to have ended. Every ping-back retires one,
+// and a retired connection keeps reconnecting until it is closed, so leaving
+// them all to Close would grow the list with every peer restart. It is
+// background work: if StopBackgroundLoops comes first, the connection is left
+// on the list for Close.
+func (n *Node) closeRetiredLater(old *rpc.Client) {
+	grace := 2 * n.QuorumConfig.ReplicationTimeout
+	n.goBackground(func(ctx context.Context) {
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return
+		}
+		n.clientsMu.Lock()
+		i := slices.Index(n.retired, old)
+		if i >= 0 {
+			n.retired = slices.Delete(n.retired, i, i+1)
+		}
+		n.clientsMu.Unlock()
+		if i >= 0 { // not already closed by Close
+			if err := old.Close(); err != nil {
+				log.Printf("node %s: closing a retired connection: %v", n.ID, err)
+			}
+		}
+	})
+}
+
+// noteAddressMismatch logs a ping from member peerID that gives its address as
+// claimed where the membership lists listed: a misconfigured node, or one
+// impersonating peerID. It is logged when the claimed address changes, not on
+// every ping.
+func (n *Node) noteAddressMismatch(peerID, claimed, listed string) {
+	n.healthMu.Lock()
+	first := n.mismatchSeen[peerID] != claimed
+	n.mismatchSeen[peerID] = claimed
+	n.healthMu.Unlock()
+	if first {
+		log.Printf("node %s: ADDRESS MISMATCH: a ping from %q gives its address as %q, but the membership lists %q; not pinging it back",
+			n.ID, peerID, claimed, listed)
+	}
 }
 
 // CurrentMembership implements rpc.MembershipService.

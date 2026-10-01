@@ -77,12 +77,16 @@ type Node struct {
 
 	// Heartbeat state (see heartbeat.go). health holds what pings have shown
 	// about each peer that has been pinged; a peer with no entry is alive.
-	// conflictSeen remembers the last membership conflict logged per peer.
+	// conflictSeen remembers the last membership conflict logged per peer,
+	// and mismatchSeen the last wrong address a peer's ping claimed.
+	// pingingBack holds the peers a ping-back is running for (see pingBack).
 	// adopting makes fetching-and-adopting a newer membership single-flight.
 	aeTrigger           chan struct{} // capacity 1: see TriggerAntiEntropy
 	healthMu            sync.RWMutex
 	health              map[string]*peerHealth
 	conflictSeen        map[string]string
+	mismatchSeen        map[string]string
+	pingingBack         map[string]bool
 	adopting            atomic.Bool
 	membershipConflicts atomic.Uint64 // conflicts noticed, for tests and diagnosis
 	pingsReceived       atomic.Uint64
@@ -236,6 +240,8 @@ func newNode(id, clockID, address string, n, w, r int, v, handoffBase *view, ds 
 		handoffChanged: make(chan struct{}),
 		health:         make(map[string]*peerHealth),
 		conflictSeen:   make(map[string]string),
+		mismatchSeen:   make(map[string]string),
+		pingingBack:    make(map[string]bool),
 		engine:         e,
 		hints:          hs,
 	}
@@ -682,6 +688,10 @@ func (n *Node) getOrDialClient(peerID string) (*rpc.Client, error) {
 	return n.clientFor(n.membership.Load(), peerID)
 }
 
+// dialPeer opens a connection to a peer. Tests replace it to control the
+// reconnect backoff; it is rpc.Dial in production.
+var dialPeer = rpc.Dial
+
 // clientFor returns the connection to peerID at the address v lists for it,
 // dialing one if there is none. A cached connection to a different address
 // (the peer moved) is retired rather than closed — an RPC in flight on it
@@ -707,7 +717,7 @@ func (n *Node) clientFor(v *view, peerID string) (*rpc.Client, error) {
 		delete(n.clients, peerID)
 	}
 
-	client, err := rpc.Dial(addr, n.QuorumConfig.MaxReconnectBackoff)
+	client, err := dialPeer(addr, n.QuorumConfig.MaxReconnectBackoff)
 	if err != nil {
 		return nil, fmt.Errorf("dial peer %q at %s: %w", peerID, addr, err)
 	}

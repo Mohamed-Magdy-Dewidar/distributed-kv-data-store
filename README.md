@@ -108,7 +108,11 @@ go build -o kvnode ./cmd/node        # kvnode.exe on Windows
 ./kvnode -config examples/local/node-3.yaml
 ```
 
-Write through one node and read through another:
+Once all three are up, write through one node and read through another. For
+a moment after the last node starts (up to about one heartbeat interval, 1 s
+with these configs), a write can still fail as `Unavailable` while the nodes
+that started first reconnect to it; retry it, and see the cold-start entry in
+[known-limitations.md](docs/known-limitations.md).
 
 ```sh
 grpcurl -plaintext -d '{"key": "greeting", "value": "hello"}' localhost:7000 kvstore.KVClient/Put
@@ -159,10 +163,6 @@ crash tests do not prove, are in [docs/testing.md](docs/testing.md).
 
 ## Roadmap
 
-- Fix the cold-start window in which a node fails writes to peers that started
-  after it: an inbound `Ping` should mark its sender alive and reset the
-  connection's reconnect backoff (see
-  [known-limitations.md](docs/known-limitations.md)).
 - Run the cluster on Kubernetes as a StatefulSet.
 - A Kubernetes Operator to manage the cluster.
 - Load tests with k6.

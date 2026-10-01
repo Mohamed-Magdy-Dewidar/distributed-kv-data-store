@@ -29,13 +29,23 @@ type Client struct {
 // setting (base delay, multiplier, jitter) is left at gRPC's default. Zero
 // leaves gRPC's own default max delay in place.
 func Dial(address string, maxReconnectBackoff time.Duration) (*Client, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-	if maxReconnectBackoff > 0 {
-		connectParams := grpc.ConnectParams{Backoff: backoff.DefaultConfig}
-		connectParams.Backoff.MaxDelay = maxReconnectBackoff
-		opts = append(opts, grpc.WithConnectParams(connectParams))
+	if maxReconnectBackoff <= 0 {
+		return dial(address)
 	}
+	cfg := backoff.DefaultConfig
+	cfg.MaxDelay = maxReconnectBackoff
+	return DialBackoff(address, cfg)
+}
 
+// DialBackoff is Dial with the whole reconnect backoff given, not just its
+// maximum delay. Tests use it to make the wait between reconnect attempts
+// long and predictable.
+func DialBackoff(address string, cfg backoff.Config) (*Client, error) {
+	return dial(address, grpc.WithConnectParams(grpc.ConnectParams{Backoff: cfg}))
+}
+
+func dial(address string, opts ...grpc.DialOption) (*Client, error) {
+	opts = append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, opts...)
 	conn, err := grpc.NewClient(address, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", address, err)
