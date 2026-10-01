@@ -34,7 +34,7 @@ type Cluster struct {
 	// node that has already adopted a newer epoch keeps that membership
 	// (its persisted one) and ignores this list; one that holds the same
 	// epoch with a different list refuses to start. Defaults to 0.
-	
+
 	// so epoch is like a term number that all nodes needs to agree on
 	Epoch   uint64   `yaml:"epoch"`
 	Members []Member `yaml:"members"`
@@ -210,7 +210,6 @@ func (c *Config) validate() error {
 
 	return nil
 }
-
 
 func (c *Config) SelfAddress() string {
 	for _, m := range c.Cluster.Members {
