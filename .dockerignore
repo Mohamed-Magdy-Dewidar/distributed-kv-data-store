@@ -1,0 +1,9 @@
+# The image is built from cmd/node and the packages it imports, nothing else.
+# Exclude everything, then let back in what the build needs: this keeps .git,
+# data/, built binaries (*.exe, /kvnode), docs, examples, e2e and editor
+# state out of the build context without listing each of them.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
