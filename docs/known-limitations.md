@@ -1,6 +1,6 @@
 # Known limitations
 
-This project is a Dynamo-style key-value store built as a learning and portfolio artifact. It runs, survives failures, and can be operated on Kubernetes, but it is not a production database. This page lists what it deliberately does not do, or does imperfectly, so readers can see the tradeoffs.
+This project is a Dynamo-style key-value store built as a learning and portfolio artifact. It runs as a cluster of separate processes and survives failures, but it is not a production database, and nothing for running it on Kubernetes exists yet (that is on the roadmap in the [README](../README.md)). This page lists what it deliberately does not do, or does imperfectly, so readers can see the tradeoffs.
 
 ## Consistency and write semantics
 
