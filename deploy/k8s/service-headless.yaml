@@ -1,0 +1,24 @@
+# Gives each pod its stable DNS name, kv-N.kv.kvstore.svc.cluster.local, the
+# addresses the nodes use for each other. publishNotReadyAddresses keeps a
+# pod's name resolvable while it is not ready: while it starts, and after it
+# has been removed from the membership (its /readyz then answers 503) while
+# it drains.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kv
+  namespace: kvstore
+  labels:
+    app.kubernetes.io/name: kvstore
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: kvstore
+  ports:
+    - name: grpc
+      port: 7000
+      targetPort: grpc
+    - name: http
+      port: 8080
+      targetPort: http

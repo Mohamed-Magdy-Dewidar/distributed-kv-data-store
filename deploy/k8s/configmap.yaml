@@ -1,0 +1,58 @@
+# The node config every pod reads. It has no nodeId: each pod gets its own
+# from KV_NODE_ID (its pod name, see statefulset.yaml).
+#
+# A pod reads this only when it starts: editing it changes nothing in running
+# pods. The member addresses must be exactly the strings used in every
+# POST /admin/membership (nodes compare them as strings), and the epoch and
+# member list must match what the cluster holds; see docs/kubernetes.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kv-config
+  namespace: kvstore
+data:
+  config.yaml: |
+    listen:
+      grpc: ":7000"
+      http: ":8080"
+    dataDir: /data
+    cluster:
+      n: 3
+      w: 2
+      r: 2
+      epoch: 0
+      members:
+        - id: kv-0
+          address: kv-0.kv.kvstore.svc.cluster.local:7000
+        - id: kv-1
+          address: kv-1.kv.kvstore.svc.cluster.local:7000
+        - id: kv-2
+          address: kv-2.kv.kvstore.svc.cluster.local:7000
+        - id: kv-3
+          address: kv-3.kv.kvstore.svc.cluster.local:7000
+        - id: kv-4
+          address: kv-4.kv.kvstore.svc.cluster.local:7000
+        - id: kv-5
+          address: kv-5.kv.kvstore.svc.cluster.local:7000
+        - id: kv-6
+          address: kv-6.kv.kvstore.svc.cluster.local:7000
+        - id: kv-7
+          address: kv-7.kv.kvstore.svc.cluster.local:7000
+        - id: kv-8
+          address: kv-8.kv.kvstore.svc.cluster.local:7000
+        - id: kv-9
+          address: kv-9.kv.kvstore.svc.cluster.local:7000
+    storage:
+      memtableBytes: 4194304
+    intervals:
+      compaction: 30s
+      antiEntropy: 60s
+      hintDelivery: 10s
+      heartbeat: 1s
+    timeouts:
+      replication: 5s
+      maxReconnectBackoff: 5s
+      shutdown: 20s
+      heartbeat: 500ms
+    health:
+      maxMissedHeartbeats: 3

@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kv
+  namespace: kvstore
+  labels:
+    app.kubernetes.io/name: kvstore
+spec:
+  serviceName: kv
+  replicas: 10
+  # Readiness doesn't depend on peers, so ordered startup buys nothing; it
+  # would only slow cold starts and let one stuck pod block the rest. This
+  # does not make adding several nodes at once safe: change replicas by one,
+  # following docs/kubernetes.md.
+  podManagementPolicy: Parallel
+  # A pod scaled away has been drained and removed from the membership; its
+  # data directory must not come back if the StatefulSet grows again (a stale
+  # incarnation: see "Never restore a node's data dir" in
+  # docs/known-limitations.md). Deleting the StatefulSet keeps the data.
+  persistentVolumeClaimRetentionPolicy:
+    whenScaled: Delete
+    whenDeleted: Retain
+  # During a rolling update, the next pod is stopped only after the previous
+  # one has been Ready this long, so its peers have reconnected to it (about
+  # one heartbeat interval) before another replica goes down.
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kvstore
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kvstore
+    spec:
+      # Longer than timeouts.shutdown (20s), which bounds only the gRPC stop;
+      # stopping the loops and closing storage come after it.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532 # makes the data volume writable by the nonroot user
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kv
+          image: kvnode:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KV_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # KV_CONFIG=/etc/kv/config.yaml is set in the image.
+          # Kubernetes removes a stopping pod from kv-client's endpoints
+          # asynchronously; until that has spread, a new client connection can
+          # still be routed to it. Keep serving for 5s before SIGTERM, so the
+          # pod has left the endpoints by the time it stops its listener. This
+          # only delays SIGTERM: the node itself behaves the same on a restart
+          # and a scale-down.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          ports:
+            - name: grpc
+              containerPort: 7000
+            - name: http
+              containerPort: 8080
+          # /livez answers as soon as the process is up, before storage is
+          # opened, so a long WAL replay doesn't fail it.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          # /readyz: 200 once serving gRPC and a member of the membership;
+          # 503 while starting, shutting down, or after removal.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          # From measurements at 10 replicas on kind (docs/kubernetes.md):
+          # CPU = steady-load median (36m) x 1.5, rounded up; memory = highest
+          # observed (36 MiB, write burst) x 1.5, rounded up. No CPU limit:
+          # anti-entropy rounds and bursts (up to ~0.5 CPU) use spare CPU
+          # instead of being throttled. The memory limit leaves room for the
+          # growth that comes with more keys per node.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kv
+              readOnly: true
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: kv-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi

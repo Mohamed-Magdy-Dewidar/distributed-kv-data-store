@@ -1,0 +1,19 @@
+# The client entry point: gRPC only, to ready pods. Any node accepts a read or
+# write and forwards it to the key's replicas. Port 8080 (probes and the
+# unauthenticated admin API) is deliberately not exposed here; reach a pod's
+# admin API with kubectl port-forward.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kv-client
+  namespace: kvstore
+  labels:
+    app.kubernetes.io/name: kvstore
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kvstore
+  ports:
+    - name: grpc
+      port: 7000
+      targetPort: grpc
