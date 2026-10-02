@@ -18,6 +18,7 @@ import (
 	"distributed-kv-datastore/internal/config"
 	"distributed-kv-datastore/internal/node"
 	"distributed-kv-datastore/internal/rpc"
+	"distributed-kv-datastore/internal/telemetry"
 )
 
 // probeShutdownTimeout bounds the probe server's own Shutdown call. It's
@@ -40,8 +41,9 @@ func step(name string) {
 
 // probeServer serves /livez (always 200) and /readyz (200 once ready and
 // while the node is in its membership, 503 otherwise) on one address —
-// cmd/node's Kubernetes liveness/readiness probes — and the admin API (see
-// admin.go) once the node is set.
+// cmd/node's Kubernetes liveness/readiness probes — the admin API (see
+// admin.go) once the node is set, and /metrics (see internal/telemetry),
+// which serves no kv metrics until then.
 type probeServer struct {
 	httpServer *http.Server
 	ready      atomic.Bool
@@ -73,6 +75,14 @@ func newProbeServer(addr string) *probeServer {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 	})
+	metrics := telemetry.New(func() (node.Stats, bool) {
+		nd := p.node.Load()
+		if nd == nil {
+			return node.Stats{}, false
+		}
+		return nd.Stats(), true
+	})
+	mux.Handle("GET /metrics", metrics.Handler())
 	p.registerAdmin(mux)
 	p.httpServer = &http.Server{Addr: addr, Handler: mux}
 	return p
