@@ -1,0 +1,111 @@
+# Test tooling for docs/kubernetes.md, not part of the deployment: a write
+# load and a toolbox, both grpcurl on Alpine, running inside the cluster so
+# they reach kv-client and every pod by DNS and survive pod restarts.
+#
+#   kubectl apply -f deploy/loadgen/loadgen.yaml       # toolbox + script
+#   kubectl -n kvstore run ... (see docs/kubernetes.md for the load pods)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: kvstore
+data:
+  # Writes PREFIX-000001, PREFIX-000002, ... (from START, COUNT of them, or
+  # forever if COUNT is 0) with value v-<key> through kv-client, one Put at a
+  # time, sleeping SLEEP seconds between writes. Each write is logged as
+  #   <UTC time> <uptime seconds> <key> ok
+  #   <UTC time> <uptime seconds> <key> ERR <grpc code> <message>
+  # The uptime column orders writes at sub-second resolution.
+  write.sh: |
+    #!/bin/sh
+    i=${START:-1}
+    end=$(( ${COUNT:-0} > 0 ? i + COUNT : 0 ))
+    while [ "$end" -eq 0 ] || [ "$i" -lt "$end" ]; do
+      key=$(printf '%s-%06d' "$PREFIX" "$i")
+      if out=$(grpcurl -plaintext -max-time 5 -d "{\"key\":\"$key\",\"value\":\"v-$key\"}" \
+          kv-client.kvstore.svc.cluster.local:7000 kvstore.KVClient/Put 2>&1); then
+        st=ok
+      else
+        code=$(echo "$out" | sed -n 's/^ *Code: //p' | head -1)
+        msg=$(echo "$out" | sed -n 's/^ *Message: //p' | head -1 | cut -c1-120)
+        st="ERR ${code:-unknown} ${msg:-$(echo "$out" | tr '\n' ' ' | cut -c1-120)}"
+      fi
+      echo "$(date -u +%FT%TZ) $(cut -d' ' -f1 /proc/uptime) $key $st"
+      i=$((i + 1))
+      [ "${SLEEP:-0}" = 0 ] || sleep "$SLEEP"
+    done
+  # Reads "key value" lines on stdin and checks each through a quorum Get on
+  # kv-client: prints every key whose value is missing, then a summary.
+  verify.sh: |
+    #!/bin/sh
+    n=0; bad=0
+    while read -r key value; do
+      n=$((n + 1))
+      if ! grpcurl -plaintext -max-time 5 -d "{\"key\":\"$key\"}" \
+          kv-client.kvstore.svc.cluster.local:7000 kvstore.KVClient/Get 2>&1 | grep -q "\"$value\""; then
+        bad=$((bad + 1)); echo "MISSING $key"
+      fi
+    done
+    echo "checked=$n missing=$bad"
+  # Usage: poll.sh EPOCH NODES. Waits until kv-0 .. kv-(NODES-1) all report
+  # EPOCH in GET /admin/membership, then until GET /admin/handoff?epoch=EPOCH
+  # returns 200 on all of them, printing the uptime (seconds) at each point.
+  poll.sh: |
+    #!/bin/sh
+    E=$1; NODES=$2
+    up() { cut -d' ' -f1 /proc/uptime; }
+    while :; do
+      n=0
+      for i in $(seq 0 $((NODES - 1))); do
+        e=$(wget -qO- -T 2 "http://kv-$i.kv.kvstore.svc.cluster.local:8080/admin/membership" 2>/dev/null \
+          | grep -o '"epoch":[0-9]*' | head -1 | cut -d: -f2)
+        [ "$e" = "$E" ] && n=$((n + 1))
+      done
+      [ "$n" -eq "$NODES" ] && break
+      sleep 0.5
+    done
+    echo "all-epoch $(up)"
+    while :; do
+      n=0
+      for i in $(seq 0 $((NODES - 1))); do
+        wget -qO /dev/null -T 3 "http://kv-$i.kv.kvstore.svc.cluster.local:8080/admin/handoff?epoch=$E&timeout=1s" 2>/dev/null \
+          && n=$((n + 1))
+      done
+      [ "$n" -eq "$NODES" ] && break
+      sleep 0.5
+    done
+    echo "all-handoff $(up)"
+  # Reads "key owner owner owner" lines on stdin and asks each owner for its
+  # own copy (FetchItem: local storage only, no quorum, no forwarding).
+  copies.sh: |
+    #!/bin/sh
+    while read -r key owners; do
+      held=""
+      for o in $owners; do
+        if grpcurl -plaintext -max-time 5 -d "{\"key\":\"$key\"}" \
+            "$o.kv.kvstore.svc.cluster.local:7000" kvstore.KVReplication/FetchItem 2>&1 | grep -q '"found": true'; then
+          held="$held $o"
+        fi
+      done
+      echo "$key copies=$(echo $held | wc -w) on:$held"
+    done
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: toolbox
+  namespace: kvstore
+spec:
+  containers:
+    - name: toolbox
+      image: fullstorydev/grpcurl:v1.9.3-alpine
+      imagePullPolicy: IfNotPresent
+      command: ["sleep", "infinity"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+  volumes:
+    - name: scripts
+      configMap:
+        name: loadgen
+        defaultMode: 0555
