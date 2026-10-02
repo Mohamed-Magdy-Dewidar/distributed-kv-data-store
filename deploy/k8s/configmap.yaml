@@ -46,7 +46,7 @@ data:
       memtableBytes: 4194304
     intervals:
       compaction: 30s
-      antiEntropy: 60s
+      antiEntropy: 15m
       hintDelivery: 10s
       heartbeat: 1s
     timeouts:

@@ -130,7 +130,7 @@ kubectl -n kvstore get pods        # kv-0 .. kv-9, all 1/1 Running
 | File | What it is |
 |---|---|
 | `00-namespace.yaml` | Namespace `kvstore`. |
-| `configmap.yaml` | `kv-config`: the node config every pod reads, with no `nodeId` (each pod gets its pod name through `KV_NODE_ID`). Members `kv-0` .. `kv-9` at `kv-N.kv.kvstore.svc.cluster.local:7000`, epoch 0, `n: 3, w: 2, r: 2`, every interval and timeout explicit, anti-entropy every 60s. |
+| `configmap.yaml` | `kv-config`: the node config every pod reads, with no `nodeId` (each pod gets its pod name through `KV_NODE_ID`). Members `kv-0` .. `kv-9` at `kv-N.kv.kvstore.svc.cluster.local:7000`, epoch 0, `n: 3, w: 2, r: 2`, every interval and timeout explicit, anti-entropy every 15 minutes (see [the anti-entropy interval](#the-anti-entropy-interval)). |
 | `service-headless.yaml` | `kv`: gives each pod its DNS name. `publishNotReadyAddresses: true` keeps the name resolvable while a pod starts and while a removed pod drains. |
 | `service-client.yaml` | `kv-client`: gRPC (7000) only, to ready pods. The probe and admin port (8080) is not exposed. |
 | `statefulset.yaml` | `kv`: 10 replicas, `podManagementPolicy: Parallel`, PVC retention `whenScaled: Delete, whenDeleted: Retain`, `minReadySeconds: 5`, a 5s `preStop` sleep, `/livez` and `/readyz` probes, `terminationGracePeriodSeconds: 60`, non-root with a read-only root filesystem, one 1Gi volume per pod at `/data`. |
@@ -252,7 +252,9 @@ On the single-node kind cluster above, Docker Desktop on WSL2, 10 replicas,
 that membership changes move data, and the steady load ran through every
 scenario. After each one, every acknowledged write was read back with a quorum
 `Get`, and 20 sampled keys were checked for exactly 3 local copies on their
-owners.
+owners. The ConfigMap ran anti-entropy every 60s during these measurements; it
+now runs it every 15 minutes (see
+[the anti-entropy interval](#the-anti-entropy-interval)).
 
 | Scenario | Failed writes | Afterwards |
 |---|---|---|
@@ -409,6 +411,34 @@ Anti-entropy is the expensive part, and it is uneven: the nodes that own the
 most keys (because of the ring's skew) do the most work, since each round
 covers every key a node holds against every peer (see "Anti-entropy is
 unscoped" in [known-limitations.md](known-limitations.md)).
+
+### The anti-entropy interval
+
+The ConfigMap sets `intervals.antiEntropy: 15m` (it was 60s during the
+measurements above). The reasons:
+
+- **Rounds don't collide anyway.** Each node starts its first round after a
+  random delay within one interval, so nodes' rounds are spread out, not
+  synchronized; a longer interval changes how often a round happens, not how
+  they line up.
+- **The cost is per round.** One round compares a node's keys against every
+  peer; it showed up as 270m CPU per pod at ~9,000 keys and 812m at ~60,600
+  keys. A longer interval makes those spikes rarer without making each one
+  cheaper.
+- **Anti-entropy is the safety net, and what it repairs is rare.** Normal
+  writes reach all replicas directly or through hints. Anti-entropy is what
+  carries writes a hung peer missed (a peer that times out instead of failing
+  gets no hint), writes accepted with a stale view during a membership change,
+  and the data of a pod that comes back with an empty disk. A longer interval
+  only delays those repairs.
+- **Membership changes don't wait for it.** When a node finishes its handoff
+  to a new membership, it starts an anti-entropy round at once, whatever the
+  interval.
+
+The price is in those delayed repairs: a pod that comes back with an empty
+disk under an unchanged membership (no handoff, so no triggered round) is
+refilled by anti-entropy only from its first round, up to 15 minutes after it
+starts; until then, reads that need its copy are served by the other replicas.
 
 Requests in `statefulset.yaml`: **CPU 50m** (the steady-load median × 1.5,
 rounded up) and **memory 64Mi** (the highest observed at ~9,000 keys × 1.5,
