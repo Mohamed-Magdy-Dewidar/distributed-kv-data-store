@@ -31,19 +31,22 @@ var testHookBeforeServe func()
 // blocks until the listener is bound and ready, then returns a Listener the
 // caller can use to find its actual address and to Stop() it — resolving
 // the "no readiness signal" race from before.
-func Serve(address string, ds *store.DataStore, coord WriteCoordinator) (*Listener, error) {
+//
+// opts are passed to the gRPC server as they are: internal/app uses them to
+// add interceptors (see internal/telemetry). None are needed to serve.
+func Serve(address string, ds *store.DataStore, coord WriteCoordinator, opts ...grpc.ServerOption) (*Listener, error) {
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", address, err)
 	}
-	return ServeListener(lis, ds, coord), nil
+	return ServeListener(lis, ds, coord, opts...), nil
 }
 
 // ServeListener is Serve on a listener the caller has already opened, for
 // example on port 0 so the OS picks a free port that stays bound from then
 // on. The returned Listener owns lis: stopping it closes lis.
-func ServeListener(lis net.Listener, ds *store.DataStore, coord WriteCoordinator) *Listener {
-	grpcServer := grpc.NewServer()
+func ServeListener(lis net.Listener, ds *store.DataStore, coord WriteCoordinator, opts ...grpc.ServerOption) *Listener {
+	grpcServer := grpc.NewServer(opts...)
 	pb.RegisterKVReplicationServer(grpcServer, NewServer(ds, coord))
 	// The client-facing service shares the server (so StopWithin covers it),
 	// when the coordinator can serve it. Reflection lets tools like grpcurl
