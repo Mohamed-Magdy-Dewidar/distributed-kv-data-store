@@ -55,8 +55,7 @@ spec:
             - name: dashboard-providers
               mountPath: /etc/grafana/provisioning/dashboards
               readOnly: true
-            # The dashboards themselves. Optional until step 6 adds the
-            # grafana-dashboards ConfigMap: until then the folder is empty.
+            # The dashboards themselves (deploy/observability/dashboards/).
             - name: dashboards
               mountPath: /etc/grafana/dashboards/kvstore
               readOnly: true
@@ -72,7 +71,6 @@ spec:
         - name: dashboards
           configMap:
             name: grafana-dashboards
-            optional: true
         - name: data
           emptyDir: {}
 ---

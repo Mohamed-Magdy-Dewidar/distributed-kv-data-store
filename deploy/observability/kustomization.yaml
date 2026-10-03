@@ -27,3 +27,7 @@ configMapGenerator:
   - name: grafana-dashboard-providers
     files:
       - kvstore.yaml=config/grafana-dashboard-providers.yaml
+  # Every dashboard in the kvstore folder; edit the JSON here, not in Grafana.
+  - name: grafana-dashboards
+    files:
+      - kvstore-overview.json=dashboards/kvstore-overview.json

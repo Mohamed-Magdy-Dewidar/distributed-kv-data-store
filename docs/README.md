@@ -5,6 +5,7 @@
 | [running-locally.md](running-locally.md) | Start a 3-node cluster from `examples/local`, read and write with grpcurl, work with siblings, and call the admin API. |
 | [kubernetes.md](kubernetes.md) | Run a 10-node cluster on kind from `deploy/k8s/`: setup, deploy, and measured results for pod loss, rolling restarts, scaling up and down, and resource use. |
 | [membership.md](membership.md) | The procedure for adding a node, removing one, and removing a crashed one, and what the admin API's answers mean. |
+| [observability.md](observability.md) | The metrics each node serves on `/metrics`, and the local Prometheus and Grafana in `deploy/observability/`: how to run them, the dashboard, and measured latencies. |
 | [testing.md](testing.md) | What the unit and end-to-end tests cover, how to run them, where they have been run, and what the crash tests do not prove. |
 | [development.md](development.md) | Building, testing, and regenerating the checked-in gRPC code with pinned tool versions. |
 | [known-limitations.md](known-limitations.md) | What the store does not do, or does imperfectly, and why: consistency, data model, membership, operations, durability. |
