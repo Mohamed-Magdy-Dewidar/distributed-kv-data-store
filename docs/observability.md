@@ -143,10 +143,10 @@ as the buckets around them:
 The buckets cover the whole range seen (nothing past the last finite
 bound), but most observations fall into one bucket each: 88% of Puts
 between 10 and 25 ms, 79% of fsyncs between 5 and 10 ms. A p50 or p99
-inside such a bucket is a straight-line estimate across it. The buckets
-are provisional (see `requestBuckets` and `fsyncBuckets` in
-`internal/telemetry`); finer bounds between 5 and 50 ms would sharpen
-these percentiles.
+inside such a bucket is a straight-line estimate across it. After this
+measurement, finer bounds were added where the counts cluster:
+7.5, 15, 20, 30 and 40 ms for requests, and 7.5, 15 and 20 ms for fsyncs
+(`requestBuckets` and `fsyncBuckets` in `internal/telemetry`).
 
 **Membership change.** `POST /admin/membership` to `kv-0` at epoch 5 with
 the same ten members: all ten pods reported epoch 5 within 1.2 s

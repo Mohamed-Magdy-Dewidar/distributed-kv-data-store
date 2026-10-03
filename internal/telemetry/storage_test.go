@@ -61,7 +61,7 @@ func TestWALSyncsAreObservedByEngine(t *testing.T) {
 	}
 	// Written out, not taken from fsyncBuckets, so a change to the buckets is
 	// a deliberate change to this test too.
-	wantBounds := []float64{0.0001, .00025, .0005, .001, .0025, .005, .01, .025, .05, .1, .25, 1, math.Inf(1)}
+	wantBounds := []float64{0.0001, .00025, .0005, .001, .0025, .005, .0075, .01, .015, .02, .025, .05, .1, .25, 1, math.Inf(1)}
 	if !slices.Equal(bounds, wantBounds) {
 		t.Fatalf("bucket bounds %v, want %v", bounds, wantBounds)
 	}

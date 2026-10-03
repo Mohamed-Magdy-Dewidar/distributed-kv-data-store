@@ -9,9 +9,10 @@ import (
 )
 
 // fsyncBuckets are the latency buckets, in seconds, of WAL fsyncs: from
-// 0.1ms (a page-cache-backed volume) to 1s (a stalled disk). Provisional:
-// revisit once measured on kind.
-var fsyncBuckets = []float64{0.0001, .00025, .0005, .001, .0025, .005, .01, .025, .05, .1, .25, 1}
+// 0.1ms (a page-cache-backed volume) to 1s (a stalled disk), with finer
+// steps between 5 and 25ms, where fsyncs fell on the kind cluster (p50 7ms,
+// p99 24ms; see docs/observability.md).
+var fsyncBuckets = []float64{0.0001, .00025, .0005, .001, .0025, .005, .0075, .01, .015, .02, .025, .05, .1, .25, 1}
 
 // walSyncObserver is one storage engine's engine.Observer. Its histogram
 // child, and so its engine label, is chosen when it is built: reporting an

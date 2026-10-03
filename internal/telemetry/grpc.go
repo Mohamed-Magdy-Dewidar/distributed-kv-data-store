@@ -14,9 +14,10 @@ import (
 )
 
 // requestBuckets are the latency buckets, in seconds, of request histograms:
-// 1-2.5-5 steps from 0.5ms, up to timeouts.replication's 5s. Provisional:
-// revisit once measured on kind.
-var requestBuckets = []float64{0.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5}
+// 1-2.5-5 steps from 0.5ms up to timeouts.replication's 5s, with finer
+// steps between 5 and 50ms, where client Puts fell on the kind cluster
+// (p50 17ms, p99 43ms; see docs/observability.md).
+var requestBuckets = []float64{0.0005, .001, .0025, .005, .0075, .01, .015, .02, .025, .03, .04, .05, .1, .25, .5, 1, 2.5, 5}
 
 // numCodes is the number of gRPC status codes, OK (0) to Unauthenticated (16).
 const numCodes = int(codes.Unauthenticated) + 1

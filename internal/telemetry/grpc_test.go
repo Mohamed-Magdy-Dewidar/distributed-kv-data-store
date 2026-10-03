@@ -85,7 +85,7 @@ func TestClientRequestsAreTimedByMethodAndCode(t *testing.T) {
 	}
 	// Written out, not taken from requestBuckets, so a change to the buckets
 	// is a deliberate change to this test too.
-	wantBounds := []float64{0.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, math.Inf(1)}
+	wantBounds := []float64{0.0005, .001, .0025, .005, .0075, .01, .015, .02, .025, .03, .04, .05, .1, .25, .5, 1, 2.5, 5, math.Inf(1)}
 	if !slices.Equal(bounds, wantBounds) {
 		t.Fatalf("bucket bounds %v, want %v", bounds, wantBounds)
 	}
