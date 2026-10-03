@@ -1,0 +1,21 @@
+# Prometheus scrapes every kv pod's /metrics itself. It finds the pods
+# through the headless Service kv's SRV records (one per pod, port "http"):
+# no Kubernetes API access, so no RBAC. A pod that is starting or draining
+# is scraped too (the Service publishes not-ready addresses).
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: kvstore
+    dns_sd_configs:
+      - names: ["_http._tcp.kv.kvstore.svc.cluster.local"]
+        type: SRV
+        refresh_interval: 15s
+    relabel_configs:
+      # kv-3.kv.kvstore.svc.cluster.local:8080 -> instance="kv-3".
+      - source_labels: [__address__]
+        regex: '(kv-[0-9]+)\..*'
+        target_label: instance
+storage:
+  tsdb:
+    retention:
+      time: 24h

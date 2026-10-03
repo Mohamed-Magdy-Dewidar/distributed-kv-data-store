@@ -1,0 +1,11 @@
+apiVersion: 1
+providers:
+  # Every dashboard JSON in the grafana-dashboards ConfigMap, in the kvstore
+  # folder. They are read-only in Grafana: change the JSON in the repo.
+  - name: kvstore
+    folder: kvstore
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards/kvstore

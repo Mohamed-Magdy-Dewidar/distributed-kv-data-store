@@ -1,0 +1,29 @@
+# Local observability for the kind cluster, not part of the deployment:
+# Prometheus scraping every kv pod's /metrics, and Grafana showing it. See
+# docs/observability.md.
+#
+#   kubectl apply -k deploy/observability/
+#   kubectl -n observability port-forward svc/grafana 3000
+#
+# The ConfigMaps keep fixed names: after changing a file under config/,
+# restart the Deployment that reads it (kubectl -n observability rollout
+# restart deploy/<name>).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: observability
+resources:
+  - namespace.yaml
+  - prometheus.yaml
+  - grafana.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: prometheus-config
+    files:
+      - prometheus.yml=config/prometheus.yml
+  - name: grafana-datasources
+    files:
+      - prometheus.yaml=config/grafana-datasources.yaml
+  - name: grafana-dashboard-providers
+    files:
+      - kvstore.yaml=config/grafana-dashboard-providers.yaml

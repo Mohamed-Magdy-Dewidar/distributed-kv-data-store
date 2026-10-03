@@ -1,0 +1,10 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    # Dashboards refer to the data source by this uid.
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus.observability.svc:9090
+    isDefault: true
+    editable: false
