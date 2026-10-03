@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/engine"
@@ -49,6 +50,28 @@ type Hint struct {
 // causal merge in the engine, so no two operations can undo each other.
 type Store struct {
 	engine *engine.StorageEngine
+
+	// Counted where they happen, read by Stats.
+	created, delivered atomic.Uint64
+}
+
+// Stats is what the hint store reports about itself, for metrics.
+type Stats struct {
+	// Created counts hinted items stored since Open, and Delivered those
+	// marked delivered. Both count items, not keys: a hint for a key with
+	// two concurrent versions is two.
+	Created, Delivered uint64
+	// Engine is the hint store's own storage engine.
+	Engine engine.Stats
+}
+
+// Stats returns the store's current Stats.
+func (s *Store) Stats() Stats {
+	return Stats{
+		Created:   s.created.Load(),
+		Delivered: s.delivered.Load(),
+		Engine:    s.engine.Stats(),
+	}
 }
 
 // Open opens (or creates) the hint store at dir, replaying anything it
@@ -93,6 +116,7 @@ func (s *Store) Add(target, key string, item *model.DataItem) error {
 	if err := s.engine.Put(storageKey(target, key), item); err != nil {
 		return fmt.Errorf("hints: add for %q/%q: %w", target, key, err)
 	}
+	s.created.Add(1)
 	return nil
 }
 
@@ -146,6 +170,32 @@ func (s *Store) Pending(target string) ([]Hint, error) {
 	return pending, nil
 }
 
+// PendingItems counts the undelivered hinted items held for every target,
+// in one pass over the store: what Pending would return for each target,
+// added up.
+func (s *Store) PendingItems() (int, error) {
+	keys, err := s.engine.Keys()
+	if err != nil {
+		return 0, fmt.Errorf("hints: list keys: %w", err)
+	}
+	n := 0
+	for _, k := range keys {
+		if _, _, ok := splitKey(k); !ok {
+			continue
+		}
+		items, _, err := s.engine.GetAll(k)
+		if err != nil {
+			return 0, fmt.Errorf("hints: read %q: %w", k, err)
+		}
+		for _, item := range items {
+			if !isMarker(item) {
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
 // MarkDelivered retires delivered — hints for target and key that target
 // has now durably accepted — by adding a marker causally after all of
 // them. Hints for the same key that aren't in delivered and aren't older
@@ -164,5 +214,6 @@ func (s *Store) MarkDelivered(target, key string, delivered []*model.DataItem) e
 	if err := s.engine.Put(storageKey(target, key), marker); err != nil {
 		return fmt.Errorf("hints: mark %q/%q delivered: %w", target, key, err)
 	}
+	s.delivered.Add(uint64(len(delivered)))
 	return nil
 }

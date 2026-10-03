@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -92,6 +93,47 @@ type StorageEngine struct {
 	// only to delete files already swapped out of e.sstables, so every Get
 	// that could still see those files has finished.
 	filesMu sync.RWMutex
+
+	// Counted where they happen, read by Stats.
+	flushes, flushFailures          atomic.Uint64
+	compactions, compactionFailures atomic.Uint64
+}
+
+// Stats is what the engine reports about itself, for metrics.
+type Stats struct {
+	// MemtableBytes is the estimated size of the memtables held in memory:
+	// the active one, and the one being flushed if there is one.
+	MemtableBytes int
+	// SSTables is the number of live SSTables.
+	SSTables int
+	// Flushes and FlushFailures count memtable flushes since Open that
+	// produced a registered SSTable, and those that failed (their data
+	// stays in memory and the next flush retries it).
+	Flushes, FlushFailures uint64
+	// Compactions and CompactionFailures count compaction steps since Open
+	// that merged a run, and those that failed. A step with nothing to
+	// compact counts as neither.
+	Compactions, CompactionFailures uint64
+}
+
+// Stats returns the engine's current Stats. It holds e.mu for reading only
+// long enough to look at the memtables and the SSTable list.
+func (e *StorageEngine) Stats() Stats {
+	e.mu.RLock()
+	bytes := e.active.Size()
+	if e.flushing != nil {
+		bytes += e.flushing.Size()
+	}
+	sstables := len(e.sstables)
+	e.mu.RUnlock()
+	return Stats{
+		MemtableBytes:      bytes,
+		SSTables:           sstables,
+		Flushes:            e.flushes.Load(),
+		FlushFailures:      e.flushFailures.Load(),
+		Compactions:        e.compactions.Load(),
+		CompactionFailures: e.compactionFailures.Load(),
+	}
 }
 
 // Observer is told what the engine does that only it can see, as plain
@@ -296,6 +338,12 @@ func (e *StorageEngine) flush(frozen *memtable.MemTable, sealedSeg uint64) {
 	entries := frozen.Snapshot() // read-only: frozen stays queryable throughout the write below
 
 	sst, err := e.writeAndRegister(entries)
+
+	if err != nil {
+		e.flushFailures.Add(1)
+	} else {
+		e.flushes.Add(1)
+	}
 
 	e.mu.Lock()
 	if err != nil {
@@ -535,30 +583,44 @@ func (e *StorageEngine) Compact() error {
 		return nil
 	}
 
+	merged, err := e.compactLocked()
+	switch {
+	case err != nil:
+		e.compactionFailures.Add(1)
+	case merged:
+		e.compactions.Add(1)
+	}
+	return err
+}
+
+// compactLocked is Compact's work, with e.compactMu held. merged reports
+// whether there was a run to merge: false, with a nil error, when there was
+// nothing to compact.
+func (e *StorageEngine) compactLocked() (merged bool, err error) {
 	e.mu.RLock()
 	current := e.sstables
 	e.mu.RUnlock()
 
 	sources, err := compaction.SelectTierForCompaction(current)
 	if err != nil {
-		return fmt.Errorf("engine: select compaction tier: %w", err)
+		return true, fmt.Errorf("engine: select compaction tier: %w", err)
 	}
 	if len(sources) == 0 {
-		return nil
+		return false, nil
 	}
 
 	entries, err := compaction.Merge(sources) // sources are newest first, as Merge requires
 	if err != nil {
-		return fmt.Errorf("engine: merge for compaction: %w", err)
+		return true, fmt.Errorf("engine: merge for compaction: %w", err)
 	}
 
-	merged, err := sstable.WriteWithID(e.dataDir, e.compactedID(sources[0].ID), entries)
+	mergedSST, err := sstable.WriteWithID(e.dataDir, e.compactedID(sources[0].ID), entries)
 	if err != nil {
-		return fmt.Errorf("engine: write compacted sstable: %w", err)
+		return true, fmt.Errorf("engine: write compacted sstable: %w", err)
 	}
-	if err := e.manifest.Add(merged.ID); err != nil {
-		os.Remove(merged.Path) // best effort: it was never registered, so it's harmless either way
-		return fmt.Errorf("engine: register compacted sstable %s: %w", merged.ID, err)
+	if err := e.manifest.Add(mergedSST.ID); err != nil {
+		os.Remove(mergedSST.Path) // best effort: it was never registered, so it's harmless either way
+		return true, fmt.Errorf("engine: register compacted sstable %s: %w", mergedSST.ID, err)
 	}
 
 	oldIDs := make([]string, len(sources))
@@ -569,11 +631,11 @@ func (e *StorageEngine) Compact() error {
 		// Merged and sources are all live now. That's safe — see step 2 —
 		// so leave e.sstables as it is; a restart loads both, correctly
 		// ordered, and a later compaction folds them together.
-		return fmt.Errorf("engine: unregister compacted sources: %w", err)
+		return true, fmt.Errorf("engine: unregister compacted sources: %w", err)
 	}
 
 	e.mu.Lock()
-	swapped, ok := replaceRun(e.sstables, sources, merged)
+	swapped, ok := replaceRun(e.sstables, sources, mergedSST)
 	if ok {
 		e.sstables = swapped
 	}
@@ -582,7 +644,7 @@ func (e *StorageEngine) Compact() error {
 		// Can't happen: only Compact removes SSTables and flush only
 		// prepends, so the run stays contiguous. The Manifest is already
 		// correct for a restart; just don't delete anything still in use.
-		return fmt.Errorf("engine: compacted run no longer contiguous in memory; old files kept until restart")
+		return true, fmt.Errorf("engine: compacted run no longer contiguous in memory; old files kept until restart")
 	}
 
 	e.filesMu.Lock()
@@ -591,7 +653,7 @@ func (e *StorageEngine) Compact() error {
 	}
 	e.filesMu.Unlock()
 
-	return nil
+	return true, nil
 }
 
 // compactedID derives the merged SSTable's ID from its run's newest

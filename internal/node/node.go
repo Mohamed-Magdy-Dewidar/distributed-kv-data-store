@@ -73,6 +73,13 @@ type Node struct {
 	handoffStatus  HandoffStatus
 	handoffChanged chan struct{} // closed and replaced whenever a handoff completes
 	persistHandoff func(*view) error
+	// handoffStarted is when the running (or last) handoff started;
+	// handoffLast and handoffTotal are the durations of the last completed
+	// handoff and of every completed one, handoffsCompleted their number.
+	handoffStarted    time.Time
+	handoffLast       time.Duration
+	handoffTotal      time.Duration
+	handoffsCompleted uint64
 
 	// Heartbeat state (see heartbeat.go). health holds what pings have shown
 	// about each peer that has been pinged; a peer with no entry is alive.
@@ -120,6 +127,17 @@ type Node struct {
 	drainMu      sync.Mutex
 	drainClosing bool
 	drainWG      sync.WaitGroup
+
+	// Counted where they happen, read by Stats (see stats.go).
+	writeQuorumFailures, readQuorumFailures atomic.Uint64
+	aeRounds, aePeerFailures                atomic.Uint64
+	aeKeysPulled, aeKeysPushed              atomic.Uint64
+	aeLastRound, aeRoundTotal               atomic.Int64 // nanoseconds
+	// hintsPending is the number of undelivered hinted items as of the end
+	// of the last hint-delivery round; hintsPendingKnown is false until a
+	// round has recorded it.
+	hintsPending      atomic.Uint64
+	hintsPendingKnown atomic.Bool
 }
 
 // ClockID is the name this node's writes carry in vector clocks: its node ID
@@ -441,6 +459,7 @@ func (n *Node) putAsReplica(ctx context.Context, v *view, key string, value any,
 	// A failed rollback is reported alongside the quorum error: the failed
 	// write may still be visible locally.
 	rollbackLocalWrite := func(quorumErr error) error {
+		n.writeQuorumFailures.Add(1)
 		decided(false)
 		if err := n.Store.RestoreVersions(key, prevVersions); err != nil {
 			return errors.Join(quorumErr, fmt.Errorf("rollback of local write for key %q failed: %w", key, err))
@@ -647,6 +666,7 @@ func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 				return merged, nil
 			}
 			if totalNodes-failures < needed {
+				n.readQuorumFailures.Add(1)
 				return nil, fmt.Errorf("read quorum not reached for key %q: %d/%d responses, need R=%d",
 					key, responses, totalNodes, needed)
 			}
@@ -655,6 +675,7 @@ func (n *Node) Get(ctx context.Context, key string) ([]*model.DataItem, error) {
 		}
 	}
 
+	n.readQuorumFailures.Add(1)
 	return nil, fmt.Errorf("read quorum not reached for key %q: %d/%d responses, need R=%d",
 		key, responses, totalNodes, needed)
 }
@@ -862,15 +883,20 @@ func (n *Node) reconcileBucket(ctx context.Context, peerID string, client *rpc.C
 			testHookBeforeReconcileInstall(key)
 		}
 
-		for _, item := range missingFrom(localItems, remoteItems) {
+		toPull := missingFrom(localItems, remoteItems)
+		for _, item := range toPull {
 			if err := n.Store.MergeReplicated(key, item); err != nil {
 				return fmt.Errorf("install reconciled %q locally: %w", key, err)
 			}
+		}
+		if len(toPull) > 0 {
+			n.aeKeysPulled.Add(1)
 		}
 		if toPush := missingFrom(remoteItems, localItems); len(toPush) > 0 {
 			if err := n.replicate(ctx, v, peerID, key, toPush); err != nil {
 				return fmt.Errorf("push reconciled %q to %q: %w", key, peerID, err)
 			}
+			n.aeKeysPushed.Add(1)
 		}
 	}
 	return nil
@@ -982,8 +1008,16 @@ func (n *Node) TriggerAntiEntropy() {
 
 // runAntiEntropyRound runs RunAntiEntropy against every co-replicant peer
 // in turn, logging (not stopping on) each failure. Once ctx is canceled it
-// starts no further peer: those would only fail.
+// starts no further peer: those would only fail. Every round is counted and
+// timed for Stats, a round cut short by shutdown included.
 func (n *Node) runAntiEntropyRound(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		d := int64(time.Since(start))
+		n.aeRounds.Add(1)
+		n.aeLastRound.Store(d)
+		n.aeRoundTotal.Add(d)
+	}()
 	if testHookAntiEntropyRound != nil {
 		testHookAntiEntropyRound(true)
 		defer testHookAntiEntropyRound(false)
@@ -996,6 +1030,7 @@ func (n *Node) runAntiEntropyRound(ctx context.Context) {
 			continue // heartbeats say it's down; its turn comes back when it answers
 		}
 		if err := n.RunAntiEntropy(ctx, peerID); err != nil {
+			n.aePeerFailures.Add(1)
 			log.Printf("node %s: anti-entropy with %q failed: %v", n.ID, peerID, err)
 		}
 	}
@@ -1015,10 +1050,11 @@ var (
 // delivered stays pending for the next round. Once ctx is canceled it
 // starts no further target.
 //
-// Targets that aren't in the current view are skipped without even reading
-// their hints: there is nowhere to send them (and the store can't delete, so
-// they stay). So are targets heartbeats have marked dead: they are retried
-// once they answer again.
+// Targets that aren't in the current view are skipped: there is nowhere to
+// send their hints (and the store can't delete, so they stay). So are
+// targets heartbeats have marked dead: they are retried once they answer
+// again. A round that runs to the end then counts the hints still pending,
+// for every target (see recordPendingHints).
 func (n *Node) deliverHints(ctx context.Context) {
 	targets, err := n.hints.Targets()
 	if err != nil {
@@ -1037,6 +1073,21 @@ func (n *Node) deliverHints(ctx context.Context) {
 			log.Printf("node %s: delivering hints to %q: %v", n.ID, target, err)
 		}
 	}
+	n.recordPendingHints()
+}
+
+// recordPendingHints counts the hinted items still undelivered, for every
+// target (those skipped this round included), as Stats.HintsPending. Hint
+// delivery calls it at the end of each round it completes, so the count is
+// as of the last round, not live.
+func (n *Node) recordPendingHints() {
+	pending, err := n.hints.PendingItems()
+	if err != nil {
+		log.Printf("node %s: counting pending hints: %v", n.ID, err)
+		return
+	}
+	n.hintsPending.Store(uint64(pending))
+	n.hintsPendingKnown.Store(true)
 }
 
 // deliverHintsTo sends target each of its pending hints with the ordinary

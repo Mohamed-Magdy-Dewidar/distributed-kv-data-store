@@ -340,3 +340,22 @@ func TestKeysReturnsSortedKeys(t *testing.T) {
 		t.Fatalf("expected [a b], got %v", keys)
 	}
 }
+
+// TestSizeFollowsPutsAndReplace: Size is the estimate Put and Replace keep,
+// growing with each version and back to zero once the key is replaced by
+// nothing.
+func TestSizeFollowsPutsAndReplace(t *testing.T) {
+	m := New(1 << 20)
+	if got := m.Size(); got != 0 {
+		t.Fatalf("Size of an empty table = %d, want 0", got)
+	}
+	item := &model.DataItem{Value: "v", VectorClock: vectorclock.FromSnapshot(map[string]uint32{"n": 1}), LastUpdatedBy: "n"}
+	m.Put("k", item)
+	if got, want := m.Size(), estimatedSize("k", item); got != want || got <= 0 {
+		t.Fatalf("Size after one Put = %d, want %d (> 0)", got, want)
+	}
+	m.Replace("k", nil)
+	if got := m.Size(); got != 0 {
+		t.Fatalf("Size after replacing the only key with nothing = %d, want 0", got)
+	}
+}

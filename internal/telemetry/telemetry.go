@@ -60,26 +60,3 @@ func (m *Metrics) StorageObservers() (data, hints engine.Observer) {
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
 }
-
-var membershipEpoch = prometheus.NewDesc(
-	"kv_membership_epoch",
-	"Membership epoch of the view this node holds.",
-	nil, nil,
-)
-
-// nodeCollector turns one node.Stats, read at scrape time, into metrics.
-type nodeCollector struct {
-	stats func() (node.Stats, bool)
-}
-
-func (c *nodeCollector) Describe(ch chan<- *prometheus.Desc) {
-	ch <- membershipEpoch
-}
-
-func (c *nodeCollector) Collect(ch chan<- prometheus.Metric) {
-	s, ok := c.stats()
-	if !ok {
-		return
-	}
-	ch <- prometheus.MustNewConstMetric(membershipEpoch, prometheus.GaugeValue, float64(s.Epoch))
-}

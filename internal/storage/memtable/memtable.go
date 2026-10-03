@@ -245,3 +245,11 @@ func (m *MemTable) Len() int {
 	defer m.mu.RUnlock()
 	return m.tree.Len()
 }
+
+// Size returns the estimated size of the table's contents in bytes: the
+// same estimate Put compares with maxBytes.
+func (m *MemTable) Size() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sizeSoFar
+}

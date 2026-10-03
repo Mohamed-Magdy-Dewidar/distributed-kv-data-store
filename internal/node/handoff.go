@@ -111,6 +111,7 @@ func (n *Node) startHandoff() {
 	gen := n.handoffGen
 	n.handoffTarget = newest
 	n.handoffStatus = HandoffStatus{Epoch: newest.epoch}
+	n.handoffStarted = time.Now()
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	started := n.goBackground(func(bg context.Context) {
@@ -318,8 +319,8 @@ func (n *Node) updateHandoff(gen uint64, update func(*HandoffStatus)) {
 
 // finishHandoff records newest as the base — durably first, for a persistent
 // node — wakes WaitHandoff, and asks for an anti-entropy round to settle
-// anything the push missed. A run that was superseded meanwhile records
-// nothing.
+// anything the push missed, and records how long the handoff took, for
+// Stats. A run that was superseded meanwhile records nothing.
 func (n *Node) finishHandoff(gen uint64, newest *view) {
 	n.handoffMu.Lock()
 	defer n.handoffMu.Unlock()
@@ -333,6 +334,10 @@ func (n *Node) finishHandoff(gen uint64, newest *view) {
 	}
 	n.handoffBase = newest
 	n.handoffRunning = false
+	d := time.Since(n.handoffStarted)
+	n.handoffLast = d
+	n.handoffTotal += d
+	n.handoffsCompleted++
 	n.handoffStatus.Done = true
 	n.handoffStatus.Pending = 0
 	close(n.handoffChanged)
