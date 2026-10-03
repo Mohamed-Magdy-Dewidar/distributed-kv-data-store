@@ -16,12 +16,15 @@ import (
 	"google.golang.org/grpc"
 
 	"distributed-kv-datastore/internal/node"
+	"distributed-kv-datastore/internal/storage/engine"
 )
 
 // Metrics holds one node's metrics and serves them.
 type Metrics struct {
 	registry       *prometheus.Registry
 	clientRequests *clientRequests
+	dataStorage    *walSyncObserver
+	hintsStorage   *walSyncObserver
 }
 
 // New returns the metrics for one node. stats is called once per scrape;
@@ -36,13 +39,21 @@ func New(stats func() (node.Stats, bool)) *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	return &Metrics{registry: reg, clientRequests: newClientRequests(reg)}
+	m := &Metrics{registry: reg, clientRequests: newClientRequests(reg)}
+	m.dataStorage, m.hintsStorage = storageObservers(reg)
+	return m
 }
 
 // ServerOptions are the gRPC server options that time the node's requests:
 // pass them to rpc.Serve.
 func (m *Metrics) ServerOptions() []grpc.ServerOption {
 	return []grpc.ServerOption{grpc.ChainUnaryInterceptor(m.clientRequests.intercept)}
+}
+
+// StorageObservers are the observers of a node's data engine and hint store:
+// pass them to node.New with node.WithStorageObservers.
+func (m *Metrics) StorageObservers() (data, hints engine.Observer) {
+	return m.dataStorage, m.hintsStorage
 }
 
 // Handler serves the metrics in the Prometheus text format.

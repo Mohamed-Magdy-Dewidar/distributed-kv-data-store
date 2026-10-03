@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"distributed-kv-datastore/internal/config"
 	"distributed-kv-datastore/internal/rpc/pb"
 )
 
@@ -72,10 +73,10 @@ func TestProbeServerServesTheNodesEpochOnMetrics(t *testing.T) {
 	}
 }
 
-// TestRunTimesClientRequests: Run serves gRPC with the telemetry
-// interceptor, so requests to a running node show up on its /metrics under
-// their method and status code.
-func TestRunTimesClientRequests(t *testing.T) {
+// runReady starts Run on a test config, waits until it is ready, and stops
+// it when the test ends.
+func runReady(t *testing.T) *config.Config {
+	t.Helper()
 	cfg := testConfig(t, t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan error, 1)
@@ -91,13 +92,27 @@ func TestRunTimesClientRequests(t *testing.T) {
 
 	waitForProbeUp(t, cfg.Listen.HTTP)
 	eventuallyTrue(t, 5*time.Second, "readyz 200", func() bool { return getReadyz(t, cfg.Listen.HTTP) == http.StatusOK })
+	return cfg
+}
 
+// kvClient dials cfg's gRPC address; the connection closes when the test ends.
+func kvClient(t *testing.T, cfg *config.Config) pb.KVClientClient {
+	t.Helper()
 	conn, err := grpc.NewClient(cfg.Listen.GRPC, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
-	client := pb.NewKVClientClient(conn)
+	t.Cleanup(func() { conn.Close() })
+	return pb.NewKVClientClient(conn)
+}
+
+// TestRunTimesClientRequests: Run serves gRPC with the telemetry
+// interceptor, so requests to a running node show up on its /metrics under
+// their method and status code.
+func TestRunTimesClientRequests(t *testing.T) {
+	cfg := runReady(t)
+	client := kvClient(t, cfg)
+	ctx := context.Background()
 	if _, err := client.Put(ctx, &pb.PutRequest{Key: "k", Value: "v"}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -120,5 +135,27 @@ func TestRunTimesClientRequests(t *testing.T) {
 	want := map[string]uint64{"Put OK": 1, "Get InvalidArgument": 1}
 	if len(counts) != len(want) || counts["Put OK"] != 1 || counts["Get InvalidArgument"] != 1 {
 		t.Fatalf("request counts %v, want %v", counts, want)
+	}
+}
+
+// TestRunTimesWALSyncs: Run opens the node with the telemetry storage
+// observers, so a write's WAL fsync shows up on /metrics under the data
+// engine, and nothing under the hint store's.
+func TestRunTimesWALSyncs(t *testing.T) {
+	cfg := runReady(t)
+	if _, err := kvClient(t, cfg).Put(context.Background(), &pb.PutRequest{Key: "k", Value: "v"}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	f, ok := scrapeMetrics(t, cfg.Listen.HTTP)["kv_wal_fsync_duration_seconds"]
+	if !ok {
+		t.Fatal("kv_wal_fsync_duration_seconds missing from /metrics")
+	}
+	counts := make(map[string]uint64)
+	for _, m := range f.Metric {
+		counts[m.Label[0].GetValue()] = m.GetHistogram().GetSampleCount()
+	}
+	if counts["data"] != 1 || counts["hints"] != 0 {
+		t.Fatalf("fsyncs by engine %v, want data 1 and hints 0 after one Put", counts)
 	}
 }

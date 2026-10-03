@@ -52,9 +52,10 @@ type Store struct {
 }
 
 // Open opens (or creates) the hint store at dir, replaying anything it
-// held before. maxMemtableBytes is its engine's flush threshold.
-func Open(dir string, maxMemtableBytes int) (*Store, error) {
-	e, err := engine.Open(dir, maxMemtableBytes)
+// held before. maxMemtableBytes is its engine's flush threshold; opts
+// configure that engine.
+func Open(dir string, maxMemtableBytes int, opts ...engine.Option) (*Store, error) {
+	e, err := engine.Open(dir, maxMemtableBytes, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("hints: open store at %s: %w", dir, err)
 	}

@@ -173,7 +173,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	step("probe-started")
 
-	nd, err := openNode(cfg)
+	nd, err := openNode(cfg, node.WithStorageObservers(probe.metrics.StorageObservers()))
 	if err != nil {
 		probe.stop()
 		step("probe-stopped")
@@ -274,10 +274,10 @@ func applyConfiguredMembership(nd *node.Node, cfg *config.Config) error {
 // that's the cause). An empty DataDir is refused rather than opened, which
 // would put the node's files in the working directory: config.Load already
 // rejects it, and this guards callers that build a Config without Load.
-func openNode(cfg *config.Config) (*node.Node, error) {
+func openNode(cfg *config.Config, opts ...node.Option) (*node.Node, error) {
 	if cfg.DataDir == "" {
 		return nil, errors.New("dataDir is required")
 	}
 	return node.New(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R,
-		cfg.NeighborAddrs(), cfg.DataDir, cfg.Storage.MemtableBytes)
+		cfg.NeighborAddrs(), cfg.DataDir, cfg.Storage.MemtableBytes, opts...)
 }

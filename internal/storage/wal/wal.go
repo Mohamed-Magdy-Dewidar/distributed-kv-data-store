@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/vectorclock"
@@ -166,12 +167,24 @@ func (e *unknownOpError) Error() string {
 	return fmt.Sprintf("wal: record for key %q has unknown op %d (written by a newer version?)", e.key, e.op)
 }
 
+// SyncObserver is told how long each successful fsync of a WAL took. It is
+// called with the WAL's lock held, in the write path, so it must return at
+// once: no blocking, no I/O.
+type SyncObserver interface {
+	WALSynced(d time.Duration)
+}
+
 // WAL is an append-only, crash-safe log file. Every Append fsyncs before
 // returning, so a returned nil error means the entry is durable on disk
 // even if the process crashes immediately after. Safe for concurrent use.
+//
+// obs, when set, is told of each fsync. Only a Log sets it, and only on the
+// segments it starts for writing: a WAL opened to be replayed has none, so
+// replay never reports.
 type WAL struct {
 	mu   sync.Mutex
 	file *os.File
+	obs  SyncObserver
 }
 
 // Open opens (creating if necessary) the WAL file at path for reading and
@@ -223,7 +236,7 @@ func (w *WAL) Append(entry Entry) error {
 		return fmt.Errorf("wal: write record for key %q: %w", entry.Key, err)
 	}
 
-	if err := w.file.Sync(); err != nil {
+	if err := w.sync(); err != nil {
 		return fmt.Errorf("wal: fsync after writing key %q: %w", entry.Key, err)
 	}
 
@@ -314,7 +327,7 @@ func (w *WAL) Replay() ([]Entry, error) {
 		if err := w.file.Truncate(validEnd); err != nil {
 			return nil, fmt.Errorf("wal: truncate torn tail at offset %d: %w", validEnd, err)
 		}
-		if err := w.file.Sync(); err != nil {
+		if err := w.sync(); err != nil {
 			return nil, fmt.Errorf("wal: fsync after truncating torn tail: %w", err)
 		}
 	}
@@ -324,6 +337,21 @@ func (w *WAL) Replay() ([]Entry, error) {
 	}
 
 	return entries, nil
+}
+
+// sync fsyncs the file and, if it succeeded, tells w.obs how long it took.
+// Without an observer it is one branch more than the fsync. The caller holds
+// w.mu.
+func (w *WAL) sync() error {
+	if w.obs == nil {
+		return w.file.Sync()
+	}
+	start := time.Now()
+	if err := w.file.Sync(); err != nil {
+		return err
+	}
+	w.obs.WALSynced(time.Since(start))
+	return nil
 }
 
 // Close closes the underlying file.

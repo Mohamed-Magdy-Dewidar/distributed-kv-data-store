@@ -1,6 +1,10 @@
 package node
 
-import "time"
+import (
+	"time"
+
+	"distributed-kv-datastore/internal/storage/engine"
+)
 
 // DefaultReplicationTimeout is the ReplicationTimeout NewQuorumConfig
 // starts with. Deployments set their own (cmd/node does, from its config).
@@ -52,4 +56,18 @@ type QuorumConfig struct {
 func NewQuorumConfig(n, w, r int) QuorumConfig {
 	return QuorumConfig{N: n, W: w, R: r, ReplicationTimeout: DefaultReplicationTimeout, MaxReconnectBackoff: DefaultMaxReconnectBackoff,
 		HeartbeatTimeout: DefaultHeartbeatTimeout, MaxMissedHeartbeats: DefaultMaxMissedHeartbeats}
+}
+
+// Option configures a Node in New.
+type Option func(*options)
+
+type options struct {
+	dataObserver, hintsObserver engine.Observer
+}
+
+// WithStorageObservers has the node's two storage engines report to data
+// (its own data) and hints (its hint store). Either may be nil, which
+// reports nothing for that engine.
+func WithStorageObservers(data, hints engine.Observer) Option {
+	return func(o *options) { o.dataObserver, o.hintsObserver = data, hints }
 }

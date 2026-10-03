@@ -45,9 +45,19 @@ type segment struct {
 type Log struct {
 	mu      sync.Mutex
 	dir     string
+	obs     SyncObserver // given to every segment started for writing; nil for none
 	current *WAL
 	seq     uint64    // current segment's sequence number
 	sealed  []segment // older segments still on disk, oldest first
+}
+
+// Option configures a Log.
+type Option func(*Log)
+
+// WithSyncObserver has the Log tell o how long each fsync of a write took.
+// Replaying segments in OpenLog is not reported.
+func WithSyncObserver(o SyncObserver) Option {
+	return func(l *Log) { l.obs = o }
 }
 
 // OpenLog opens the segmented log in dir: it replays every existing
@@ -55,7 +65,7 @@ type Log struct {
 // returns their entries in that order, then starts a new, empty segment
 // for every write from now on. Segments that turn out to hold no valid
 // entries are deleted on the spot.
-func OpenLog(dir string) (_ *Log, _ []Entry, err error) {
+func OpenLog(dir string, opts ...Option) (_ *Log, _ []Entry, err error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, nil, fmt.Errorf("wal: create dir %s: %w", dir, err)
 	}
@@ -65,6 +75,9 @@ func OpenLog(dir string) (_ *Log, _ []Entry, err error) {
 	}
 
 	l := &Log{dir: dir}
+	for _, opt := range opts {
+		opt(l)
+	}
 	var entries []Entry
 	var next uint64 = 1
 	for _, seg := range existing {
@@ -135,12 +148,13 @@ func replayFile(path string) ([]Entry, error) {
 }
 
 // startSegment creates segment seq, makes its directory entry durable, and
-// makes it current. The caller holds l.mu (or owns l exclusively).
+// makes it current, reporting its fsyncs to l.obs. The caller holds l.mu (or owns l exclusively).
 func (l *Log) startSegment(seq uint64) error {
 	w, err := Open(segmentPath(l.dir, seq))
 	if err != nil {
 		return err
 	}
+	w.obs = l.obs
 	if err := fsutil.SyncDir(l.dir); err != nil {
 		w.Close()
 		os.Remove(segmentPath(l.dir, seq))

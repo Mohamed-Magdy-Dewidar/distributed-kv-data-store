@@ -94,6 +94,28 @@ type StorageEngine struct {
 	filesMu sync.RWMutex
 }
 
+// Observer is told what the engine does that only it can see, as plain
+// values. Its methods are called in the write path, with locks held, so they
+// must return at once: no blocking, no I/O. internal/telemetry implements it.
+type Observer interface {
+	// WALSynced reports how long a successful fsync of a write to the WAL
+	// took. Replaying the WAL in Open is not reported.
+	wal.SyncObserver
+}
+
+// Option configures a StorageEngine in Open.
+type Option func(*options)
+
+type options struct {
+	observer Observer
+}
+
+// WithObserver has the engine report to o. Without it, or with a nil o,
+// nothing is reported.
+func WithObserver(o Observer) Option {
+	return func(opts *options) { opts.observer = o }
+}
+
 // Open creates or opens a StorageEngine rooted at dataDir: takes an
 // exclusive OS advisory lock on dataDir (see ErrLocked) so a second process
 // or a second Open call can't run against the same data concurrently, then
@@ -102,7 +124,12 @@ type StorageEngine struct {
 // there), then loads every SSTable the Manifest records as live. On any
 // error, every resource already opened (the lock included) is closed
 // before returning.
-func Open(dataDir string, maxMemtableBytes int) (_ *StorageEngine, err error) {
+func Open(dataDir string, maxMemtableBytes int, opts ...Option) (_ *StorageEngine, err error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("engine: create data dir %s: %w", dataDir, err)
 	}
@@ -121,7 +148,11 @@ func Open(dataDir string, maxMemtableBytes int) (_ *StorageEngine, err error) {
 		}
 	}()
 
-	w, entries, err := wal.OpenLog(dataDir)
+	var walOpts []wal.Option
+	if o.observer != nil {
+		walOpts = append(walOpts, wal.WithSyncObserver(o.observer))
+	}
+	w, entries, err := wal.OpenLog(dataDir, walOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open wal: %w", err)
 	}

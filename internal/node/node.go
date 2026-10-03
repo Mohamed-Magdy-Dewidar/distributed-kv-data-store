@@ -150,7 +150,8 @@ var (
 // its data back — and runs the node's DataStore on top of it. It also opens
 // the node's hinted-handoff store, on its own engine at dataDir/hints (which
 // the main engine ignores). maxMemtableBytes is both engines' flush
-// threshold. The caller must Close the node to close them cleanly.
+// threshold. opts may give the engines observers (WithStorageObservers).
+// The caller must Close the node to close them cleanly.
 //
 // Once the engine holds the directory's lock, New loads the
 // directory's incarnation from its IDENTITY file, or creates and durably
@@ -166,12 +167,16 @@ var (
 // view is the node's initial one instead of the epoch-0 view built from
 // neighborAddrs. A MEMBERSHIP file that is corrupt, invalid, or doesn't match
 // its own fingerprint (or n) makes New fail rather than guess.
-func New(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int) (*Node, error) {
+func New(id, address string, n, w, r int, neighborAddrs map[string]string, dataDir string, maxMemtableBytes int, opts ...Option) (*Node, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	v, err := initialView(id, address, neighborAddrs, n)
 	if err != nil {
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
-	e, err := engine.Open(dataDir, maxMemtableBytes)
+	e, err := engine.Open(dataDir, maxMemtableBytes, engine.WithObserver(o.dataObserver))
 	if err != nil {
 		return nil, fmt.Errorf("node %s: open storage at %s: %w", id, dataDir, err)
 	}
@@ -198,7 +203,7 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string, dataD
 	} else if found {
 		base = handedOff
 	}
-	hs, err := hints.Open(filepath.Join(dataDir, "hints"), maxMemtableBytes)
+	hs, err := hints.Open(filepath.Join(dataDir, "hints"), maxMemtableBytes, engine.WithObserver(o.hintsObserver))
 	if err != nil {
 		e.Close()
 		return nil, fmt.Errorf("node %s: %w", id, err)

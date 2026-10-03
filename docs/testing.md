@@ -17,12 +17,12 @@ go test -race ./...
 ```
 
 A few tests check that a hot path allocates nothing, such as timing a
-request for `/metrics`. The race detector's instrumentation allocates, so
-these tests skip themselves under `-race`: run them again without it,
-alongside the `-race` suite:
+request or a WAL fsync for `/metrics`. The race detector's instrumentation
+allocates, so these tests skip themselves under `-race`: run them again
+without it, alongside the `-race` suite:
 
 ```sh
-go test -count=1 ./internal/telemetry/
+go test -count=1 ./internal/telemetry/ ./internal/storage/wal/
 ```
 
 ## End-to-end tests (`e2e/`)
