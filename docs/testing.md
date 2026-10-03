@@ -16,6 +16,15 @@ chosen point rather than relying on timing.
 go test -race ./...
 ```
 
+A few tests check that a hot path allocates nothing, such as timing a
+request for `/metrics`. The race detector's instrumentation allocates, so
+these tests skip themselves under `-race`: run them again without it,
+alongside the `-race` suite:
+
+```sh
+go test -count=1 ./internal/telemetry/
+```
+
 ## End-to-end tests (`e2e/`)
 
 The `e2e` package builds `cmd/node` from the working tree once, then starts

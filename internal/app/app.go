@@ -48,6 +48,7 @@ type probeServer struct {
 	httpServer *http.Server
 	ready      atomic.Bool
 	node       atomic.Pointer[node.Node]
+	metrics    *telemetry.Metrics
 	done       chan struct{} // closed when the server starts stopping
 	stopOnce   sync.Once
 
@@ -75,14 +76,14 @@ func newProbeServer(addr string) *probeServer {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 	})
-	metrics := telemetry.New(func() (node.Stats, bool) {
+	p.metrics = telemetry.New(func() (node.Stats, bool) {
 		nd := p.node.Load()
 		if nd == nil {
 			return node.Stats{}, false
 		}
 		return nd.Stats(), true
 	})
-	mux.Handle("GET /metrics", metrics.Handler())
+	mux.Handle("GET /metrics", p.metrics.Handler())
 	p.registerAdmin(mux)
 	p.httpServer = &http.Server{Addr: addr, Handler: mux}
 	return p
@@ -194,7 +195,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	probe.setNode(nd)
 
-	listener, err := rpc.Serve(cfg.Listen.GRPC, nd.Store, nd)
+	listener, err := rpc.Serve(cfg.Listen.GRPC, nd.Store, nd, probe.metrics.ServerOptions()...)
 	if err != nil {
 		nd.Close()
 		step("node-closed")

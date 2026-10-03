@@ -1,12 +1,20 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+
+	"distributed-kv-datastore/internal/rpc/pb"
 )
 
 // scrapeMetrics GETs addr's /metrics and parses the text format it serves.
@@ -61,5 +69,56 @@ func TestProbeServerServesTheNodesEpochOnMetrics(t *testing.T) {
 	}
 	if got := epoch(); got != 2 {
 		t.Fatalf("kv_membership_epoch = %v after SetMembership(2), want 2", got)
+	}
+}
+
+// TestRunTimesClientRequests: Run serves gRPC with the telemetry
+// interceptor, so requests to a running node show up on its /metrics under
+// their method and status code.
+func TestRunTimesClientRequests(t *testing.T) {
+	cfg := testConfig(t, t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- Run(ctx, cfg) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(10 * time.Second):
+			t.Error("Run did not return after cancel")
+		}
+	})
+
+	waitForProbeUp(t, cfg.Listen.HTTP)
+	eventuallyTrue(t, 5*time.Second, "readyz 200", func() bool { return getReadyz(t, cfg.Listen.HTTP) == http.StatusOK })
+
+	conn, err := grpc.NewClient(cfg.Listen.GRPC, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	client := pb.NewKVClientClient(conn)
+	if _, err := client.Put(ctx, &pb.PutRequest{Key: "k", Value: "v"}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, err := client.Get(ctx, &pb.GetRequest{Key: ""}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Get with an empty key: %v, want InvalidArgument", err)
+	}
+
+	f, ok := scrapeMetrics(t, cfg.Listen.HTTP)["kv_client_request_duration_seconds"]
+	if !ok {
+		t.Fatal("kv_client_request_duration_seconds missing from /metrics")
+	}
+	counts := make(map[string]uint64)
+	for _, m := range f.Metric {
+		labels := make(map[string]string)
+		for _, l := range m.Label {
+			labels[l.GetName()] = l.GetValue()
+		}
+		counts[labels["method"]+" "+labels["code"]] = m.GetHistogram().GetSampleCount()
+	}
+	want := map[string]uint64{"Put OK": 1, "Get InvalidArgument": 1}
+	if len(counts) != len(want) || counts["Put OK"] != 1 || counts["Get InvalidArgument"] != 1 {
+		t.Fatalf("request counts %v, want %v", counts, want)
 	}
 }

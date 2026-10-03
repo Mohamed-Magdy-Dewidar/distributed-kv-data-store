@@ -13,13 +13,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc"
 
 	"distributed-kv-datastore/internal/node"
 )
 
 // Metrics holds one node's metrics and serves them.
 type Metrics struct {
-	registry *prometheus.Registry
+	registry       *prometheus.Registry
+	clientRequests *clientRequests
 }
 
 // New returns the metrics for one node. stats is called once per scrape;
@@ -34,7 +36,13 @@ func New(stats func() (node.Stats, bool)) *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	return &Metrics{registry: reg}
+	return &Metrics{registry: reg, clientRequests: newClientRequests(reg)}
+}
+
+// ServerOptions are the gRPC server options that time the node's requests:
+// pass them to rpc.Serve.
+func (m *Metrics) ServerOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{grpc.ChainUnaryInterceptor(m.clientRequests.intercept)}
 }
 
 // Handler serves the metrics in the Prometheus text format.
