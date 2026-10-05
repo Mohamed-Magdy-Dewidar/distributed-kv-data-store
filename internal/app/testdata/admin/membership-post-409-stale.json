@@ -1,0 +1,1 @@
+{"error": "stale epoch", "message": "stale membership epoch: epoch 2, node is at 3", "currentEpoch": 3}

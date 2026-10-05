@@ -1,0 +1,1 @@
+{"error": "membership conflict", "message": "membership conflict at the same epoch: epoch 3 is already held with fingerprint 5b0d7e1f3c9a, not 9c3e1a7f5d2b", "currentEpoch": 3}

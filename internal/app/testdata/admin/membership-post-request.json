@@ -1,0 +1,8 @@
+{
+  "epoch": 4,
+  "members": {
+    "kv-0": "kv-0.kv.kvstore.svc.cluster.local:7000",
+    "kv-1": "kv-1.kv.kvstore.svc.cluster.local:7000",
+    "kv-2": "kv-2.kv.kvstore.svc.cluster.local:7000"
+  }
+}

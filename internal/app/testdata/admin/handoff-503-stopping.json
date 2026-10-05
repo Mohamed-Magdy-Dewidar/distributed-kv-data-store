@@ -1,0 +1,9 @@
+{
+  "epoch": 4,
+  "member": false,
+  "drained": false,
+  "handoff": {"epoch": 3, "done": false, "pushed": 2011, "hinted": 0, "pending": 2975},
+  "peers": {
+    "kv-0": {"alive": false, "lastSeenEpoch": 3, "reachable": false}
+  }
+}
