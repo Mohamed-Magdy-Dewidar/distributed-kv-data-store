@@ -6,8 +6,8 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: kv
 spec:
-  # The 10-node cluster of deploy/k8s/: replication, storage, resources and
-  # drainTimeout are left at their defaults (n=3 w=2 r=2, 1Gi, the measured
-  # requests and limits, 30m).
-  replicas: 10
+  # 6 nodes: the GKE target, and what fits a laptop's kind node. Replication,
+  # storage, resources and drainTimeout are left at their defaults (n=3 w=2
+  # r=2, 1Gi, the measured requests and limits, 30m).
+  replicas: 6
   image: kvnode:dev

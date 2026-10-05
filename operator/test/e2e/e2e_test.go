@@ -1,339 +1,362 @@
 //go:build e2e
-// +build e2e
 
-/*
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
+// Package e2e runs the operator on the kind cluster of docs/kubernetes.md:
+// it builds and loads the node and operator images, installs the operator,
+// creates the KVCluster kv in kvstore (6 replicas), preloads keys, runs the
+// loadgen writer, scales 6 -> 7 -> 6 with kubectl scale on the KVCluster,
+// repeats the scale-down with the operator pod deleted while kv-6 drains, and
+// reads back every acknowledged write. Run it from the repository's operator
+// directory, on the host (kind, kubectl and docker on PATH):
+//
+//	go test -tags e2e ./test/e2e/ -v -count=1 -timeout 60m
+//
+// KIND_CLUSTER names the kind cluster (default kvstore); E2E_SKIP_BUILD=1
+// reuses the images already loaded. It leaves kv running afterwards, for the
+// observability stack.
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
 	"time"
-
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-
-	"github.com/Mohamed-Magdy-Dewidar/distributed-kv-data-store/operator/test/utils"
 )
 
-// namespace where the project is deployed in
-const namespace = "kvstore-operator-system"
+const (
+	ns           = "kvstore"
+	operatorNS   = "kvstore-operator-system"
+	operatorDep  = "kvstore-operator-controller-manager"
+	operatorImg  = "kvstore-operator:dev"
+	nodeImg      = "kvnode:dev"
+	pollInterval = 250 * time.Millisecond
+)
 
-// serviceAccountName created for the project
-const serviceAccountName = "kvstore-operator-controller-manager"
+var (
+	operatorDir = filepath.Join("..", "..")
+	repoRoot    = filepath.Join("..", "..", "..")
+)
 
-// metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "kvstore-operator-controller-manager-metrics-service"
+func kindCluster() string {
+	if c := os.Getenv("KIND_CLUSTER"); c != "" {
+		return c
+	}
+	return "kvstore"
+}
 
-// metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "kvstore-operator-metrics-binding"
+// run runs a command with stdin and returns its combined output.
+func run(stdin, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	return out.String(), err
+}
 
-var _ = Describe("Manager", Ordered, func() {
-	var controllerPodName string
+func must(t *testing.T, stdin, name string, args ...string) string {
+	t.Helper()
+	out, err := run(stdin, name, args...)
+	if err != nil {
+		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
+	}
+	return out
+}
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
-	BeforeAll(func() {
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+func kubectl(t *testing.T, args ...string) string { t.Helper(); return must(t, "", "kubectl", args...) }
 
-		By("labeling the namespace to enforce the restricted security policy")
-		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+// kvStatus is the part of the KVCluster's status the test reads.
+type kvStatus struct {
+	Phase          string `json:"phase"`
+	Epoch          int64  `json:"epoch"`
+	Replicas       int32  `json:"replicas"`
+	ReadyReplicas  int32  `json:"readyReplicas"`
+	DrainStartedAt string `json:"drainStartedAt"`
+	Members        []struct {
+		ID string `json:"id"`
+	} `json:"members"`
+	Conditions []struct {
+		Type    string `json:"type"`
+		Status  string `json:"status"`
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+	} `json:"conditions"`
+}
 
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+func (s kvStatus) reason() string {
+	for _, c := range s.Conditions {
+		if c.Type == "Progressing" {
+			return c.Reason
+		}
+	}
+	return ""
+}
 
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
-	})
+func (s kvStatus) message() string {
+	for _, c := range s.Conditions {
+		if c.Type == "Progressing" {
+			return c.Message
+		}
+	}
+	return ""
+}
 
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
-	AfterAll(func() {
-		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
-		_, _ = utils.Run(cmd)
+func status(t *testing.T) (kvStatus, bool) {
+	t.Helper()
+	out, err := run("", "kubectl", "-n", ns, "get", "kvc", "kv", "-o", "jsonpath={.status}")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return kvStatus{}, false
+	}
+	var s kvStatus
+	if err := json.Unmarshal([]byte(out), &s); err != nil {
+		t.Fatalf("status %q: %v", out, err)
+	}
+	return s, true
+}
 
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
+// timeline records how the KVCluster's status moves.
+type timeline struct {
+	t     *testing.T
+	start time.Time
+	last  string
+	lines []string
+}
 
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
+func newTimeline(t *testing.T) *timeline { return &timeline{t: t, start: time.Now()} }
 
-		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
-		_, _ = utils.Run(cmd)
-	})
+func (tl *timeline) mark(event string) {
+	line := fmt.Sprintf("%7.1fs  %s", time.Since(tl.start).Seconds(), event)
+	tl.lines = append(tl.lines, line)
+	tl.t.Log(line)
+}
 
-	// After each test, check for failures and collect logs, events,
-	// and pod descriptions for debugging.
-	AfterEach(func() {
-		specReport := CurrentSpecReport()
-		if specReport.Failed() {
-			By("Fetching controller manager pod logs")
-			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-			controllerLogs, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Controller logs: %s", err)
+// until polls the status until cond holds, recording every change of phase,
+// reason and epoch, and fails on Degraded or after timeout. It returns the
+// last status.
+func (tl *timeline) until(what string, timeout time.Duration, cond func(kvStatus) bool) kvStatus {
+	tl.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		s, ok := status(tl.t)
+		if ok {
+			key := fmt.Sprintf("phase=%s reason=%s epoch=%d replicas=%d ready=%d",
+				s.Phase, s.reason(), s.Epoch, s.Replicas, s.ReadyReplicas)
+			if key != tl.last {
+				tl.last = key
+				tl.mark(key)
 			}
-
-			By("Fetching Kubernetes events")
-			cmd = exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
-			eventsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
+			if s.Phase == "Degraded" {
+				tl.t.Fatalf("Degraded: %s", s.message())
 			}
-
-			By("Fetching curl-metrics logs")
-			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-			metricsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get curl-metrics logs: %s", err)
-			}
-
-			By("Fetching controller manager pod description")
-			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
-			podDescription, err := utils.Run(cmd)
-			if err == nil {
-				fmt.Println("Pod description:\n", podDescription)
-			} else {
-				fmt.Println("Failed to describe controller pod")
+			if cond(s) {
+				tl.mark("reached: " + what)
+				return s
 			}
 		}
-	})
-
-	SetDefaultEventuallyTimeout(2 * time.Minute)
-	SetDefaultEventuallyPollingInterval(time.Second)
-
-	Context("Manager", func() {
-		It("should run successfully", func() {
-			By("validating that the controller-manager pod is running as expected")
-			verifyControllerUp := func(g Gomega) {
-				By("getting the name of the controller-manager pod")
-				cmd := exec.Command("kubectl", "get",
-					"pods", "-l", "control-plane=controller-manager",
-					"-o", "go-template={{ range .items }}"+
-						"{{ if not .metadata.deletionTimestamp }}"+
-						"{{ .metadata.name }}"+
-						"{{ \"\\n\" }}{{ end }}{{ end }}",
-					"-n", namespace,
-				)
-
-				podOutput, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve controller-manager pod information")
-				podNames := utils.GetNonEmptyLines(podOutput)
-				g.Expect(podNames).To(HaveLen(1), "expected 1 controller pod running")
-				controllerPodName = podNames[0]
-				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
-
-				By("validating the pod's status")
-				cmd = exec.Command("kubectl", "get",
-					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
-					"-n", namespace,
-				)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
-			}
-			Eventually(verifyControllerUp).Should(Succeed())
-		})
-
-		It("should ensure the metrics endpoint is serving metrics", func() {
-			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=kvstore-operator-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
-
-			By("validating that the metrics service is available")
-			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
-
-			By("getting the service account token")
-			token, err := serviceAccountToken()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(token).NotTo(BeEmpty())
-
-			By("ensuring the controller pod is ready")
-			verifyControllerPodReady := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pod", controllerPodName, "-n", namespace,
-					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("True"), "Controller pod not ready")
-			}
-			Eventually(verifyControllerPodReady, 3*time.Minute, time.Second).Should(Succeed())
-
-			By("verifying that the controller manager is serving the metrics server")
-			verifyMetricsServerStarted := func(g Gomega) {
-				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("Serving metrics server"),
-					"Metrics server not yet started")
-			}
-			Eventually(verifyMetricsServerStarted, 3*time.Minute, time.Second).Should(Succeed())
-
-			// +kubebuilder:scaffold:e2e-metrics-webhooks-readiness
-
-			By("creating the curl-metrics pod to access the metrics endpoint")
-			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
-				"--namespace", namespace,
-				"--image=curlimages/curl:latest",
-				"--overrides",
-				fmt.Sprintf(`{
-					"spec": {
-						"containers": [{
-							"name": "curl",
-							"image": "curlimages/curl:latest",
-							"command": ["/bin/sh", "-c"],
-							"args": [
-								"for i in $(seq 1 30); do curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics && exit 0 || sleep 2; done; exit 1"
-							],
-							"securityContext": {
-								"readOnlyRootFilesystem": true,
-								"allowPrivilegeEscalation": false,
-								"capabilities": {
-									"drop": ["ALL"]
-								},
-								"runAsNonRoot": true,
-								"runAsUser": 1000,
-								"seccompProfile": {
-									"type": "RuntimeDefault"
-								}
-							}
-						}],
-						"serviceAccountName": "%s"
-					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
-
-			By("waiting for the curl-metrics pod to complete.")
-			verifyCurlUp := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
-					"-o", "jsonpath={.status.phase}",
-					"-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
-			}
-			Eventually(verifyCurlUp, 5*time.Minute).Should(Succeed())
-
-			By("getting the metrics by checking curl-metrics logs")
-			verifyMetricsAvailable := func(g Gomega) {
-				metricsOutput, err := getMetricsOutput()
-				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-				g.Expect(metricsOutput).NotTo(BeEmpty())
-				g.Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
-			}
-			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
-		})
-
-		// +kubebuilder:scaffold:e2e-webhooks-checks
-
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
-	})
-})
-
-// serviceAccountToken returns a token for the specified service account in the given namespace.
-// It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
-// and parsing the resulting token from the API response.
-func serviceAccountToken() (string, error) {
-	const tokenRequestRawString = `{
-		"apiVersion": "authentication.k8s.io/v1",
-		"kind": "TokenRequest"
-	}`
-
-	By("creating temporary file to store the token request")
-	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
-	tokenRequestFile := filepath.Join("/tmp", secretName)
-	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
-	if err != nil {
-		return "", err
+		if time.Now().After(deadline) {
+			tl.t.Fatalf("timed out after %v waiting for %s (last: %s %s)", timeout, what, tl.last, s.message())
+		}
+		time.Sleep(pollInterval)
 	}
-
-	var out string
-	verifyTokenCreation := func(g Gomega) {
-		By("executing kubectl command to create the token")
-		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
-			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
-			namespace,
-			serviceAccountName,
-		), "-f", tokenRequestFile)
-
-		output, err := cmd.CombinedOutput()
-		g.Expect(err).NotTo(HaveOccurred())
-
-		By("parsing the JSON output to extract the token")
-		var token tokenRequest
-		err = json.Unmarshal(output, &token)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		out = token.Status.Token
-	}
-	Eventually(verifyTokenCreation).Should(Succeed())
-
-	return out, err
 }
 
-// getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
-func getMetricsOutput() (string, error) {
-	By("getting the curl-metrics logs")
-	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-	return utils.Run(cmd)
+func ready(replicas int32, epoch int64) func(kvStatus) bool {
+	return func(s kvStatus) bool {
+		return s.Phase == "Ready" && s.Replicas == replicas && s.ReadyReplicas == replicas &&
+			len(s.Members) == int(replicas) && (epoch < 0 || s.Epoch == epoch)
+	}
 }
 
-// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
-// containing only the token field that we need to extract.
-type tokenRequest struct {
-	Status struct {
-		Token string `json:"token"`
-	} `json:"status"`
+func topNode(tl *timeline, when string) {
+	out, err := run("", "kubectl", "top", "node", "--no-headers")
+	if err == nil {
+		tl.mark("kubectl top node (" + when + "): " + strings.Join(strings.Fields(out), " "))
+	}
+}
+
+// writerPod is a loadgen writer (deploy/loadgen/loadgen.yaml's write.sh).
+func writerPod(name, prefix string, count int, sleep string) string {
+	return fmt.Sprintf(`apiVersion: v1
+kind: Pod
+metadata: {name: %s, namespace: %s, labels: {e2e: writer}}
+spec:
+  restartPolicy: Never
+  containers:
+    - name: writer
+      image: fullstorydev/grpcurl:v1.9.3-alpine
+      imagePullPolicy: IfNotPresent
+      command: ["/scripts/write.sh"]
+      env:
+        - {name: PREFIX, value: %s}
+        - {name: START, value: "1"}
+        - {name: COUNT, value: "%d"}
+        - {name: SLEEP, value: "%s"}
+      volumeMounts: [{name: scripts, mountPath: /scripts}]
+  volumes: [{name: scripts, configMap: {name: loadgen, defaultMode: 0555}}]
+`, name, ns, prefix, count, sleep)
+}
+
+// writes reads a writer's log: the acknowledged keys and the failed writes.
+func writes(t *testing.T, pod string) (acked []string, failed []string) {
+	t.Helper()
+	for line := range strings.SplitSeq(kubectl(t, "-n", ns, "logs", pod), "\n") {
+		f := strings.Fields(line)
+		switch {
+		case len(f) >= 4 && f[3] == "ok":
+			acked = append(acked, f[2])
+		case len(f) >= 4 && f[3] == "ERR":
+			failed = append(failed, line)
+		}
+	}
+	return acked, failed
+}
+
+func podGone(kind, name string) bool {
+	out, _ := run("", "kubectl", "-n", ns, "get", kind, name, "--ignore-not-found", "-o", "name")
+	return strings.TrimSpace(out) == ""
+}
+
+func TestOperatorScalesUnderLoad(t *testing.T) {
+	tl := newTimeline(t)
+	cluster := kindCluster()
+
+	// --- images ---
+	if os.Getenv("E2E_SKIP_BUILD") == "" {
+		must(t, "", "docker", "build", "-t", nodeImg, repoRoot)
+		must(t, "", "docker", "build", "-t", operatorImg, operatorDir)
+		tl.mark("images built")
+	}
+	must(t, "", "kind", "load", "docker-image", nodeImg, operatorImg, "--name", cluster)
+	tl.mark("images loaded into kind")
+
+	// --- a fresh start: no KVCluster, no volumes, no writers ---
+	// Best effort: whatever is not there is fine.
+	targets := make([][]string, 0, 13)
+	targets = append(targets, []string{"pod", "-l", "e2e=writer"}, []string{"kvc", "kv"}, []string{"statefulset", "kv"})
+	for i := range 10 {
+		targets = append(targets, []string{"pvc", "data-kv-" + strconv.Itoa(i)})
+	}
+	for _, target := range targets {
+		args := append(append([]string{"-n", ns, "delete"}, target...), "--ignore-not-found", "--wait=true")
+		_, _ = run("", "kubectl", args...)
+	}
+
+	// --- the operator ---
+	manifests := kubectl(t, "kustomize", filepath.Join(operatorDir, "config", "default"))
+	manifests = strings.ReplaceAll(manifests, "image: controller:latest", "image: "+operatorImg)
+	must(t, manifests, "kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+	kubectl(t, "-n", operatorNS, "rollout", "restart", "deploy/"+operatorDep) // pick up a rebuilt image
+	kubectl(t, "-n", operatorNS, "rollout", "status", "deploy/"+operatorDep, "--timeout=180s")
+	tl.mark("operator running")
+
+	// --- test tooling ---
+	kubectl(t, "apply", "-f", filepath.Join(repoRoot, "deploy", "loadgen", "loadgen.yaml"))
+	kubectl(t, "-n", ns, "wait", "pod/toolbox", "--for=condition=Ready", "--timeout=120s")
+
+	// --- create kv: 6 replicas ---
+	kubectl(t, "-n", ns, "apply", "-f", filepath.Join(operatorDir, "config", "samples", "kvstore_v1alpha1_kvcluster.yaml"))
+	created := time.Now()
+	s := tl.until("kv Ready with 6 members", 5*time.Minute, ready(6, -1))
+	tl.mark(fmt.Sprintf("PHASE create -> Ready: %.1fs", time.Since(created).Seconds()))
+	e0 := s.Epoch
+	topNode(tl, "6 replicas, idle")
+
+	// --- preload: 4 writers x 1000 keys ---
+	for i := range 4 {
+		p := fmt.Sprintf("pre%d", i)
+		must(t, writerPod(p, p, 1000, "0"), "kubectl", "apply", "-f", "-")
+	}
+	preloadStart := time.Now()
+	for i := range 4 {
+		kubectl(t, "-n", ns, "wait", "pod/pre"+strconv.Itoa(i), "--for=jsonpath={.status.phase}=Succeeded", "--timeout=15m")
+	}
+	tl.mark(fmt.Sprintf("PHASE preload 4000 keys: %.1fs", time.Since(preloadStart).Seconds()))
+
+	// --- the steady writer, about 11 writes/s, through every scale ---
+	must(t, writerPod("load", "load", 0, "0.05"), "kubectl", "apply", "-f", "-")
+	kubectl(t, "-n", ns, "wait", "pod/load", "--for=condition=Ready", "--timeout=120s")
+	time.Sleep(5 * time.Second)
+	topNode(tl, "6 replicas, steady load")
+
+	// --- scale 6 -> 7 ---
+	t1 := time.Now()
+	kubectl(t, "-n", ns, "scale", "kvc/kv", "--replicas=7")
+	tl.until("kv Ready with 7 members at the next epoch", 10*time.Minute, ready(7, e0+1))
+	tl.mark(fmt.Sprintf("PHASE scale 6 -> 7: %.1fs", time.Since(t1).Seconds()))
+	topNode(tl, "7 replicas, steady load")
+
+	// --- scale 7 -> 6 ---
+	t2 := time.Now()
+	kubectl(t, "-n", ns, "scale", "kvc/kv", "--replicas=6")
+	tl.until("kv Ready with 6 members, kv-6 and its volume gone", 15*time.Minute, func(s kvStatus) bool {
+		return ready(6, e0+2)(s) && podGone("pod", "kv-6") && podGone("pvc", "data-kv-6")
+	})
+	tl.mark(fmt.Sprintf("PHASE scale 7 -> 6: %.1fs", time.Since(t2).Seconds()))
+
+	// --- variant: the operator pod is deleted while kv-6 drains ---
+	t3 := time.Now()
+	kubectl(t, "-n", ns, "scale", "kvc/kv", "--replicas=7")
+	tl.until("kv Ready with 7 members (variant)", 10*time.Minute, ready(7, e0+3))
+	tl.mark(fmt.Sprintf("PHASE scale 6 -> 7 (variant): %.1fs", time.Since(t3).Seconds()))
+	t4 := time.Now()
+	kubectl(t, "-n", ns, "scale", "kvc/kv", "--replicas=6")
+	tl.until("kv-6 draining (D2)", 5*time.Minute, func(s kvStatus) bool { return s.reason() == "Draining" })
+	old := strings.TrimSpace(kubectl(t, "-n", operatorNS, "get", "pod", "-l", "control-plane=controller-manager",
+		"-o", "jsonpath={.items[0].metadata.name}"))
+	kubectl(t, "-n", operatorNS, "delete", "pod", old, "--wait=false")
+	killed := time.Now()
+	tl.mark("deleted the operator pod " + old + " during D2")
+	for {
+		out, _ := run("", "kubectl", "-n", operatorNS, "get", "pod", "-l", "control-plane=controller-manager",
+			"-o", `jsonpath={range .items[*]}{.metadata.name}={.status.containerStatuses[0].ready}{"\n"}{end}`)
+		if strings.Contains(out, "=true") && !strings.Contains(out, old+"=") {
+			tl.mark(fmt.Sprintf("new operator pod ready after %.1fs", time.Since(killed).Seconds()))
+			break
+		}
+		if time.Since(killed) > 3*time.Minute {
+			t.Fatalf("no new operator pod: %s", out)
+		}
+		time.Sleep(pollInterval)
+	}
+	s = tl.until("kv Ready with 6 members after the operator restart", 15*time.Minute, func(s kvStatus) bool {
+		return ready(6, -1)(s) && podGone("pod", "kv-6") && podGone("pvc", "data-kv-6")
+	})
+	if s.Epoch != e0+4 {
+		t.Fatalf("epoch %d after the variant, want %d: the restart caused an extra membership change", s.Epoch, e0+4)
+	}
+	tl.mark(fmt.Sprintf("PHASE scale 7 -> 6 with the operator deleted in D2: %.1fs "+
+		"(operator gone to cluster Ready: %.1fs)", time.Since(t4).Seconds(), time.Since(killed).Seconds()))
+	topNode(tl, "6 replicas, after the scales")
+
+	// --- every acknowledged write reads back ---
+	// The writer's log is the record of acknowledged writes: snapshot it,
+	// then stop the writer (writes after the snapshot are not counted).
+	var acked, failed []string
+	for _, pod := range []string{"pre0", "pre1", "pre2", "pre3", "load"} {
+		a, f := writes(t, pod)
+		tl.mark(fmt.Sprintf("%s: %d acknowledged, %d failed", pod, len(a), len(f)))
+		acked, failed = append(acked, a...), append(failed, f...)
+	}
+	kubectl(t, "-n", ns, "delete", "pod", "-l", "e2e=writer", "--wait=true")
+	for _, f := range failed {
+		t.Logf("failed write: %s", f)
+	}
+	var in strings.Builder
+	for _, k := range acked {
+		fmt.Fprintf(&in, "%s v-%s\n", k, k)
+	}
+	verifyStart := time.Now()
+	out := must(t, in.String(), "kubectl", "-n", ns, "exec", "-i", "toolbox", "--", "/scripts/verify.sh")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	summary := lines[len(lines)-1]
+	tl.mark(fmt.Sprintf("verify (%.1fs): %s", time.Since(verifyStart).Seconds(), summary))
+	if want := fmt.Sprintf("checked=%d missing=0", len(acked)); summary != want {
+		t.Fatalf("read-back: %s, want %s\n%s", summary, want, out)
+	}
+	tl.mark(fmt.Sprintf("RESULT %d acknowledged writes, all read back; %d writes failed", len(acked), len(failed)))
 }
