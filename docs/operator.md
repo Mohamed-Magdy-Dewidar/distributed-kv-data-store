@@ -436,10 +436,10 @@ The cause is not established:
 
 **A hypothesis, untested**, that fits these observations: client Puts queue
 behind handoff writes for each node's write lock. Each write to a node's
-storage engine (`StorageEngine.Put`, and the restore a handoff push lands
-as) holds the engine's write lock (`writeMu`) across its WAL append, and
-every append fsyncs on its own, with no group commit
-(`internal/storage/wal/wal.go`). So a node's fsyncs run one at a time, and a
+storage engine (`StorageEngine.Put`; a handoff push arrives as an ordinary
+replicated write, one `Put` per version) holds the engine's write lock
+(`writeMu`) across its WAL append, and every append fsyncs on its own, with
+no group commit (`internal/storage/wal/wal.go`). So a node's fsyncs run one at a time, and a
 client write that arrives during a handoff waits for the pushes ahead of it.
 That would raise the Put p99 while the time of each fsync stays flat and the
 number of fsyncs rises several-fold, which is what run 2 showed. The fsync
