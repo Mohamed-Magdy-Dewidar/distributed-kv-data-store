@@ -4,6 +4,10 @@ metadata:
   labels:
     app.kubernetes.io/name: kvstore-operator
     app.kubernetes.io/managed-by: kustomize
-  name: kvcluster-sample
+  name: kv
 spec:
-  # TODO(user): Add fields here
+  # The 10-node cluster of deploy/k8s/: replication, storage, resources and
+  # drainTimeout are left at their defaults (n=3 w=2 r=2, 1Gi, the measured
+  # requests and limits, 30m).
+  replicas: 10
+  image: kvnode:dev

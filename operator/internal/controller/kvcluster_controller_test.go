@@ -54,7 +54,7 @@ var _ = Describe("KVCluster Controller", func() {
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: kvstorev1alpha1.KVClusterSpec{Replicas: 3, Image: "kvnode:dev"},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

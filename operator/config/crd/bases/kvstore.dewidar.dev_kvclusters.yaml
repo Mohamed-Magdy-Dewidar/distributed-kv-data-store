@@ -11,10 +11,28 @@ spec:
     kind: KVCluster
     listKind: KVClusterList
     plural: kvclusters
+    shortNames:
+    - kvc
     singular: kvcluster
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - jsonPath: .status.epoch
+      name: Epoch
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: KVCluster is the Schema for the kvclusters API
@@ -39,11 +57,164 @@ spec:
           spec:
             description: spec defines the desired state of KVCluster
             properties:
-              foo:
-                description: foo is an example field of KVCluster. Edit kvcluster_types.go
-                  to remove/update
+              drainTimeout:
+                default: 30m
+                description: |-
+                  drainTimeout is how long a node being removed may take to drain
+                  before the cluster reports DrainBlocked. The operator keeps waiting
+                  after that; it never stops a node that has not drained.
                 type: string
+                x-kubernetes-validations:
+                - message: drainTimeout must be a positive duration
+                  rule: duration(self) > duration('0s')
+              image:
+                description: image is the node image, e.g. kvnode:dev.
+                minLength: 1
+                type: string
+              replicas:
+                description: |-
+                  replicas is the number of nodes. The operator changes the membership
+                  one node at a time towards it, waiting for each handoff to finish.
+                format: int32
+                minimum: 1
+                type: integer
+              replication:
+                default:
+                  "n": 3
+                  r: 2
+                  w: 2
+                description: |-
+                  replication is the cluster's N, W and R. It cannot change after
+                  creation: N is part of every membership's fingerprint, and every node
+                  must have the same N, W and R.
+                properties:
+                  "n":
+                    default: 3
+                    description: n is the number of replicas of each key.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  r:
+                    default: 2
+                    description: r is the number of replicas a read waits for.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  w:
+                    default: 2
+                    description: w is the number of replicas that must acknowledge
+                      a write.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: replication is immutable
+                  rule: self == oldSelf
+                - message: w must not exceed n
+                  rule: self.w <= self.n
+                - message: r must not exceed n
+                  rule: self.r <= self.n
+              resources:
+                default:
+                  limits:
+                    memory: 256Mi
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                description: |-
+                  resources are the node container's requests and limits. The default
+                  comes from measurements at 10 replicas on kind (docs/kubernetes.md). It
+                  applies only when resources is left out entirely.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              storage:
+                default:
+                  size: 1Gi
+                description: |-
+                  storage is each node's data volume. It cannot change after creation:
+                  a StatefulSet's volumeClaimTemplates are immutable.
+                properties:
+                  size:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 1Gi
+                    description: size is the volume's requested capacity.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  storageClassName:
+                    description: |-
+                      storageClassName is the volume's storage class; the cluster's default
+                      class when unset.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: storage is immutable
+                  rule: self == oldSelf
+            required:
+            - image
+            - replicas
             type: object
+            x-kubernetes-validations:
+            - message: 'replicas must be at least replication.n: a membership needs
+                at least N members'
+              rule: '!has(self.replication) || self.replicas >= self.replication.n'
           status:
             description: status defines the observed state of KVCluster
             properties:
@@ -116,11 +287,79 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              drainStartedAt:
+                description: |-
+                  drainStartedAt is when the node now being removed was taken out of the
+                  membership; drainTimeout counts from here.
+                format: date-time
+                type: string
+              epoch:
+                description: epoch is the membership epoch the nodes hold.
+                format: int64
+                minimum: 0
+                type: integer
+              members:
+                description: members is the membership the nodes hold, in ordinal
+                  order.
+                items:
+                  description: Member is one member of the cluster's membership.
+                  properties:
+                    address:
+                      description: address is the node's gRPC address, exactly as
+                        the nodes hold it.
+                      type: string
+                    id:
+                      description: id is the node ID, the pod's name.
+                      type: string
+                  required:
+                  - address
+                  - id
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - id
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: observedGeneration is the spec generation this status
+                  describes.
+                format: int64
+                type: integer
+              phase:
+                description: phase summarizes the cluster's state.
+                enum:
+                - Pending
+                - Ready
+                - Scaling
+                - DrainBlocked
+                - Degraded
+                type: string
+              readyReplicas:
+                description: readyReplicas is the number of ready pods.
+                format: int32
+                type: integer
+              replicas:
+                description: |-
+                  replicas is the number of pods the StatefulSet has (the scale
+                  subresource's status replicas).
+                format: int32
+                type: integer
+              selector:
+                description: selector is the pods' label selector, for the scale subresource.
+                type: string
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: 'name must be a DNS-1035 label of at most 52 characters: it is
+            used in pod, Service and DNS names'
+          rule: self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$') && size(self.metadata.name)
+            <= 52
     served: true
     storage: true
     subresources:
+      scale:
+        labelSelectorPath: .status.selector
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.replicas
       status: {}
