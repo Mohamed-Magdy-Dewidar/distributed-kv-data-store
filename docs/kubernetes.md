@@ -1,8 +1,16 @@
 # Running on Kubernetes (kind)
 
-This runbook runs a 10-node cluster (`N=3, W=2, R=2`) on a local
-[kind](https://kind.sigs.k8s.io/) cluster, from the manifests in
-`deploy/k8s/`. It was written on Windows 11 with Docker Desktop (WSL2
+This runbook is the **manual path**: it runs a 10-node cluster
+(`N=3, W=2, R=2`) on a local [kind](https://kind.sigs.k8s.io/) cluster from
+the manifests in `deploy/k8s/`, and changes its membership by hand. Every
+measurement below was taken this way, at 10 replicas. The managed path is
+the [operator](operator.md), which renders the same objects from a
+`KVCluster` and carries out the scale-up and scale-down procedures below
+itself; it was measured at 6 replicas. Use one or the other in a namespace,
+never both: they would manage the same `kv` objects.
+
+The cluster setup here (cgroup v2, the tools, kind, metrics-server) is the
+same for both. It was written on Windows 11 with Docker Desktop (WSL2
 backend); the commands are the same elsewhere, except for the cgroup step,
 which is specific to Docker Desktop on WSL2.
 
@@ -110,6 +118,8 @@ Right after the patch, the APIService can briefly report
 the pod is serving.
 
 ## Deploy
+
+(With the operator instead, see [operator.md](operator.md#install).)
 
 Build the image and load it into the kind node:
 
