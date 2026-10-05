@@ -11,7 +11,41 @@ go vet ./...
 go test -race ./...
 ```
 
-See [testing.md](testing.md) for what the tests cover.
+See [testing.md](testing.md) for what the tests cover. The operator is its
+own module, under `operator/`; see [operator.md](operator.md#tests) for its
+tests.
+
+## Make targets
+
+The top-level `Makefile` wraps the commands from the docs, for a shell with
+`make` (Linux, WSL, or the `golang:1.26` container). Each target is one or a
+few plain commands; on Windows without `make`, type them in PowerShell, as
+below, from the repository root. Defaults: kind cluster `kvstore`, images
+`kvnode:dev` and `kvstore-operator:dev`, `N=6`.
+
+| Target | What it does | In PowerShell |
+|---|---|---|
+| `make test` | Vets and tests the database module as [testing.md](testing.md) does: the `-race` suite, then the allocation tests that skip themselves under `-race`. | `go vet ./...; go test -race -count=1 ./...; go test -count=1 ./internal/telemetry/ ./internal/storage/wal/` |
+| `make operator-test` | Tests the operator module (`operator/Makefile`'s `test`; needs Linux for envtest). | `docker run --rm -v "${PWD}:/src" -v kv-gomod:/go/pkg/mod -w /src/operator golang:1.26 make test` |
+| `make image` | Builds the node and operator images and loads them into kind. | `docker build -t kvnode:dev .; docker build -t kvstore-operator:dev operator; kind load docker-image kvnode:dev kvstore-operator:dev --name kvstore` |
+| `make kind-up` | Creates the kind cluster of [kubernetes.md](kubernetes.md#create-the-cluster) (then install metrics-server as described there). | `kind create cluster --name kvstore --wait 120s --image kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0` |
+| `make kind-down` | Deletes the kind cluster, with every volume in it. | `kind delete cluster --name kvstore` |
+| `make operator-deploy` | Installs the operator and creates the KVCluster `kv` (6 replicas) in `kvstore`. | see below |
+| `make scale N=7` | Scales `kv` to N replicas, one node at a time ([operator.md](operator.md)). | `kubectl -n kvstore scale kvc/kv --replicas=7` |
+| `make load` | Starts the steady writer `load` (`deploy/loadgen/writer.yaml`) and the toolbox. Delete the pod to stop it. | `kubectl apply -f deploy/loadgen/loadgen.yaml -f deploy/loadgen/writer.yaml` |
+| `make operator-<target>` | Any target of `operator/Makefile`: `lint`, `manifests`, `generate`, `test-e2e`, ... | |
+
+`make operator-deploy` in PowerShell:
+
+```powershell
+kubectl kustomize operator/config/default | ForEach-Object { $_ -replace 'image: controller:latest', 'image: kvstore-operator:dev' } | kubectl apply --server-side -f -
+kubectl -n kvstore-operator-system rollout status deploy/kvstore-operator-controller-manager --timeout=180s
+kubectl create namespace kvstore --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n kvstore apply -f operator/config/samples/kvstore_v1alpha1_kvcluster.yaml
+```
+
+A typical session: `make kind-up` (once), `make image`,
+`make operator-deploy`, `make load`, `make scale N=7`, `make scale`.
 
 ## Regenerating the gRPC code
 

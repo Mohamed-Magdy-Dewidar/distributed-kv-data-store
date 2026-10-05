@@ -1,0 +1,31 @@
+# The steady writer of docs/kubernetes.md and docs/operator.md: writes
+# load-000001, load-000002, ... through kv-client, about 11 writes/s, until
+# deleted. Needs the loadgen ConfigMap (loadgen.yaml). Its log is the record
+# of acknowledged writes:
+#
+#   kubectl apply -f deploy/loadgen/loadgen.yaml -f deploy/loadgen/writer.yaml
+#   kubectl -n kvstore logs load | awk '$4=="ok" {print $3, "v-" $3}' > acked.txt
+#   kubectl -n kvstore exec -i toolbox -- /scripts/verify.sh < acked.txt
+#   kubectl -n kvstore delete pod load
+apiVersion: v1
+kind: Pod
+metadata:
+  name: load
+  namespace: kvstore
+spec:
+  restartPolicy: Never
+  containers:
+    - name: writer
+      image: fullstorydev/grpcurl:v1.9.3-alpine
+      imagePullPolicy: IfNotPresent
+      command: ["/scripts/write.sh"]
+      env:
+        - {name: PREFIX, value: load}
+        - {name: START, value: "1"}
+        - {name: COUNT, value: "0"}
+        - {name: SLEEP, value: "0.05"}
+      volumeMounts:
+        - {name: scripts, mountPath: /scripts}
+  volumes:
+    - name: scripts
+      configMap: {name: loadgen, defaultMode: 0555}
