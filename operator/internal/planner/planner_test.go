@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -553,5 +554,46 @@ func TestReadyIdle(t *testing.T) {
 	check(t, d, ActNone, kvv1.PhaseReady)
 	if d.Action.RequeueAfter != DefaultConfig.Idle {
 		t.Errorf("requeue = %v", d.Action.RequeueAfter)
+	}
+}
+
+// --- a StatefulSet scaled by hand is scaled back ---
+
+func TestManualScaleIsReverted(t *testing.T) {
+	for _, E := range []uint64{0, 5} {
+		t.Run(fmt.Sprintf("up at epoch %d", E), func(t *testing.T) {
+			o := stable(3, E, 3)
+			o.StatefulSet.Replicas = 4
+			addPod(&o, t0) // kv-4 is not in the ConfigMap: it fails to start
+			d := Plan(o, DefaultConfig)
+			check(t, d, ActScaleStatefulSet, kvv1.PhaseScaling)
+			if d.Action.Replicas != 3 {
+				t.Errorf("replicas = %d, want 3", d.Action.Replicas)
+			}
+		})
+		t.Run(fmt.Sprintf("down at epoch %d", E), func(t *testing.T) {
+			o := stable(4, E, 4)
+			o.StatefulSet.Replicas = 3
+			// kv-3 is still terminating: wait for it and its volume.
+			o.Pods[3].Terminating = true
+			check(t, Plan(o, DefaultConfig), ActWait, kvv1.PhaseScaling)
+			o.Pods = o.Pods[:3]
+			o.PVCs = []int{0, 1, 2}
+			d := Plan(o, DefaultConfig)
+			check(t, d, ActScaleStatefulSet, kvv1.PhaseScaling)
+			if d.Action.Replicas != 4 {
+				t.Errorf("replicas = %d, want 4", d.Action.Replicas)
+			}
+		})
+	}
+}
+
+func TestUnreadableConfigMap(t *testing.T) {
+	o := stable(3, 1, 3)
+	o.ConfigMap.Invalid = "config.yaml does not parse"
+	d := Plan(o, DefaultConfig)
+	check(t, d, ActWait, kvv1.PhaseDegraded)
+	if d.Status.Reason != ReasonConfigMapUnexpected {
+		t.Errorf("reason = %s", d.Status.Reason)
 	}
 }

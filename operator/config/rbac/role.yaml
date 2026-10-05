@@ -5,28 +5,46 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - kvstore.dewidar.dev
+  - ""
   resources:
-  - kvclusters
+  - configmaps
+  - services
   verbs:
   - create
-  - delete
   - get
   - list
   - patch
-  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
   - watch
 - apiGroups:
   - kvstore.dewidar.dev
   resources:
-  - kvclusters/finalizers
+  - kvclusters
   verbs:
-  - update
+  - get
+  - list
+  - watch
 - apiGroups:
   - kvstore.dewidar.dev
   resources:
   - kvclusters/status
   verbs:
-  - get
   - patch
-  - update

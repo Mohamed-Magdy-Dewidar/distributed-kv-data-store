@@ -37,6 +37,8 @@ import (
 
 	kvstorev1alpha1 "github.com/Mohamed-Magdy-Dewidar/distributed-kv-data-store/operator/api/v1alpha1"
 	"github.com/Mohamed-Magdy-Dewidar/distributed-kv-data-store/operator/internal/controller"
+	"github.com/Mohamed-Magdy-Dewidar/distributed-kv-data-store/operator/internal/kvadmin"
+	"github.com/Mohamed-Magdy-Dewidar/distributed-kv-data-store/operator/internal/planner"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -183,8 +185,10 @@ func main() {
 	}
 
 	if err := (&controller.KVClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:  mgr.GetClient(),
+		Scheme:  mgr.GetScheme(),
+		Admin:   &kvadmin.Client{},
+		Planner: planner.DefaultConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "kvcluster")
 		os.Exit(1)

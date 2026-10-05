@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -565,5 +566,33 @@ func TestOrdinal(t *testing.T) {
 		if _, ok := Ordinal(c, id); ok {
 			t.Errorf("Ordinal(%q) accepted", id)
 		}
+	}
+}
+
+func TestParseConfigMapRoundTrip(t *testing.T) {
+	c := cluster("db", "prod", 4)
+	members := Members(c, 11)
+	cm := mustConfigMap(t, c, 9, members)
+	epoch, got, err := ParseConfigMap(cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if epoch != 9 || !maps.Equal(got, members) {
+		t.Errorf("parsed epoch %d, members %v; want 9, %v", epoch, got, members)
+	}
+}
+
+func TestParseConfigMapRejects(t *testing.T) {
+	for name, data := range map[string]map[string]string{
+		"no config.yaml": {},
+		"not YAML":       {ConfigKey: "cluster: [\n"},
+		"duplicate member": {ConfigKey: "cluster:\n  epoch: 1\n  members:\n" +
+			"    - id: kv-0\n      address: a\n    - id: kv-0\n      address: b\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := ParseConfigMap(&corev1.ConfigMap{Data: data}); err == nil {
+				t.Error("accepted")
+			}
+		})
 	}
 }

@@ -70,6 +70,9 @@ type StatefulSetObs struct {
 type ConfigMapObs struct {
 	Epoch   uint64
 	Members map[string]string
+	// Invalid says why the ConfigMap could not be read; Epoch and Members
+	// are then meaningless.
+	Invalid string
 }
 
 // PodObs is one ordinal's pod.
@@ -337,6 +340,9 @@ func (p *planner) bootstrap() (members int, a Action, done bool) {
 		}
 		return 0, p.degraded(ReasonConfigMapMissing, "The ConfigMap is missing while the StatefulSet exists; restore it from GET /admin/membership (docs/operator.md)"), true
 	}
+	if why := obs.ConfigMap.Invalid; why != "" {
+		return 0, p.degraded(ReasonConfigMapUnexpected, "The ConfigMap cannot be read: %s", why), true
+	}
 	c, contiguous, err := p.validMembers(obs.ConfigMap.Members)
 	if err != nil || !contiguous {
 		if err == nil {
@@ -407,15 +413,21 @@ func (p *planner) allIn(views []view, allowed ...state) (ok bool, seen map[state
 // step expects. ok is false for a combination no step produces.
 func (p *planner) classify(S, c int, views []view) (a Action, exempt int, ok bool) {
 	Ec := p.obs.ConfigMap.Epoch
-	switch {
-	case c == S+1 && Ec >= 1:
+	switch c {
+	case S + 1:
 		// U1 done: the ConfigMap names pod S, which does not exist yet. A
 		// pod that restarted in between may already have adopted E+1 from
-		// the ConfigMap and spread it.
-		if ok, _ := p.allIn(views, state{Ec - 1, S}, state{Ec, S + 1}); ok {
+		// the ConfigMap and spread it. (Also a StatefulSet scaled down by
+		// hand: every pod still holds the ConfigMap's membership, and pod S
+		// comes back once its old pod and volume are gone.)
+		allowed := []state{{Ec, S + 1}}
+		if Ec >= 1 {
+			allowed = append(allowed, state{Ec - 1, S})
+		}
+		if ok, _ := p.allIn(views, allowed...); ok {
 			return p.scaleUp(S), -1, true
 		}
-	case c == S:
+	case S:
 		if ok, _ := p.allIn(views, state{Ec, S}); ok {
 			return p.converged(S, views), -1, true
 		}
@@ -428,10 +440,13 @@ func (p *planner) classify(S, c int, views []view) (a Action, exempt int, ok boo
 			// D2: pod 0 has taken the membership without pod S-1.
 			return p.drain(S, Ec+1), S - 1, true
 		}
-	case c == S-1 && Ec >= 1:
+	case S - 1:
 		// D3 done: pod S-1 drained and the ConfigMap no longer lists it. It
 		// may have restarted and be failing to start (it is not in the
-		// ConfigMap); that is expected.
+		// ConfigMap); that is expected. (Also a StatefulSet scaled up by
+		// hand: pod S-1 was never a member, so it holds no data. The only
+		// ConfigMap the operator writes without a pod below S is D3's, after
+		// the drain.)
 		if ok, _ := p.allIn(views, state{Ec, c}); ok {
 			return p.act(Action{Kind: ActScaleStatefulSet, Replicas: int32(c)}, kvv1.PhaseScaling, ReasonRemovingPod,
 				"Removing %s: it has drained; scaling the StatefulSet to %d", render.MemberID(p.kv, S-1), c), S - 1, true

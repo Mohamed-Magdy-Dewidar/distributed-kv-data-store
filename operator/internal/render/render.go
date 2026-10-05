@@ -37,6 +37,11 @@ const (
 
 	// ManagerName is the managed-by label's value.
 	ManagerName = "kvstore-operator"
+
+	// LabelInstance names the KVCluster an object belongs to;
+	// LabelManagedBy is ManagerName on every object the operator renders.
+	LabelInstance  = "app.kubernetes.io/instance"
+	LabelManagedBy = "app.kubernetes.io/managed-by"
 )
 
 // MemberID is the node ID of the pod with this ordinal: its pod name.
@@ -86,11 +91,15 @@ func selectorLabels() map[string]string {
 	return map[string]string{"app.kubernetes.io/name": "kvstore"}
 }
 
+// SelectorLabels select a cluster's pods (the StatefulSet's and the
+// Services' selector).
+func SelectorLabels() map[string]string { return selectorLabels() }
+
 // operatorLabels mark an object as this cluster's and the operator's.
 func operatorLabels(c *kvv1.KVCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/instance":   c.Name,
-		"app.kubernetes.io/managed-by": ManagerName,
+		LabelInstance:  c.Name,
+		LabelManagedBy: ManagerName,
 	}
 }
 
