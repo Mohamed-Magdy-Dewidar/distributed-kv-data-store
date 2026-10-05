@@ -1,0 +1,9 @@
+apiVersion: kvstore.dewidar.dev/v1alpha1
+kind: KVCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: kvstore-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: kvcluster-sample
+spec:
+  # TODO(user): Add fields here

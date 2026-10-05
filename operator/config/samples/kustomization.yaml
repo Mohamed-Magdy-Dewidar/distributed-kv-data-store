@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- kvstore_v1alpha1_kvcluster.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
