@@ -38,6 +38,9 @@ type fakeNode struct {
 	members     map[string]string
 	handoffDone bool // its handoff to its epoch has completed
 	drained     bool // for a node outside its membership
+	// postStatus, if set, is the HTTP status every POST /admin/membership
+	// gets, the membership unchanged.
+	postStatus int
 }
 
 type fakePost struct {
@@ -132,6 +135,8 @@ func (f *fakeNodes) serve(w http.ResponseWriter, r *http.Request) {
 		f.posts = append(f.posts, fakePost{id, req.Epoch, maps.Clone(req.Members)})
 		cur := nd.epoch
 		switch {
+		case nd.postStatus != 0:
+			writeJSON(w, nd.postStatus, kvadmin.APIError{Code: "injected", Message: "injected by the test"})
 		case len(req.Members) < f.n:
 			writeJSON(w, 400, kvadmin.APIError{Code: "invalid membership", Message: "fewer than n members"})
 		case req.Epoch < cur:

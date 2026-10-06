@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,6 +206,45 @@ func (h *harness) expect(phase kvv1.Phase, reason string, epoch int64, members i
 			h.t.Fatalf("condition %s = %+v, want status %s reason %s at generation %d", typ, c, status, reason, kv.Generation)
 		}
 	}
+	h.expectActionFailed(metav1.ConditionFalse, ReasonActionSucceeded)
+}
+
+// expectActionFailed checks the ActionFailed condition; the message must
+// contain each of contains.
+func (h *harness) expectActionFailed(status metav1.ConditionStatus, reason string, contains ...string) {
+	h.t.Helper()
+	kv := h.cluster()
+	c := meta.FindStatusCondition(kv.Status.Conditions, ConditionActionFailed)
+	if c == nil || c.Status != status || c.Reason != reason || c.ObservedGeneration != kv.Generation || c.Message == "" {
+		h.t.Fatalf("condition %s = %+v, want status %s reason %s at generation %d", ConditionActionFailed, c, status, reason, kv.Generation)
+	}
+	for _, s := range contains {
+		if !strings.Contains(c.Message, s) {
+			h.t.Fatalf("condition %s message %q does not contain %q", ConditionActionFailed, c.Message, s)
+		}
+	}
+}
+
+// reconcileErr calls Reconcile and returns its error.
+func (h *harness) reconcileErr() error {
+	h.t.Helper()
+	_, err := h.r.Reconcile(h.ctx, ctrl.Request{NamespacedName: h.key})
+	return err
+}
+
+// ready brings a new harness's cluster to Ready with n nodes at epoch 0.
+func (h *harness) ready(n int) {
+	h.t.Helper()
+	h.reconcile() // the ConfigMap
+	h.reconcile() // the StatefulSet
+	for i := range n {
+		h.createPod(i)
+		h.createPVC(i)
+		h.nodes.set(render.MemberID(h.cluster(), i), 0, h.members(n), true)
+	}
+	h.rolledOut(int32(n), "r1")
+	h.reconcile()
+	h.expect(kvv1.PhaseReady, planner.ReasonReady, 0, n, int32(n))
 }
 
 func conditionText(s kvv1.KVClusterStatus) string {

@@ -24,6 +24,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -76,9 +77,11 @@ type KVClusterReconciler struct {
 // +kubebuilder:rbac:groups="",resources=configmaps;services,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups="",resources=pods;persistentvolumeclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;patch
 
 // Reconcile observes the cluster, executes the planner's one action, and
-// writes the status.
+// writes the status. A failed apply or POST is recorded in the status
+// (ActionFailed, reason ApplyFailed) as well as returned.
 func (r *KVClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -90,11 +93,11 @@ func (r *KVClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil // the owned objects go with it
 	}
 
-	// The Services are fixed by the cluster's name; keeping them as
-	// rendered is not a decision.
-	for _, svc := range []*corev1.Service{render.HeadlessService(kv), render.ClientService(kv)} {
-		if err := r.apply(ctx, svc); err != nil {
-			return ctrl.Result{}, err
+	// The Services and the PodDisruptionBudget are fixed by the cluster's
+	// name; keeping them as rendered is not a decision.
+	for _, o := range []client.Object{render.HeadlessService(kv), render.ClientService(kv), render.PodDisruptionBudget(kv)} {
+		if err := r.apply(ctx, o); err != nil {
+			return ctrl.Result{}, r.recordFailure(ctx, kv, err)
 		}
 	}
 
@@ -108,11 +111,18 @@ func (r *KVClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	actErr := r.execute(ctx, kv, obs.sts, d.Action)
 	if actErr != nil {
 		log.Error(actErr, "Could not execute action", "action", d.Action.String())
+		if kvadmin.IsStatus(actErr, 409) {
+			// The node moved on (a stale epoch, or a retry of a change it
+			// holds); the next observation shows where it is.
+			actErr = nil
+		} else {
+			actErr = fmt.Errorf("%s: %w", d.Action, actErr)
+		}
 	}
-	if err := r.writeStatus(ctx, kv, d.Status); err != nil {
+	if err := r.writeStatus(ctx, kv, d.Status, actErr); err != nil {
 		return ctrl.Result{}, err
 	}
-	if actErr != nil && !kvadmin.IsStatus(actErr, 409) {
+	if actErr != nil {
 		return ctrl.Result{}, actErr
 	}
 
@@ -165,7 +175,7 @@ func (r *KVClusterReconciler) execute(ctx context.Context, kv *kvv1.KVCluster, s
 		// Replicas from the planner; the pod template as it is now (a
 		// template change is its own action), or the spec's for a new
 		// StatefulSet.
-		return r.apply(ctx, render.StatefulSet(templateSource(kv, sts), a.Replicas))
+		return r.apply(ctx, scaledStatefulSet(kv, sts, a.Replicas))
 	case planner.ActUpdateTemplate:
 		return r.apply(ctx, render.StatefulSet(kv, a.Replicas))
 	case planner.ActPostMembership:
@@ -175,9 +185,20 @@ func (r *KVClusterReconciler) execute(ctx context.Context, kv *kvv1.KVCluster, s
 	return fmt.Errorf("unknown action %v", a)
 }
 
+// scaledStatefulSet is sts with replicas changed and nothing else: the
+// spec's StatefulSet with the image, resources and placement sts runs now
+// (the spec's own when there is no StatefulSet yet). A placement change, like
+// an image change, waits for ActUpdateTemplate.
+func scaledStatefulSet(kv *kvv1.KVCluster, sts *appsv1.StatefulSet, replicas int32) *appsv1.StatefulSet {
+	out := render.StatefulSet(templateSource(kv, sts), replicas)
+	if sts != nil {
+		setPlacement(&out.Spec.Template.Spec, placementOf(&sts.Spec.Template.Spec))
+	}
+	return out
+}
+
 // templateSource is kv with the image and resources sts runs now (kv
-// itself when there is no StatefulSet yet), so that rendering it changes
-// replicas and nothing else.
+// itself when there is no StatefulSet yet).
 func templateSource(kv *kvv1.KVCluster, sts *appsv1.StatefulSet) *kvv1.KVCluster {
 	if sts == nil {
 		return kv
@@ -201,6 +222,7 @@ func (r *KVClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(podToCluster)).
 		Named("kvcluster").
 		Complete(r)

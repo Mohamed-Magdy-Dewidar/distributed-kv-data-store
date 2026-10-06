@@ -48,3 +48,13 @@ rules:
   - kvclusters/status
   verbs:
   - patch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch

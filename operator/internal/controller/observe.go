@@ -106,17 +106,45 @@ func statefulSetObs(kv *kvv1.KVCluster, sts *appsv1.StatefulSet) *planner.Statef
 	}
 }
 
-// templateCurrent: the node container runs the spec's image and resources,
-// the template fields the spec controls. (The rest of the template is
-// fixed by the renderer, and comparing it whole would trip over the API
-// server's defaults.)
+// templateCurrent: the pods are placed as spec.placement renders, and the
+// node container runs the spec's image and resources: the template fields
+// the spec controls. (The rest of the template is fixed by the renderer, and
+// comparing it whole would trip over the API server's defaults.)
 func templateCurrent(kv *kvv1.KVCluster, sts *appsv1.StatefulSet) bool {
+	want := render.StatefulSet(kv, 0).Spec.Template.Spec
+	if !equality.Semantic.DeepEqual(placementOf(&sts.Spec.Template.Spec), placementOf(&want)) {
+		return false
+	}
 	for _, c := range sts.Spec.Template.Spec.Containers {
 		if c.Name == "kv" {
 			return c.Image == kv.Spec.Image && equality.Semantic.DeepEqual(c.Resources, kv.Spec.Resources)
 		}
 	}
 	return false
+}
+
+// placementOf is the part of a pod spec that spec.placement controls, with
+// an empty node selector or list as nil (the API server drops them).
+func placementOf(p *corev1.PodSpec) corev1.PodSpec {
+	out := corev1.PodSpec{Affinity: p.Affinity}
+	if len(p.NodeSelector) > 0 {
+		out.NodeSelector = p.NodeSelector
+	}
+	if len(p.Tolerations) > 0 {
+		out.Tolerations = p.Tolerations
+	}
+	if len(p.TopologySpreadConstraints) > 0 {
+		out.TopologySpreadConstraints = p.TopologySpreadConstraints
+	}
+	return *out.DeepCopy()
+}
+
+// setPlacement sets the fields placementOf reads.
+func setPlacement(dst *corev1.PodSpec, from corev1.PodSpec) {
+	dst.Affinity = from.Affinity
+	dst.NodeSelector = from.NodeSelector
+	dst.Tolerations = from.Tolerations
+	dst.TopologySpreadConstraints = from.TopologySpreadConstraints
 }
 
 func podObs(ordinal int, p *corev1.Pod) planner.PodObs {

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"slices"
 
@@ -29,11 +30,51 @@ const (
 	// ConditionDegraded: the cluster is in a state the operator will not act
 	// on.
 	ConditionDegraded = "Degraded"
+	// ConditionActionFailed: the last reconcile could not carry out what it
+	// attempted (an apply, or a POST to a node): reason ApplyFailed, the
+	// error as the message. False once a reconcile carries out everything.
+	// A POST answered 409 is not a failure: the node has moved on, and the
+	// next observation shows where.
+	ConditionActionFailed = "ActionFailed"
+
+	// ActionFailed's reasons: ApplyFailed while True, ActionSucceeded
+	// while False.
+	ReasonApplyFailed     = "ApplyFailed"
+	ReasonActionSucceeded = "ActionSucceeded"
 )
 
-// writeStatus writes the planner's status through the status subresource,
-// on every reconcile, waits included.
-func (r *KVClusterReconciler) writeStatus(ctx context.Context, kv *kvv1.KVCluster, st planner.Status) error {
+// actionFailed is the ActionFailed condition for the last reconcile's
+// error (nil: none).
+func actionFailed(kv *kvv1.KVCluster, err error) metav1.Condition {
+	c := metav1.Condition{
+		Type:               ConditionActionFailed,
+		Status:             metav1.ConditionFalse,
+		Reason:             ReasonActionSucceeded,
+		Message:            "The last reconcile carried out everything it attempted",
+		ObservedGeneration: kv.Generation,
+	}
+	if err != nil {
+		c.Status, c.Reason, c.Message = metav1.ConditionTrue, ReasonApplyFailed, err.Error()
+	}
+	return c
+}
+
+// recordFailure records err, an apply that failed before the planner ran,
+// as the ActionFailed condition, leaving the rest of the status as it was,
+// and returns err.
+func (r *KVClusterReconciler) recordFailure(ctx context.Context, kv *kvv1.KVCluster, err error) error {
+	orig := kv.DeepCopy()
+	meta.SetStatusCondition(&kv.Status.Conditions, actionFailed(kv, err))
+	if perr := r.Status().Patch(ctx, kv, client.MergeFrom(orig)); perr != nil {
+		return errors.Join(err, perr)
+	}
+	return err
+}
+
+// writeStatus writes the planner's status, and actErr (nil: none) as the
+// ActionFailed condition, through the status subresource, on every
+// reconcile, waits included.
+func (r *KVClusterReconciler) writeStatus(ctx context.Context, kv *kvv1.KVCluster, st planner.Status, actErr error) error {
 	orig := kv.DeepCopy()
 	s := &kv.Status
 	s.ObservedGeneration = kv.Generation
@@ -71,6 +112,7 @@ func (r *KVClusterReconciler) writeStatus(ctx context.Context, kv *kvv1.KVCluste
 			ObservedGeneration: kv.Generation,
 		})
 	}
+	meta.SetStatusCondition(&s.Conditions, actionFailed(kv, actErr))
 	return r.Status().Patch(ctx, kv, client.MergeFrom(orig))
 }
 

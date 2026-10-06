@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -78,6 +79,16 @@ func TestManagerWatches(t *testing.T) {
 		h.createPod(i)
 	}
 	eventually(t, 10*time.Second, "Ready after the pods appeared", func() bool { return status().Phase == kvv1.PhaseReady })
+
+	// A deleted PodDisruptionBudget comes back through its own watch.
+	pdbKey := types.NamespacedName{Namespace: ns, Name: "kv"}
+	pdb := &policyv1.PodDisruptionBudget{}
+	must(t, admin.Get(ctx, pdbKey, pdb))
+	must(t, admin.Delete(ctx, pdb))
+	eventually(t, 10*time.Second, "the PodDisruptionBudget recreated", func() bool {
+		again := &policyv1.PodDisruptionBudget{}
+		return admin.Get(ctx, pdbKey, again) == nil && again.UID != pdb.UID
+	})
 }
 
 func planner5m() planner.Config {
@@ -131,6 +142,7 @@ func TestRoleAllowsTheInformers(t *testing.T) {
 	for _, list := range []client.ObjectList{
 		&kvv1.KVClusterList{}, &appsv1.StatefulSetList{}, &corev1.ConfigMapList{},
 		&corev1.ServiceList{}, &corev1.PodList{}, &corev1.PersistentVolumeClaimList{},
+		&policyv1.PodDisruptionBudgetList{},
 	} {
 		name := fmt.Sprintf("%T", list)
 		if err := c.List(t.Context(), list); err != nil {
