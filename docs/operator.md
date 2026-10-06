@@ -9,7 +9,9 @@ handoff, and it picks up where it left off after a restart.
 
 It was written and measured on the kind cluster of
 [kubernetes.md](kubernetes.md) (Kubernetes 1.35, Docker Desktop on WSL2),
-at 6 replicas, the size of the GKE target.
+at 6 replicas, the size of the GKE target. The settings for GKE
+([Placement and GKE](#placement-and-gke)) are rendered and tested, but have
+not been run on GKE yet.
 
 | Component | Version |
 |---|---|
@@ -71,7 +73,9 @@ kv     6          6       0       Ready     28s
 ```
 
 The sample is `kv` with 6 replicas and the image `kvnode:dev`; everything
-else is defaulted:
+else is defaulted. (That is the kind sample. The GKE one,
+`kvstore_v1alpha1_kvcluster_gke.yaml` next to it, is described in
+[Placement and GKE](#placement-and-gke).)
 
 | Field | Default | Changeable |
 |---|---|---|
@@ -81,6 +85,7 @@ else is defaulted:
 | `spec.storage` (`size`, `storageClassName`) | 1Gi, the default class | no: a StatefulSet's volume templates are immutable |
 | `spec.resources` | requests 50m / 64Mi, limit 256Mi memory (measured, see [kubernetes.md](kubernetes.md#resources)) | yes: rolling update while stable |
 | `spec.drainTimeout` | 30m | yes |
+| `spec.placement` (`onePodPerNode`, `zoneSpread`, `nodeSelector`, `tolerations`) | none: the scheduler places the pods freely | yes: rolling update while stable; see [Placement and GKE](#placement-and-gke) |
 
 The cluster's name becomes the StatefulSet's and the Services' names and
 every pod's DNS name, so it must be a DNS-1035 label of at most 52
@@ -106,12 +111,14 @@ From a cluster `kv` in namespace `kvstore`:
 | ConfigMap `kv-config` | The node config, as in `deploy/k8s/configmap.yaml`, with the membership the cluster holds. |
 | Service `kv` | Headless: each pod's DNS name, not-ready addresses published. |
 | Service `kv-client` | gRPC (7000) only, to ready pods. |
-| StatefulSet `kv` | As in `deploy/k8s/statefulset.yaml`, with the spec's replicas, image, resources and storage. |
+| StatefulSet `kv` | As in `deploy/k8s/statefulset.yaml`, with the spec's replicas, image, resources, storage and placement. |
+| PodDisruptionBudget `kv` | At most one of the pods evicted at a time (`maxUnavailable: 1`); see [the PodDisruptionBudget](#the-poddisruptionbudget). |
 
-For `kv` in `kvstore` at 6 replicas they are the objects in `deploy/k8s/`,
-except for the owner references and the `app.kubernetes.io/managed-by` and
-`app.kubernetes.io/instance` labels; a test renders them and compares field
-by field. The intervals and timeouts in the ConfigMap are today's
+For `kv` in `kvstore` at 10 replicas, without `placement`, the first four
+are the objects in `deploy/k8s/`, except for the owner references and the
+`app.kubernetes.io/managed-by` and `app.kubernetes.io/instance` labels; a
+test renders them and compares field by field. `deploy/k8s/` has no
+PodDisruptionBudget. The intervals and timeouts in the ConfigMap are today's
 `deploy/k8s/configmap.yaml` values.
 
 The operator writes them by server-side apply, as the field manager
@@ -142,6 +149,145 @@ Likewise, do not `POST /admin/membership` by hand while the operator manages
 the cluster: a membership the operator did not produce makes it Degraded
 (below), and it stops acting.
 
+## Placement and GKE
+
+`spec.placement` is off unless set, and the kind sample leaves it out. Each
+setting is separate:
+
+| Setting | What the pods get |
+|---|---|
+| `onePodPerNode: true` | A required pod anti-affinity on `kubernetes.io/hostname`, selecting `app.kubernetes.io/name=kvstore`: no two of the cluster's pods on one node. |
+| `zoneSpread: true` | A topology spread constraint on `topology.kubernetes.io/zone`, `maxSkew: 1`, `whenUnsatisfiable: DoNotSchedule`, same selector: the zones' pod counts differ by at most one, or the pod waits. |
+| `nodeSelector` | The node selector, as given. |
+| `tolerations` | The tolerations, as given. The CRD checks them as a pod would (the operator, the effect, no value with `Exists`, an empty key only with `Exists`, `tolerationSeconds` only with `NoExecute`), except for label syntax: a malformed key passes, fails when the StatefulSet is applied, and shows as [`ActionFailed`](#conditions). |
+
+A placement change is a pod template change, carried out like an image
+change: only while the cluster is stable, before any change of replicas, and
+rolled out one pod at a time. A scale keeps the placement the pods run.
+
+### On kind
+
+Leave placement out. The kind node has no `topology.kubernetes.io/zone`
+label, and the scheduler bypasses nodes that lack a spread constraint's key:
+"the incoming Pod has no chances to be scheduled onto this kind of nodes"
+([Pod Topology Spread Constraints](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/),
+"Implicit conventions"). With `zoneSpread`, every pod stays Pending; with
+`onePodPerNode` on the single node, all but one do. Either way the cluster
+turns `Degraded` with `PodUnavailable` after the 2-minute grace period.
+
+### The PodDisruptionBudget
+
+It is always created, also on kind. It allows one eviction at a time among
+the cluster's pods (`maxUnavailable: 1`), and none while any of them is
+unready: with N=3 and W=R=2, one node down leaves every key a quorum.
+
+It applies to evictions only (`kubectl drain`, GKE's node upgrades): "deleting
+deployments or pods bypasses Pod Disruption Budgets", and StatefulSets "are
+not limited by PDBs when doing rolling upgrades"
+([Disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)).
+So it never holds up the operator, whose scale-downs (D4) and template
+rollouts are the StatefulSet's own deletions. On kind nothing evicts: there
+is one node and it is never drained, and the e2e deletes only pods the
+budget does not select (the operator's and the writers').
+
+On GKE, node upgrades drain "respecting PodDisruptionBudget and
+GracefulTerminationPeriod settings for up to one hour. After one hour, any
+remaining Pods are forcefully evicted"
+([node pool upgrade strategies](https://cloud.google.com/kubernetes-engine/docs/concepts/node-pool-upgrade-strategies)).
+A scale-up in progress (a new pod not ready yet) makes an upgrade wait. With
+`onePodPerNode` an evicted pod needs a free node to come back on; the surge
+upgrade (GKE's default) provisions a new node before it drains an old one.
+
+### Nodes: one per pod, and a free one to scale up
+
+With `onePodPerNode`, the pool needs at least as many schedulable nodes as
+replicas, and **a scale-up needs a free node first**: U2 creates the new
+pod, which schedules only on a node without one of the cluster's pods (and,
+with `zoneSpread`, in a zone with the fewest pods). The node counts of a
+regional node pool are per zone: `--num-nodes 2` in a three-zone region is 6
+nodes, as are the autoscaler's `--min-nodes` and `--max-nodes`
+(`--total-min-nodes` and `--total-max-nodes` count the whole pool). The
+intended setup is the cluster autoscaler on the database pool: the new pod,
+Pending, is what makes it add a node.
+
+If no node is free (no autoscaler, or the pool is at its maximum), the new
+pod stays Pending, and `kubectl -n kvstore describe pod kv-6` says why
+(`didn't match pod anti-affinity rules`, `didn't match pod topology spread
+constraints`). The KVCluster shows `Scaling` with `WaitingForEpoch` (the
+ConfigMap names kv-6; nothing has adopted its epoch yet), then, 2 minutes
+after the pod was created, `Degraded` with `PodUnavailable`: `kv-6 has been
+not ready for 2m…`. It acts on nothing else until then. Once a node is added
+the pod schedules and the scale-up finishes on its own; or roll it back as in
+[A scale-up that cannot start](#a-scale-up-that-cannot-start). An autoscaler
+takes minutes to add a node, so a scale-up can pass through
+`Degraded`/`PodUnavailable` on its way; it clears when the pod is ready.
+
+### Losing a node
+
+With `onePodPerNode`, `zoneSpread` and zonal disks (`standard-rwo` is a
+zonal persistent disk), a pod whose node is lost can come back only on a
+free node in the same zone: its volume cannot leave the zone, and the
+anti-affinity rules out every node that already has a pod. With no spare
+node it stays Pending until the node is replaced, by auto-repair (on by
+default for new Standard node pools) or by the autoscaler. The StatefulSet
+does not even replace a pod whose node stopped answering until that node is
+gone, or the pod is force-deleted. **Expect minutes, not the seconds measured
+on kind** (a replacement pod Ready 1.6-2.4s after the old one died, in
+[kubernetes.md](kubernetes.md#losing-a-pod)).
+
+Meanwhile the cluster serves with one node down (every key keeps a quorum),
+writes for that node become hints, and the operator shows `WaitingForPods`,
+then `Degraded`/`PodUnavailable` after 2 minutes, and starts no membership
+change until the pod is back.
+
+### Zones and keys
+
+Zone spread places pods, not keys. The ring picks a key's three owners
+without knowing zones, so with 6 pods over 3 zones some keys have two or all
+three replicas in one zone, and losing that zone takes their quorum. Zone
+spread limits how much a zone outage takes; it does not make the cluster
+survive one.
+
+### The GKE sample
+
+`operator/config/samples/kvstore_v1alpha1_kvcluster_gke.yaml`: `kv`, 6
+replicas, every placement setting, for a dedicated node pool named `kvstore`
+tainted `dedicated=kvstore:NoSchedule`. It is not in the samples'
+`kustomization.yaml`, since it is the same KVCluster as the kind sample.
+
+- **Image:** push `kvnode` (and the operator image) to Artifact Registry and
+  put the path in `spec.image` (and in place of `controller:latest`, as in
+  [Install](#install)).
+- **Storage:** `storageClassName: standard-rwo`, the balanced persistent
+  disk class GKE installs with the Compute Engine persistent disk CSI driver.
+  It is the default class on Autopilot clusters, but "for Standard clusters,
+  the default StorageClass uses the Kubernetes in-tree gcePersistentDisk
+  volume plugin"
+  ([persistent disk CSI driver](https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/gce-pd-csi-driver)),
+  so it is named rather than left to the default. It binds
+  `WaitForFirstConsumer`, so each disk is created in the zone its pod was
+  scheduled to, which zone spread needs. `size: 10Gi` is the smallest
+  balanced disk. Storage cannot change after creation.
+- **The node pool**, in a regional Standard cluster (2 nodes per zone, so 6,
+  and up to 3 per zone for scale-ups):
+
+  ```sh
+  gcloud container node-pools create kvstore \
+    --cluster CLUSTER --region REGION \
+    --num-nodes 2 \
+    --node-taints dedicated=kvstore:NoSchedule \
+    --enable-autoscaling --min-nodes 2 --max-nodes 3
+  ```
+
+  GKE labels every node of the pool `cloud.google.com/gke-nodepool:
+  kvstore`, the sample's node selector. The taint keeps other workloads off
+  it; the operator itself runs in another pool.
+
+```sh
+kubectl create namespace kvstore
+kubectl -n kvstore apply -f operator/config/samples/kvstore_v1alpha1_kvcluster_gke.yaml
+```
+
 ## Status
 
 ```sh
@@ -164,7 +310,7 @@ kubectl -n kvstore get kvc kv -o yaml
 |---|---|
 | `Pending` | Being created: the ConfigMap, the StatefulSet, the pods starting. |
 | `Ready` | Every pod is ready and answering, all at one epoch with the ConfigMap's membership, every handoff done, the StatefulSet rolled out, and replicas as in the spec. |
-| `Scaling` | A membership change, or an image or resources rollout, is in progress. |
+| `Scaling` | A membership change, or an image, resources or placement rollout, is in progress. |
 | `DrainBlocked` | A node being removed has not drained within `drainTimeout`. The operator keeps waiting; it never removes a node that has not drained. |
 | `Degraded` | The cluster is in a state the operator's own steps cannot produce, or a pod has been unavailable for longer than the 2-minute grace period. The operator does nothing until that changes. |
 
@@ -173,9 +319,10 @@ was (with reason `WaitingForPods`) until the grace period runs out.
 
 ### Conditions
 
-Each condition carries the same `reason` and `message`: the situation, in the
-operator's words (for example `Removing kv-6: draining at epoch 4: 312 keys
-still to hand off`).
+The first four conditions follow the phase, and each carries the same
+`reason` and `message`: the situation, in the operator's words (for example
+`Removing kv-6: draining at epoch 4: 312 keys still to hand off`).
+`ActionFailed` is separate, with reasons of its own.
 
 | Condition | True when the phase is |
 |---|---|
@@ -183,6 +330,16 @@ still to hand off`).
 | `Progressing` | `Pending` or `Scaling` |
 | `DrainBlocked` | `DrainBlocked` |
 | `Degraded` | `Degraded` |
+
+| Condition | Status, reason and message |
+|---|---|
+| `ActionFailed` | `True`, reason `ApplyFailed`, when the last reconcile could not carry out what it attempted: an apply the API server rejected (a Service, the PodDisruptionBudget, the ConfigMap, the StatefulSet) or a POST to a node that failed (refused, or not answered). The message names the action and the error, for example `UpdateTemplate(6): apply StatefulSet kv: … tolerations …`. `False`, reason `ActionSucceeded`, once a reconcile carries out everything it attempts. A node's 409 is not a failure: the node has moved on, and the next reconcile sees where. |
+
+The phase says where the cluster is; `ActionFailed` says the operator could
+not move it. The operator retries a failed action (with backoff), and the
+condition stays `True` while it keeps failing. When a Service or the
+PodDisruptionBudget fails to apply, the reconcile stops before the planner
+runs, and the rest of the status is left as last written.
 
 | Reason | Situation |
 |---|---|
@@ -197,7 +354,7 @@ still to hand off`).
 | `WaitingForPodRemoval`, `WaitingForVolumeRemoval` | D5: the removed pod and its volume are not gone yet. |
 | `WaitingForOldVolume` | A scale-up waits for an earlier incarnation's pod or volume at that ordinal. |
 | `WaitingForPods` | A pod is not ready or not answering (within the grace period). |
-| `RollingUpdate` | The spec's image or resources are being applied, or rolled out. |
+| `RollingUpdate` | The spec's image, resources or placement are being applied, or rolled out. |
 | `Ready` | Stable at the spec. |
 | `AddressMismatch`, `MembershipConflict`, `UnexplainedDivergence`, `ConfigMapMissing`, `ConfigMapUnexpected`, `PodUnavailable` | Degraded: see [Degraded](#degraded). |
 
@@ -241,8 +398,9 @@ ConfigMap's epoch.
 
 - A spec change in the middle of a step does not interrupt it: the step in
   progress finishes, and the next change starts from a stable cluster.
-- An image or resources change is applied only from a stable cluster, and
-  before any change of replicas; a scale keeps the pod template the pods run.
+- An image, resources or placement change is applied only from a stable
+  cluster, and before any change of replicas; a scale keeps the pod template
+  the pods run.
 - Every POST and every ConfigMap the operator writes carries the member
   strings the pods returned, never ones rebuilt from the spec.
 
@@ -270,7 +428,7 @@ in the middle of a change (`operator/internal/planner/sim_test.go`):
    different membership at its epoch.
 5. **No POST is at an epoch at or below one the cluster already holds.**
 6. **No action while Degraded.**
-7. **An image or resources change is applied only while stable.**
+7. **A pod template change (image, resources, placement) is applied only while stable.**
 
 ## Degraded
 
@@ -351,11 +509,11 @@ In Git Bash, prefix it with `MSYS_NO_PATHCONV=1`, or Git Bash rewrites
 
 | Package | What it covers |
 |---|---|
-| `api/v1alpha1` | Every default and validation rule (CEL) in a real kube-apiserver. |
-| `internal/render` | The owned objects against `deploy/k8s/` field by field, allowing only a declared list of differences; another name and namespace; the ConfigMap rendered from the membership passed in. |
+| `api/v1alpha1` | Every default and validation rule (CEL) in a real kube-apiserver, and both samples. |
+| `internal/render` | The owned objects against `deploy/k8s/` field by field, allowing only a declared list of differences; another name and namespace; the ConfigMap rendered from the membership passed in; every placement rule and the PodDisruptionBudget. |
 | `internal/kvadmin` | The admin API client against the JSON contract fixtures in `internal/app/testdata/admin` (which the database module checks against a real node); deadlines; unknown fields. |
 | `internal/planner` | Every step in table tests; the operator crashing after each step of each scale path; the simulator above. |
-| `internal/controller` | envtest, as a service account bound to the generated RBAC role, against fake nodes with the admin API's semantics: a full 3 → 4 → 3, drain blocked, a pod unreachable past the grace period, a hand-scaled StatefulSet, an image rollout, and the watches. |
+| `internal/controller` | envtest, as a service account bound to the generated RBAC role, against fake nodes with the admin API's semantics: a full 3 → 4 → 3, drain blocked, a pod unreachable past the grace period, a hand-scaled StatefulSet, an image rollout, placement held back until the cluster is stable, the PodDisruptionBudget, failed applies and POSTs in `ActionFailed`, and the watches. |
 
 The end-to-end test runs on the kind cluster from the host
 (`operator/test/e2e`, build tag `e2e`):

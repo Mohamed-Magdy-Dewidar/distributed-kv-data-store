@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/yaml"
 
 	kvv1 "github.com/Mohamed-Magdy-Dewidar/distributed-kv-data-store/operator/api/v1alpha1"
 )
@@ -323,4 +324,39 @@ func TestScaleSubresource(t *testing.T) {
 		t.Fatalf("replicas after scale = %d, want 11", got.Spec.Replicas)
 	}
 	wantInvalid(t, scale(2), errReplicasBelowN)
+}
+
+// TestSamples decodes every sample strictly (an unknown field fails) and
+// creates it, so the defaults and CEL rules apply. The kind sample has no
+// placement; the GKE sample sets every placement setting.
+func TestSamples(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", "config", "samples", "kvstore_v1alpha1_kvcluster*.yaml"))
+	if err != nil || len(files) != 2 {
+		t.Fatalf("samples = %v (%v), want the kind and the GKE sample", files, err)
+	}
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			raw, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := &kvv1.KVCluster{}
+			if err := yaml.UnmarshalStrict(raw, c); err != nil {
+				t.Fatal(err)
+			}
+			gke := strings.HasSuffix(f, "_gke.yaml")
+			p := c.Spec.Placement
+			switch {
+			case !gke && p != nil:
+				t.Errorf("the kind sample sets placement %+v: on kind, pods would stay Pending", p)
+			case gke && (p == nil || !p.OnePodPerNode || !p.ZoneSpread || len(p.NodeSelector) == 0 || len(p.Tolerations) == 0):
+				t.Errorf("the GKE sample's placement = %+v, want every setting", p)
+			}
+			nameSeq++
+			c.Name, c.Namespace = fmt.Sprintf("sample%d", nameSeq), "default"
+			if err := k8s.Create(ctx(t), c); err != nil {
+				t.Fatalf("rejected: %v", err)
+			}
+		})
+	}
 }

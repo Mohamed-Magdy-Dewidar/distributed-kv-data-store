@@ -1,0 +1,38 @@
+apiVersion: kvstore.dewidar.dev/v1alpha1
+kind: KVCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: kvstore-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: kv
+spec:
+  # The GKE target: 6 nodes, each on its own node of a dedicated, tainted
+  # node pool, spread over the region's zones. Not in kustomization.yaml:
+  # it is the same KVCluster as the kind sample, and the two would collide.
+  # See "Placement and GKE" in docs/operator.md, which also says what this
+  # needs from the cluster (the node pool, enough nodes, the autoscaler).
+  replicas: 6
+  # Push the node image to Artifact Registry and put its path here.
+  image: REGION-docker.pkg.dev/PROJECT/REPOSITORY/kvnode:TAG
+  storage:
+    # standard-rwo: GKE's balanced persistent disk class (Compute Engine
+    # persistent disk CSI driver), installed on every cluster with the
+    # driver. It is the default class on Autopilot but not on Standard, so
+    # it is named here. It binds WaitForFirstConsumer, so each disk is
+    # created in the zone its pod was scheduled to. 10Gi is the smallest
+    # balanced disk. Storage cannot change after creation.
+    size: 10Gi
+    storageClassName: standard-rwo
+  placement:
+    onePodPerNode: true
+    zoneSpread: true
+    # The node pool's name: GKE labels every node with it.
+    nodeSelector:
+      cloud.google.com/gke-nodepool: kvstore
+    # The pool's taint (--node-taints=dedicated=kvstore:NoSchedule), which
+    # keeps everything else off it.
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: kvstore
+        effect: NoSchedule
