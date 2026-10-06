@@ -5,6 +5,7 @@
 | [running-locally.md](running-locally.md) | Start a 3-node cluster from `examples/local`, read and write with grpcurl, work with siblings, and call the admin API. |
 | [kubernetes.md](kubernetes.md) | The manual path: run a 10-node cluster on kind from `deploy/k8s/`: setup, deploy, and measured results for pod loss, rolling restarts, scaling up and down, and resource use. |
 | [operator.md](operator.md) | The KVCluster operator: install, use, phases and conditions, how it carries out a membership change, its invariants, manual recovery, and measured end-to-end results at 6 replicas. |
+| [gke.md](gke.md) | The GKE cluster in `infra/gke/` (Terraform): what it creates and why, quotas, cost per hour, and a session from `terraform apply` to `terraform destroy`. |
 | [membership.md](membership.md) | The procedure for adding a node, removing one, and removing a crashed one, and what the admin API's answers mean. |
 | [observability.md](observability.md) | The metrics each node serves on `/metrics`, and the local Prometheus and Grafana in `deploy/observability/`: how to run them, the dashboard, and measured latencies. |
 | [testing.md](testing.md) | What the unit and end-to-end tests cover, how to run them, where they have been run, and what the crash tests do not prove. |

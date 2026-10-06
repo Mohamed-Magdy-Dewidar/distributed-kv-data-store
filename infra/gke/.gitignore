@@ -1,0 +1,14 @@
+# State: local, never committed (it holds the cluster's endpoint and CA).
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+crash.*.log
+*.tfplan
+# Variables: example.tfvars is the template; the filled-in copy stays here.
+*.tfvars
+!example.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

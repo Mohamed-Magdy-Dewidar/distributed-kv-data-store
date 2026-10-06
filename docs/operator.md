@@ -252,7 +252,8 @@ survive one.
 
 `operator/config/samples/kvstore_v1alpha1_kvcluster_gke.yaml`: `kv`, 6
 replicas, every placement setting, for a dedicated node pool named `kvstore`
-tainted `dedicated=kvstore:NoSchedule`. It is not in the samples'
+tainted `dedicated=kvstore:NoSchedule`. [gke.md](gke.md) creates such a
+cluster with Terraform. It is not in the samples'
 `kustomization.yaml`, since it is the same KVCluster as the kind sample.
 
 - **Image:** push `kvnode` (and the operator image) to Artifact Registry and
