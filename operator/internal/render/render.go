@@ -1,8 +1,9 @@
 // Package render builds the objects a KVCluster owns: the node ConfigMap, the
-// headless and client Services, and the StatefulSet. For a cluster named kv in
-// namespace kvstore at its initial membership, they are the objects in
-// deploy/k8s/ (see the golden test), plus the operator's labels and owner
-// reference.
+// headless and client Services, the StatefulSet and the PodDisruptionBudget.
+// For a cluster named kv in namespace kvstore at its initial membership,
+// without spec.placement, the first four are the objects in deploy/k8s/ (see
+// the golden test), plus the operator's labels and owner reference;
+// deploy/k8s/ has no PodDisruptionBudget.
 //
 // Every member address is built by MemberAddress, from PodHost. The nodes
 // compare addresses as strings, so the ConfigMap and every POST
@@ -18,6 +19,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
@@ -126,6 +128,9 @@ func ServiceName(c *kvv1.KVCluster) string       { return c.Name }
 func ClientServiceName(c *kvv1.KVCluster) string { return c.Name + "-client" }
 func StatefulSetName(c *kvv1.KVCluster) string   { return c.Name }
 
+// PodDisruptionBudgetName names the PodDisruptionBudget.
+func PodDisruptionBudgetName(c *kvv1.KVCluster) string { return c.Name }
+
 // ConfigMap renders the node config every pod reads at startup, for the
 // membership (epoch, members) — the one the cluster holds, or the one a new
 // node is to start with — not for spec.replicas. Every member must be one of
@@ -220,6 +225,69 @@ func ClientService(c *kvv1.KVCluster) *corev1.Service {
 	}
 }
 
+// PodDisruptionBudget lets an eviction (a node drain, a node upgrade) take
+// at most one pod at a time: with N=3 and W=R=2, every key keeps a quorum.
+// Evictions are refused while any pod is unready. It does not limit the
+// StatefulSet's own deletions (a scale-down, a rolling update), which do
+// not go through the eviction API.
+func PodDisruptionBudget(c *kvv1.KVCluster) *policyv1.PodDisruptionBudget {
+	return &policyv1.PodDisruptionBudget{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "policy/v1", Kind: "PodDisruptionBudget"},
+		ObjectMeta: objectMeta(c, PodDisruptionBudgetName(c), labels(c)),
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: new(intstr.FromInt32(1)),
+			Selector:       &metav1.LabelSelector{MatchLabels: selectorLabels()},
+		},
+	}
+}
+
+// affinity is spec.placement.onePodPerNode: no two of the cluster's pods
+// on one node.
+func affinity(p *kvv1.Placement) *corev1.Affinity {
+	if p == nil || !p.OnePodPerNode {
+		return nil
+	}
+	return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: selectorLabels()},
+			TopologyKey:   corev1.LabelHostname,
+		}},
+	}}
+}
+
+// topologySpread is spec.placement.zoneSpread: the zones' pod counts differ
+// by at most one, or the pod waits. The scheduler never chooses a node
+// without the zone label for these pods.
+func topologySpread(p *kvv1.Placement) []corev1.TopologySpreadConstraint {
+	if p == nil || !p.ZoneSpread {
+		return nil
+	}
+	return []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       corev1.LabelTopologyZone,
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector:     &metav1.LabelSelector{MatchLabels: selectorLabels()},
+	}}
+}
+
+func nodeSelector(p *kvv1.Placement) map[string]string {
+	if p == nil {
+		return nil
+	}
+	return maps.Clone(p.NodeSelector)
+}
+
+func tolerations(p *kvv1.Placement) []corev1.Toleration {
+	if p == nil || p.Tolerations == nil {
+		return nil
+	}
+	out := make([]corev1.Toleration, len(p.Tolerations))
+	for i := range p.Tolerations {
+		p.Tolerations[i].DeepCopyInto(&out[i])
+	}
+	return out
+}
+
 // StatefulSet renders the node StatefulSet with the given number of pods.
 // The planner chooses replicas (one node per membership change); the rest
 // comes from the spec. The reasons behind each setting are in
@@ -244,6 +312,10 @@ func StatefulSet(c *kvv1.KVCluster, replicas int32) *appsv1.StatefulSet {
 				ObjectMeta: metav1.ObjectMeta{Labels: labels(c)},
 				Spec: corev1.PodSpec{
 					TerminationGracePeriodSeconds: new(int64(60)),
+					Affinity:                      affinity(c.Spec.Placement),
+					TopologySpreadConstraints:     topologySpread(c.Spec.Placement),
+					NodeSelector:                  nodeSelector(c.Spec.Placement),
+					Tolerations:                   tolerations(c.Spec.Placement),
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot:        new(true),
 						RunAsUser:           new(int64(65532)),

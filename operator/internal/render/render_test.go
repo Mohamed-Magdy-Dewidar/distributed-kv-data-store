@@ -312,6 +312,7 @@ func TestFollowsNameAndNamespace(t *testing.T) {
 	headless := objs[fileHeadless].(*corev1.Service)
 	client := objs[fileClient].(*corev1.Service)
 	sts := StatefulSet(c, 5)
+	pdb := PodDisruptionBudget(c)
 
 	for i := range 5 {
 		if got, want := MemberAddress(c, i), fmt.Sprintf("db-%d.db.prod.svc.cluster.local:7000", i); got != want {
@@ -342,13 +343,16 @@ func TestFollowsNameAndNamespace(t *testing.T) {
 		"instance label":  {sts.Labels["app.kubernetes.io/instance"], "db"},
 		"pod instance":    {sts.Spec.Template.Labels["app.kubernetes.io/instance"], "db"},
 		"ConfigMap label": {cm.Labels["app.kubernetes.io/instance"], "db"},
+		"PDB":             {pdb.Name, "db"},
+		"PDB ns":          {pdb.Namespace, ns},
+		"PDB label":       {pdb.Labels["app.kubernetes.io/instance"], "db"},
 	}
 	for what, g := range names {
 		if g[0] != g[1] {
 			t.Errorf("%s = %q, want %q", what, g[0], g[1])
 		}
 	}
-	for _, o := range []metav1.Object{cm, headless, client, sts} {
+	for _, o := range []metav1.Object{cm, headless, client, sts, pdb} {
 		refs := o.GetOwnerReferences()
 		if len(refs) != 1 || refs[0].Name != "db" || refs[0].UID != c.UID || refs[0].Controller == nil || !*refs[0].Controller {
 			t.Errorf("%s owner references = %+v, want the controller reference to db", o.GetName(), refs)
@@ -361,6 +365,7 @@ func TestFollowsNameAndNamespace(t *testing.T) {
 		"StatefulSet selector": sts.Spec.Selector.MatchLabels,
 		"headless selector":    headless.Spec.Selector,
 		"client selector":      client.Spec.Selector,
+		"PDB selector":         pdb.Spec.Selector.MatchLabels,
 	} {
 		if len(sel) == 0 {
 			t.Errorf("%s is empty", what)
@@ -375,6 +380,7 @@ func TestFollowsNameAndNamespace(t *testing.T) {
 	// Nothing of kv/kvstore may be left in any string, except the label
 	// values that name the application and the operator.
 	allowed := map[string]bool{"kvstore": true, ManagerName: true, "kvnode:dev": true}
+	objs["pdb"] = pdb
 	for file, o := range objs {
 		m := toMap(t, o)
 		if file == fileSTS { // the container's name is "kv" whatever the cluster's
@@ -594,5 +600,149 @@ func TestParseConfigMapRejects(t *testing.T) {
 				t.Error("accepted")
 			}
 		})
+	}
+}
+
+// gkePlacement is everything spec.placement can set.
+func gkePlacement() *kvv1.Placement {
+	return &kvv1.Placement{
+		OnePodPerNode: true,
+		ZoneSpread:    true,
+		NodeSelector:  map[string]string{"cloud.google.com/gke-nodepool": "kvstore"},
+		Tolerations: []corev1.Toleration{
+			{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "kvstore", Effect: corev1.TaintEffectNoSchedule},
+		},
+	}
+}
+
+// TestStatefulSetPlacement renders every placement setting and checks the
+// exact rules: a required anti-affinity per hostname and a DoNotSchedule
+// zone spread, both selecting the StatefulSet's own pods.
+func TestStatefulSetPlacement(t *testing.T) {
+	c := cluster("kv", "kvstore", 6)
+	c.Spec.Placement = gkePlacement()
+	sts := StatefulSet(c, 6)
+	pod := sts.Spec.Template.Spec
+	own := &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "kvstore"}}
+	if !reflect.DeepEqual(own, sts.Spec.Selector) {
+		t.Fatalf("StatefulSet selector = %v; the placement rules below must select the same pods", sts.Spec.Selector)
+	}
+
+	wantAffinity := &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+			LabelSelector: own,
+			TopologyKey:   "kubernetes.io/hostname",
+		}},
+	}}
+	if !reflect.DeepEqual(pod.Affinity, wantAffinity) {
+		t.Errorf("affinity = %+v, want %+v", pod.Affinity, wantAffinity)
+	}
+	wantSpread := []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector:     own,
+	}}
+	if !reflect.DeepEqual(pod.TopologySpreadConstraints, wantSpread) {
+		t.Errorf("topologySpreadConstraints = %+v, want %+v", pod.TopologySpreadConstraints, wantSpread)
+	}
+	if !reflect.DeepEqual(pod.NodeSelector, c.Spec.Placement.NodeSelector) {
+		t.Errorf("nodeSelector = %v, want %v", pod.NodeSelector, c.Spec.Placement.NodeSelector)
+	}
+	if !reflect.DeepEqual(pod.Tolerations, c.Spec.Placement.Tolerations) {
+		t.Errorf("tolerations = %+v, want %+v", pod.Tolerations, c.Spec.Placement.Tolerations)
+	}
+
+	// The pod spec is a copy: changing it must not change the KVCluster.
+	pod.NodeSelector["cloud.google.com/gke-nodepool"] = "other"
+	pod.Tolerations[0].Value = "other"
+	if c.Spec.Placement.NodeSelector["cloud.google.com/gke-nodepool"] != "kvstore" || c.Spec.Placement.Tolerations[0].Value != "kvstore" {
+		t.Errorf("rendering aliases spec.placement: %+v", c.Spec.Placement)
+	}
+
+	// Placement touches the pod spec's placement fields and nothing else.
+	plain := StatefulSet(cluster("kv", "kvstore", 6), 6)
+	got := sts.DeepCopy()
+	got.Spec.Template.Spec.Affinity = nil
+	got.Spec.Template.Spec.TopologySpreadConstraints = nil
+	got.Spec.Template.Spec.NodeSelector = nil
+	got.Spec.Template.Spec.Tolerations = nil
+	if !reflect.DeepEqual(got, plain) {
+		t.Error("placement changed more than the pod spec's affinity, topologySpreadConstraints, nodeSelector and tolerations")
+	}
+}
+
+// TestPlacementSettingsAreSeparate: each setting renders only its own rule,
+// and placement present with nothing set renders none.
+func TestPlacementSettingsAreSeparate(t *testing.T) {
+	for _, tt := range []struct {
+		name                            string
+		p                               *kvv1.Placement
+		affinity, spread, sel, tolerate bool
+	}{
+		{"left out", nil, false, false, false, false},
+		{"nothing set", &kvv1.Placement{}, false, false, false, false},
+		{"onePodPerNode", &kvv1.Placement{OnePodPerNode: true}, true, false, false, false},
+		{"zoneSpread", &kvv1.Placement{ZoneSpread: true}, false, true, false, false},
+		{"nodeSelector", &kvv1.Placement{NodeSelector: map[string]string{"pool": "db"}}, false, false, true, false},
+		{"tolerations", &kvv1.Placement{Tolerations: []corev1.Toleration{{Operator: corev1.TolerationOpExists}}}, false, false, false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := cluster("kv", "kvstore", 3)
+			c.Spec.Placement = tt.p
+			pod := StatefulSet(c, 3).Spec.Template.Spec
+			for what, g := range map[string][2]bool{
+				"affinity":                  {pod.Affinity != nil, tt.affinity},
+				"topologySpreadConstraints": {pod.TopologySpreadConstraints != nil, tt.spread},
+				"nodeSelector":              {pod.NodeSelector != nil, tt.sel},
+				"tolerations":               {pod.Tolerations != nil, tt.tolerate},
+			} {
+				if g[0] != g[1] {
+					t.Errorf("%s rendered = %v, want %v", what, g[0], g[1])
+				}
+			}
+		})
+	}
+}
+
+// TestPodDisruptionBudget: one eviction at a time, of the StatefulSet's
+// pods, owned by the KVCluster.
+func TestPodDisruptionBudget(t *testing.T) {
+	c := cluster("kv", "kvstore", 6)
+	pdb := PodDisruptionBudget(c)
+	got := toMap(t, pdb)
+	delete(got, "status") // never written: apply drops it
+	want := map[string]any{
+		"apiVersion": "policy/v1",
+		"kind":       "PodDisruptionBudget",
+		"metadata": map[string]any{
+			"name":      "kv",
+			"namespace": "kvstore",
+			"labels": map[string]any{
+				"app.kubernetes.io/name":       "kvstore",
+				"app.kubernetes.io/instance":   "kv",
+				"app.kubernetes.io/managed-by": "kvstore-operator",
+			},
+			"ownerReferences": []any{map[string]any{
+				"apiVersion":         "kvstore.dewidar.dev/v1alpha1",
+				"kind":               "KVCluster",
+				"name":               "kv",
+				"uid":                "uid-kv",
+				"controller":         true,
+				"blockOwnerDeletion": true,
+			}},
+		},
+		"spec": map[string]any{
+			"maxUnavailable": float64(1),
+			"selector":       map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": "kvstore"}},
+		},
+	}
+	var diffs []string
+	diff("", want, normalize(got), &diffs)
+	for _, l := range diffs {
+		t.Errorf("PodDisruptionBudget differs at %s", l)
+	}
+	if !reflect.DeepEqual(pdb.Spec.Selector, StatefulSet(c, 6).Spec.Selector) {
+		t.Errorf("selector %v is not the StatefulSet's", pdb.Spec.Selector)
 	}
 }
