@@ -73,6 +73,48 @@ type KVClusterSpec struct {
 	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="drainTimeout must be a positive duration"
 	// +optional
 	DrainTimeout metav1.Duration `json:"drainTimeout,omitzero"`
+
+	// placement constrains which nodes the pods run on. Left out, nothing
+	// is constrained, as in deploy/k8s/. A change is applied as a rolling
+	// update, only while the cluster is stable.
+	// +optional
+	Placement *Placement `json:"placement,omitempty"`
+}
+
+// Placement constrains which nodes the pods run on. Every setting is off
+// unless set.
+type Placement struct {
+	// onePodPerNode keeps every pod on its own node: a required pod
+	// anti-affinity on kubernetes.io/hostname. A pod that finds no free
+	// node stays Pending, so the cluster needs at least as many schedulable
+	// nodes as replicas, and a scale-up needs one more first.
+	// +optional
+	OnePodPerNode bool `json:"onePodPerNode,omitempty"`
+
+	// zoneSpread spreads the pods evenly over zones: a topology spread
+	// constraint on topology.kubernetes.io/zone, maxSkew 1,
+	// whenUnsatisfiable DoNotSchedule. Nodes without that label are never
+	// chosen, so on a cluster without zones (kind) every pod stays Pending.
+	// It spreads pods, not keys: a key's replicas may still share a zone.
+	// +optional
+	ZoneSpread bool `json:"zoneSpread,omitempty"`
+
+	// nodeSelector is the pods' node selector, e.g. a dedicated node pool.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// tolerations are the pods' tolerations, e.g. of a dedicated node
+	// pool's taint. The rules repeat the pod's own validation, so that a
+	// mistake is rejected here rather than when the StatefulSet is applied.
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:XValidation:rule="self.all(t, !has(t.operator) || t.operator in ['', 'Equal', 'Exists'])",message="toleration operator must be Equal or Exists"
+	// +kubebuilder:validation:XValidation:rule="self.all(t, !has(t.effect) || t.effect in ['', 'NoSchedule', 'PreferNoSchedule', 'NoExecute'])",message="toleration effect must be NoSchedule, PreferNoSchedule or NoExecute"
+	// +kubebuilder:validation:XValidation:rule="self.all(t, !has(t.operator) || t.operator != 'Exists' || !has(t.value) || t.value == '')",message="toleration value must be empty when operator is Exists"
+	// +kubebuilder:validation:XValidation:rule="self.all(t, (has(t.key) && t.key != '') || (has(t.operator) && t.operator == 'Exists'))",message="toleration operator must be Exists when key is empty"
+	// +kubebuilder:validation:XValidation:rule="self.all(t, !has(t.tolerationSeconds) || (has(t.effect) && t.effect == 'NoExecute'))",message="toleration effect must be NoExecute when tolerationSeconds is set"
+	// +listType=atomic
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
 // Replication is the cluster's replication factor and quorum sizes.

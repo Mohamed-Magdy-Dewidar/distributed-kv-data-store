@@ -71,6 +71,97 @@ spec:
                 description: image is the node image, e.g. kvnode:dev.
                 minLength: 1
                 type: string
+              placement:
+                description: |-
+                  placement constrains which nodes the pods run on. Left out, nothing
+                  is constrained, as in deploy/k8s/. A change is applied as a rolling
+                  update, only while the cluster is stable.
+                properties:
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: nodeSelector is the pods' node selector, e.g. a dedicated
+                      node pool.
+                    type: object
+                  onePodPerNode:
+                    description: |-
+                      onePodPerNode keeps every pod on its own node: a required pod
+                      anti-affinity on kubernetes.io/hostname. A pod that finds no free
+                      node stays Pending, so the cluster needs at least as many schedulable
+                      nodes as replicas, and a scale-up needs one more first.
+                    type: boolean
+                  tolerations:
+                    description: |-
+                      tolerations are the pods' tolerations, e.g. of a dedicated node
+                      pool's taint. The rules repeat the pod's own validation, so that a
+                      mistake is rejected here rather than when the StatefulSet is applied.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-type: atomic
+                    x-kubernetes-validations:
+                    - message: toleration operator must be Equal or Exists
+                      rule: self.all(t, !has(t.operator) || t.operator in ['', 'Equal',
+                        'Exists'])
+                    - message: toleration effect must be NoSchedule, PreferNoSchedule
+                        or NoExecute
+                      rule: self.all(t, !has(t.effect) || t.effect in ['', 'NoSchedule',
+                        'PreferNoSchedule', 'NoExecute'])
+                    - message: toleration value must be empty when operator is Exists
+                      rule: self.all(t, !has(t.operator) || t.operator != 'Exists'
+                        || !has(t.value) || t.value == '')
+                    - message: toleration operator must be Exists when key is empty
+                      rule: self.all(t, (has(t.key) && t.key != '') || (has(t.operator)
+                        && t.operator == 'Exists'))
+                    - message: toleration effect must be NoExecute when tolerationSeconds
+                        is set
+                      rule: self.all(t, !has(t.tolerationSeconds) || (has(t.effect)
+                        && t.effect == 'NoExecute'))
+                  zoneSpread:
+                    description: |-
+                      zoneSpread spreads the pods evenly over zones: a topology spread
+                      constraint on topology.kubernetes.io/zone, maxSkew 1,
+                      whenUnsatisfiable DoNotSchedule. Nodes without that label are never
+                      chosen, so on a cluster without zones (kind) every pod stays Pending.
+                      It spreads pods, not keys: a key's replicas may still share a zone.
+                    type: boolean
+                type: object
               replicas:
                 description: |-
                   replicas is the number of nodes. The operator changes the membership

@@ -79,6 +79,12 @@ const (
 	errStorageImmutable     = "storage is immutable"
 	errDrainTimeout         = "drainTimeout must be a positive duration"
 	errName                 = "name must be a DNS-1035 label"
+	errTolerationOperator   = "toleration operator must be Equal or Exists"
+	errTolerationEffect     = "toleration effect must be NoSchedule, PreferNoSchedule or NoExecute"
+	errTolerationValue      = "toleration value must be empty when operator is Exists"
+	errTolerationKey        = "toleration operator must be Exists when key is empty"
+	errTolerationSeconds    = "toleration effect must be NoExecute when tolerationSeconds is set"
+	errTolerationsMax       = "spec.placement.tolerations: Too many: 33: must have at most 32 items"
 )
 
 var nameSeq int
@@ -125,6 +131,9 @@ func TestDefaults(t *testing.T) {
 	}
 	if !s.Storage.Size.Equal(resource.MustParse("1Gi")) || s.Storage.StorageClassName != nil {
 		t.Errorf("storage = %+v, want size 1Gi and no class", s.Storage)
+	}
+	if s.Placement != nil {
+		t.Errorf("placement = %+v, want none: it is off unless set", s.Placement)
 	}
 	if s.DrainTimeout.Duration != 30*time.Minute {
 		t.Errorf("drainTimeout = %v, want 30m", s.DrainTimeout.Duration)
@@ -184,6 +193,25 @@ func TestCreateValidation(t *testing.T) {
 		{"name of 53 characters", func(c *kvv1.KVCluster) { c.Name = "k" + strings.Repeat("v", 52) }, errName},
 		{"name with a dot", func(c *kvv1.KVCluster) { c.Name = "kv.a" }, errName},
 		{"name starting with a digit", func(c *kvv1.KVCluster) { c.Name = "1kv" }, errName},
+		{"placement, everything set", func(c *kvv1.KVCluster) {
+			c.Spec.Placement = &kvv1.Placement{
+				OnePodPerNode: true, ZoneSpread: true,
+				NodeSelector: map[string]string{"cloud.google.com/gke-nodepool": "kvstore"},
+				Tolerations: []corev1.Toleration{
+					{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "kvstore", Effect: corev1.TaintEffectNoSchedule},
+					{Key: "dedicated", Value: "kvstore"}, // operator and effect left out: Equal, every effect
+					{Operator: corev1.TolerationOpExists},
+					{Key: "node.kubernetes.io/unreachable", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute, TolerationSeconds: new(int64(30))},
+				},
+			}
+		}, ""},
+		{"toleration operator", tolerate(corev1.Toleration{Key: "k", Operator: "In", Value: "v"}), errTolerationOperator},
+		{"toleration effect", tolerate(corev1.Toleration{Key: "k", Value: "v", Effect: "NoSchedul"}), errTolerationEffect},
+		{"toleration Exists with a value", tolerate(corev1.Toleration{Key: "k", Operator: corev1.TolerationOpExists, Value: "v"}), errTolerationValue},
+		{"toleration without key, Equal", tolerate(corev1.Toleration{Value: "v"}), errTolerationKey},
+		{"32 tolerations", tolerations(32), ""},
+		{"33 tolerations", tolerations(33), errTolerationsMax},
+		{"tolerationSeconds without NoExecute", tolerate(corev1.Toleration{Key: "k", Value: "v", Effect: corev1.TaintEffectNoSchedule, TolerationSeconds: new(int64(30))}), errTolerationSeconds},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -198,6 +226,21 @@ func TestCreateValidation(t *testing.T) {
 			}
 			wantInvalid(t, err, tt.reject)
 		})
+	}
+}
+
+// tolerate sets placement to the one toleration tl.
+func tolerate(tl corev1.Toleration) func(*kvv1.KVCluster) {
+	return func(c *kvv1.KVCluster) { c.Spec.Placement = &kvv1.Placement{Tolerations: []corev1.Toleration{tl}} }
+}
+
+// tolerations sets placement to n valid tolerations.
+func tolerations(n int) func(*kvv1.KVCluster) {
+	return func(c *kvv1.KVCluster) {
+		c.Spec.Placement = &kvv1.Placement{}
+		for i := range n {
+			c.Spec.Placement.Tolerations = append(c.Spec.Placement.Tolerations, corev1.Toleration{Key: fmt.Sprintf("k%d", i), Operator: corev1.TolerationOpExists})
+		}
 	}
 }
 
@@ -230,6 +273,8 @@ func TestUpdateValidation(t *testing.T) {
 			c.Spec.Resources.Limits[corev1.ResourceMemory] = resource.MustParse("512Mi")
 		}, ""},
 		{"drainTimeout", func(c *kvv1.KVCluster) { c.Spec.DrainTimeout = metav1.Duration{Duration: time.Hour} }, ""},
+		{"placement set", func(c *kvv1.KVCluster) { c.Spec.Placement = &kvv1.Placement{OnePodPerNode: true, ZoneSpread: true} }, ""},
+		{"placement toleration invalid", tolerate(corev1.Toleration{Key: "k", Operator: corev1.TolerationOpExists, Value: "v"}), errTolerationValue},
 		{"replication n", func(c *kvv1.KVCluster) { c.Spec.Replication.N = 5 }, errReplicationImmutable},
 		{"replication w", func(c *kvv1.KVCluster) { c.Spec.Replication.W = 3 }, errReplicationImmutable},
 		{"replication r", func(c *kvv1.KVCluster) { c.Spec.Replication.R = 1 }, errReplicationImmutable},
