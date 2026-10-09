@@ -12,6 +12,14 @@ None of this has been applied yet: `terraform validate` passes, and the
 numbers below come from Google's price list and the project's quotas, not
 from a running cluster.
 
+> **Never run `make image`, `make operator-deploy` or the operator's e2e
+> (`make operator-test-e2e`, `go test -tags e2e ./test/e2e/`) against GKE.**
+> They are for the kind cluster: they install images that exist only on
+> your machine, and the e2e deletes the KVCluster and its volumes before it
+> starts. All three refuse to run unless kubectl's context is
+> `kind-kvstore`, and the e2e names that context on every kubectl call, but
+> the GKE path is this page, not the Makefile.
+
 | Component | Version |
 |---|---|
 | Terraform | 1.16.x (`~> 1.16.0`), 64-bit |
@@ -70,6 +78,23 @@ Why these choices:
 4. **Variables**: copy `infra/gke/example.tfvars` to
    `infra/gke/terraform.tfvars` (gitignored) and set `my_ip_cidr` to your
    public address, `/32`.
+5. **gke-gcloud-auth-plugin**, which kubectl uses to authenticate to GKE:
+   `gcloud components install gke-gcloud-auth-plugin`, then
+   `gke-gcloud-auth-plugin --version`. Without it, `kubectl` fails after
+   `get-credentials`.
+6. **Your public address, at the start of every session and again before
+   the teardown.** The control plane accepts `my_ip_cidr` only; from any
+   other address kubectl is refused, and the teardown's kubectl steps
+   cannot run (the data disks would then outlive the cluster). Compare:
+
+   ```sh
+   curl -s https://checkip.amazonaws.com
+   grep my_ip_cidr infra/gke/terraform.tfvars
+   ```
+
+   If they differ, set the new address in `terraform.tfvars` and run
+   `terraform -chdir=infra/gke apply`: the plan must say `1 to change` (the
+   cluster's authorized networks, updated in place; no node restarts).
 
 ### Quotas
 
@@ -122,7 +147,12 @@ e2-standard-2 is $0.0670/h, 10% less.
 ## A session
 
 From the repository root, in Git Bash, with the `kvstore` configuration
-active. `R` is the region, `TAG` a fresh tag per build.
+active. First check your address (item 6 above). The checks below parse
+JSON with `python`.
+
+```sh
+R=europe-west1
+```
 
 1. **Create.**
 
@@ -144,25 +174,40 @@ active. `R` is the region, `TAG` a fresh tag per build.
 
    Seven nodes: two `kvstore` nodes in each of three zones, one `system`.
 
-3. **Push the images.**
+3. **Push the images**, under a tag no earlier build used, and record
+   the digests the registry gave them:
 
    ```sh
    REG=$(terraform -chdir=infra/gke output -raw registry)
    $(terraform -chdir=infra/gke output -raw configure_docker)   # once per machine
-   docker build -t $REG/kvnode:TAG .
-   docker build -t $REG/kvstore-operator:TAG operator
-   docker push $REG/kvnode:TAG
-   docker push $REG/kvstore-operator:TAG
+   TAG=$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)
+   docker build -t $REG/kvnode:$TAG .
+   docker build -t $REG/kvstore-operator:$TAG operator
+   docker push $REG/kvnode:$TAG
+   docker push $REG/kvstore-operator:$TAG
+   digest() { docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REG/$1:$TAG" | grep "^$REG/$1@sha256:"; }
+   NODE_IMG=$(digest kvnode)
+   OPERATOR_IMG=$(digest kvstore-operator)
+   echo "$NODE_IMG"; echo "$OPERATOR_IMG"     # each <registry>/<name>@sha256:<64 hex>
    ```
+
+   Why a digest: neither the operator's Deployment nor the StatefulSet sets
+   `imagePullPolicy`, so Kubernetes uses `IfNotPresent` for any tag other
+   than `latest`. A node that already has an image under a tag never pulls
+   that tag again, so an image rebuilt under a reused tag would silently not
+   run. A digest names exactly one image: what was pushed is what runs, and
+   the KVCluster's `spec.image` records which. The unique tag keeps the
+   registry readable; the digest is what is deployed.
 
 4. **Install the operator** with the registry image, as in
    [operator.md](operator.md#install) with the kind image replaced:
 
    ```sh
    kubectl kustomize operator/config/default \
-     | sed "s|image: controller:latest|image: $REG/kvstore-operator:TAG|" \
+     | sed "s|image: controller:latest|image: $OPERATOR_IMG|" \
      | kubectl apply --server-side -f -
    kubectl -n kvstore-operator-system rollout status deploy/kvstore-operator-controller-manager
+   kubectl -n kvstore-operator-system get pods -o wide   # on the system node
    ```
 
    It lands on the system node: it does not tolerate the database pool's
@@ -171,12 +216,35 @@ active. `R` is the region, `TAG` a fresh tag per build.
 5. **Create the cluster** from the GKE sample, with the image set:
 
    ```sh
-   kubectl create namespace kvstore
-   sed "s|REGION-docker.pkg.dev/PROJECT/REPOSITORY/kvnode:TAG|$REG/kvnode:TAG|" \
+   kubectl create namespace kvstore --dry-run=client -o yaml | kubectl apply -f -
+   sed "s|REGION-docker.pkg.dev/PROJECT/REPOSITORY/kvnode:TAG|$NODE_IMG|" \
      operator/config/samples/kvstore_v1alpha1_kvcluster_gke.yaml \
      | kubectl -n kvstore apply -f -
-   kubectl -n kvstore get kvc kv -w                       # until Ready 6/6
-   kubectl -n kvstore get pods -o wide                    # one per kvstore node
+   kubectl -n kvstore get kvc kv -w                       # until Ready 6/6, epoch 0
+   ```
+
+   **Placement**: every pod, its node and the node's zone. Expect 6
+   distinct nodes, and each of the 3 zones twice:
+
+   ```sh
+   kubectl -n kvstore get pods -l app.kubernetes.io/name=kvstore \
+     -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName --no-headers \
+     | while read pod node; do
+         echo "$pod $node $(kubectl get node "$node" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')"
+       done
+   ```
+
+   **Membership, before any writes**: every pod's own view, from inside
+   the cluster (the toolbox in `deploy/loadgen/loadgen.yaml`). Expect each
+   of kv-0 .. kv-5 to print `epoch=0 members=6 peers=5 alive=5 reachable=5`:
+
+   ```sh
+   kubectl apply -f deploy/loadgen/loadgen.yaml
+   kubectl -n kvstore wait pod/toolbox --for=condition=Ready --timeout=120s
+   for i in 0 1 2 3 4 5; do
+     kubectl -n kvstore exec toolbox -- wget -qO- "http://kv-$i.kv.kvstore.svc.cluster.local:8080/admin/membership" \
+       | python -c "import json,sys; m=json.load(sys.stdin); p=m['peers'].values(); print('kv-$i', 'epoch=%d members=%d peers=%d alive=%d reachable=%d' % (m['epoch'], len(m['members']), len(m['peers']), sum(x['alive'] for x in p), sum(x['reachable'] for x in m['peers'].values())))"
+   done
    ```
 
 6. **Observability** (Prometheus and Grafana, on the system node):
@@ -189,9 +257,32 @@ active. `R` is the region, `TAG` a fresh tag per build.
    GKE already runs metrics-server, so `kubectl top` works without the
    kind-specific install of [kubernetes.md](kubernetes.md).
 
-7. **The experiments.**
+7. **Traffic reaches every pod.** Start the steady writer (about 11
+   writes/s through `kv-client`), give it two minutes, and ask Prometheus:
 
-8. **Destroy**, every time. The data disks first, while the cluster can
+   ```sh
+   kubectl apply -f deploy/loadgen/writer.yaml
+   kubectl -n observability port-forward svc/prometheus 9090 &
+   q() { curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" \
+         | python -c "import json,sys; [print(r['metric'], r['value'][1]) for r in json.load(sys.stdin)['data']['result']]"; }
+   q 'sum by (instance, method) (rate(kv_client_request_duration_seconds_count{job="kvstore"}[1m]))'
+   q 'sum by (instance) (rate(kv_wal_fsync_duration_seconds_count{engine="data"}[1m]))'
+   ```
+
+   The first is the requests each pod coordinated (the writer sends only
+   Puts); the second, the writes each pod stored, as coordinator or replica
+   (one data-engine fsync per write; three per Put across the cluster).
+   **All six pods must be above zero on both.** A pod at zero on the first
+   gets no client traffic (check `kubectl -n kvstore get endpoints
+   kv-client`); at zero on the second, it stores nothing. Grafana shows the
+   same two series by pod: "Requests coordinated by pod" (Requests row) and
+   "Storage writes by pod (data engine)" (Storage row). Stop the writer when
+   done: `kubectl -n kvstore delete pod load`.
+
+8. **The experiments.**
+
+9. **Destroy**, every time. Check your address first (item 6 above): the
+   first steps need kubectl. The data disks go first, while the cluster can
    still delete them: deleting the KVCluster keeps its volumes (the
    StatefulSet's `whenDeleted: Retain`), and `terraform destroy` does not
    know about them.
@@ -199,9 +290,19 @@ active. `R` is the region, `TAG` a fresh tag per build.
    ```sh
    kubectl -n kvstore delete kvc kv
    kubectl -n kvstore delete pvc --all       # standard-rwo deletes each disk
-   kubectl get pv                            # wait until none are left
+   kubectl wait --for=delete pv --all --timeout=5m
    terraform -chdir=infra/gke destroy
-   gcloud compute disks list --project kvstore-gke     # expect none
+   ```
+
+   Then check that nothing is left. Every list must be empty (the
+   repository goes with `terraform destroy`, its images with it):
+
+   ```sh
+   gcloud container clusters list --project kvstore-gke
+   gcloud compute instances list --project kvstore-gke
+   gcloud compute disks list --project kvstore-gke
+   gcloud compute addresses list --project kvstore-gke
+   gcloud artifacts repositories list --project kvstore-gke --location $R
    ```
 
    A disk still listed costs money until deleted

@@ -59,9 +59,11 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+# test/e2e is included: without the e2e build tag, only its checks that the
+# e2e acts on the kind cluster alone run (kube_test.go), no cluster needed.
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./...) -coverprofile cover.out
 
 # The e2e runs against the kind cluster of docs/kubernetes.md (with
 # metrics-server and the loadgen tooling), not a throwaway one: it creates

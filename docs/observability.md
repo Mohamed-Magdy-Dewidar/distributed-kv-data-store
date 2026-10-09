@@ -159,9 +159,9 @@ area. Each panel's description names the metric it reads.
 
 | Row | Panels |
 |---|---|
-| Requests | Put rate by status code; Put latency p50 / p99; quorum failures over the last 5 minutes, by `read` and `write` |
+| Requests | Put rate by status code; Put latency p50 / p99; quorum failures over the last 5 minutes, by `read` and `write`; requests coordinated by pod, by method |
 | Membership and peers | epoch by pod; member of its own view, by pod; peers alive by pod; peers reachable by pod |
-| Storage | WAL fsync latency p50 / p99 (data engine); memtable size by pod; SSTables by pod; flushes and compactions over the last 5 minutes, by engine and result |
+| Storage | WAL fsync latency p50 / p99 (data engine); memtable size by pod; SSTables by pod; flushes and compactions over the last 5 minutes, by engine and result; storage writes by pod (data-engine fsyncs per second) |
 | Hinted handoff | hints created and delivered per second; hints pending by pod |
 | Membership handoff | keys pending by pod; pushes and hints in the current handoff; last handoff duration by pod |
 | Anti-entropy | rounds per pod over the last hour; last round duration by pod; keys repaired and peer failures over the last hour |

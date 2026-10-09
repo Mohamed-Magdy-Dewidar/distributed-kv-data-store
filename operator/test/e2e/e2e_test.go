@@ -13,14 +13,16 @@
 // KIND_CLUSTER names the kind cluster (default kvstore); E2E_SKIP_BUILD=1
 // reuses the images already loaded. It leaves kv running afterwards, for the
 // observability stack.
+//
+// It acts on the kind cluster only, whatever kubectl's current context is:
+// every kubectl call names --context kind-$KIND_CLUSTER (kube_test.go), and
+// the test stops at once if that cluster or context does not exist.
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,7 +31,6 @@ import (
 )
 
 const (
-	ns           = "kvstore"
 	operatorNS   = "kvstore-operator-system"
 	operatorDep  = "kvstore-operator-controller-manager"
 	operatorImg  = "kvstore-operator:dev"
@@ -42,23 +43,6 @@ var (
 	repoRoot    = filepath.Join("..", "..", "..")
 )
 
-func kindCluster() string {
-	if c := os.Getenv("KIND_CLUSTER"); c != "" {
-		return c
-	}
-	return "kvstore"
-}
-
-// run runs a command with stdin and returns its combined output.
-func run(stdin, name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Stdin = strings.NewReader(stdin)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	err := cmd.Run()
-	return out.String(), err
-}
-
 func must(t *testing.T, stdin, name string, args ...string) string {
 	t.Helper()
 	out, err := run(stdin, name, args...)
@@ -68,7 +52,19 @@ func must(t *testing.T, stdin, name string, args ...string) string {
 	return out
 }
 
-func kubectl(t *testing.T, args ...string) string { t.Helper(); return must(t, "", "kubectl", args...) }
+// kubectl, kubectlIn (with stdin) and tryKubectl (errors returned) are the
+// only ways the e2e runs kubectl, each pinned to the kind context by kube.
+func kubectl(t *testing.T, args ...string) string {
+	t.Helper()
+	return must(t, "", kubectlBin, kube(args...)...)
+}
+
+func kubectlIn(t *testing.T, stdin string, args ...string) string {
+	t.Helper()
+	return must(t, stdin, kubectlBin, kube(args...)...)
+}
+
+func tryKubectl(args ...string) (string, error) { return run("", kubectlBin, kube(args...)...) }
 
 // kvStatus is the part of the KVCluster's status the test reads.
 type kvStatus struct {
@@ -108,7 +104,7 @@ func (s kvStatus) message() string {
 
 func status(t *testing.T) (kvStatus, bool) {
 	t.Helper()
-	out, err := run("", "kubectl", "-n", ns, "get", "kvc", "kv", "-o", "jsonpath={.status}")
+	out, err := tryKubectl("-n", ns, "get", "kvc", "kv", "-o", "jsonpath={.status}")
 	if err != nil || strings.TrimSpace(out) == "" {
 		return kvStatus{}, false
 	}
@@ -173,7 +169,7 @@ func ready(replicas int32, epoch int64) func(kvStatus) bool {
 }
 
 func topNode(tl *timeline, when string) {
-	out, err := run("", "kubectl", "top", "node", "--no-headers")
+	out, err := tryKubectl("top", "node", "--no-headers")
 	if err == nil {
 		tl.mark("kubectl top node (" + when + "): " + strings.Join(strings.Fields(out), " "))
 	}
@@ -217,13 +213,16 @@ func writes(t *testing.T, pod string) (acked []string, failed []string) {
 }
 
 func podGone(kind, name string) bool {
-	out, _ := run("", "kubectl", "-n", ns, "get", kind, name, "--ignore-not-found", "-o", "name")
+	out, _ := tryKubectl("-n", ns, "get", kind, name, "--ignore-not-found", "-o", "name")
 	return strings.TrimSpace(out) == ""
 }
 
 func TestOperatorScalesUnderLoad(t *testing.T) {
 	tl := newTimeline(t)
 	cluster := kindCluster()
+	if err := checkKindContext(); err != nil {
+		t.Fatalf("the e2e runs on the kind cluster only: %v", err)
+	}
 
 	// --- images ---
 	if os.Getenv("E2E_SKIP_BUILD") == "" {
@@ -235,21 +234,12 @@ func TestOperatorScalesUnderLoad(t *testing.T) {
 	tl.mark("images loaded into kind")
 
 	// --- a fresh start: no KVCluster, no volumes, no writers ---
-	// Best effort: whatever is not there is fine.
-	targets := make([][]string, 0, 13)
-	targets = append(targets, []string{"pod", "-l", "e2e=writer"}, []string{"kvc", "kv"}, []string{"statefulset", "kv"})
-	for i := range 10 {
-		targets = append(targets, []string{"pvc", "data-kv-" + strconv.Itoa(i)})
-	}
-	for _, target := range targets {
-		args := append(append([]string{"-n", ns, "delete"}, target...), "--ignore-not-found", "--wait=true")
-		_, _ = run("", "kubectl", args...)
-	}
+	freshStart()
 
 	// --- the operator ---
 	manifests := kubectl(t, "kustomize", filepath.Join(operatorDir, "config", "default"))
 	manifests = strings.ReplaceAll(manifests, "image: controller:latest", "image: "+operatorImg)
-	must(t, manifests, "kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+	kubectlIn(t, manifests, "apply", "--server-side", "--force-conflicts", "-f", "-")
 	kubectl(t, "-n", operatorNS, "rollout", "restart", "deploy/"+operatorDep) // pick up a rebuilt image
 	kubectl(t, "-n", operatorNS, "rollout", "status", "deploy/"+operatorDep, "--timeout=180s")
 	tl.mark("operator running")
@@ -269,7 +259,7 @@ func TestOperatorScalesUnderLoad(t *testing.T) {
 	// --- preload: 4 writers x 1000 keys ---
 	for i := range 4 {
 		p := fmt.Sprintf("pre%d", i)
-		must(t, writerPod(p, p, 1000, "0"), "kubectl", "apply", "-f", "-")
+		kubectlIn(t, writerPod(p, p, 1000, "0"), "apply", "-f", "-")
 	}
 	preloadStart := time.Now()
 	for i := range 4 {
@@ -278,7 +268,7 @@ func TestOperatorScalesUnderLoad(t *testing.T) {
 	tl.mark(fmt.Sprintf("PHASE preload 4000 keys: %.1fs", time.Since(preloadStart).Seconds()))
 
 	// --- the steady writer, about 11 writes/s, through every scale ---
-	must(t, writerPod("load", "load", 0, "0.05"), "kubectl", "apply", "-f", "-")
+	kubectlIn(t, writerPod("load", "load", 0, "0.05"), "apply", "-f", "-")
 	kubectl(t, "-n", ns, "wait", "pod/load", "--for=condition=Ready", "--timeout=120s")
 	time.Sleep(5 * time.Second)
 	topNode(tl, "6 replicas, steady load")
@@ -312,7 +302,7 @@ func TestOperatorScalesUnderLoad(t *testing.T) {
 	killed := time.Now()
 	tl.mark("deleted the operator pod " + old + " during D2")
 	for {
-		out, _ := run("", "kubectl", "-n", operatorNS, "get", "pod", "-l", "control-plane=controller-manager",
+		out, _ := tryKubectl("-n", operatorNS, "get", "pod", "-l", "control-plane=controller-manager",
 			"-o", `jsonpath={range .items[*]}{.metadata.name}={.status.containerStatuses[0].ready}{"\n"}{end}`)
 		if strings.Contains(out, "=true") && !strings.Contains(out, old+"=") {
 			tl.mark(fmt.Sprintf("new operator pod ready after %.1fs", time.Since(killed).Seconds()))
@@ -351,7 +341,7 @@ func TestOperatorScalesUnderLoad(t *testing.T) {
 		fmt.Fprintf(&in, "%s v-%s\n", k, k)
 	}
 	verifyStart := time.Now()
-	out := must(t, in.String(), "kubectl", "-n", ns, "exec", "-i", "toolbox", "--", "/scripts/verify.sh")
+	out := kubectlIn(t, in.String(), "-n", ns, "exec", "-i", "toolbox", "--", "/scripts/verify.sh")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	summary := lines[len(lines)-1]
 	tl.mark(fmt.Sprintf("verify (%.1fs): %s", time.Since(verifyStart).Seconds(), summary))
