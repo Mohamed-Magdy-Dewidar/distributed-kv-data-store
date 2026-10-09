@@ -14,14 +14,17 @@ import (
 	"github.com/Mohamed-Magdy-Dewidar/distributed-kv-data-store/operator/internal/render"
 )
 
+// gkePool is the GKE database node pool's name, and its taint's value.
+const gkePool = "kvstore"
+
 // gkePlacement is every placement setting, as the GKE sample has them.
 func gkePlacement() *kvv1.Placement {
 	return &kvv1.Placement{
 		OnePodPerNode: true,
 		ZoneSpread:    true,
-		NodeSelector:  map[string]string{"cloud.google.com/gke-nodepool": "kvstore"},
+		NodeSelector:  map[string]string{"cloud.google.com/gke-nodepool": gkePool},
 		Tolerations: []corev1.Toleration{
-			{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "kvstore", Effect: corev1.TaintEffectNoSchedule},
+			{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: gkePool, Effect: corev1.TaintEffectNoSchedule},
 		},
 	}
 }
@@ -43,7 +46,7 @@ func (h *harness) expectPlacement(p *kvv1.Placement) {
 // allows it) creates the PodDisruptionBudget with the cluster, owned by the
 // KVCluster, and recreates it when it is deleted.
 func TestPodDisruptionBudget(t *testing.T) {
-	h := newHarness(t, "pdb", 3)
+	h := newHarness(t, "pdb")
 	h.reconcile()
 	get := func() *policyv1.PodDisruptionBudget {
 		t.Helper()
@@ -77,7 +80,7 @@ func TestPodDisruptionBudget(t *testing.T) {
 // stable, as one template change; and a template read back from the API
 // server is then current, so it is not applied again.
 func TestPlacementWaitsForAStablePoint(t *testing.T) {
-	h := newHarness(t, "place-mid", 3)
+	h := newHarness(t, "place-mid")
 	h.ready(3)
 	h.expectPlacement(nil)
 
@@ -115,7 +118,7 @@ func TestPlacementWaitsForAStablePoint(t *testing.T) {
 // through a scale step even when the spec drops it mid-scale; the removal
 // is applied once stable.
 func TestPlacementKeptWhileScaling(t *testing.T) {
-	h := newHarness(t, "place-keep", 3)
+	h := newHarness(t, "place-keep")
 	h.setSpec(func(s *kvv1.KVClusterSpec) { s.Placement = gkePlacement() })
 	h.ready(3)
 	h.expectPlacement(gkePlacement())
@@ -143,7 +146,7 @@ func TestPlacementKeptWhileScaling(t *testing.T) {
 // with the error, and the condition clears once the next reconcile
 // succeeds.
 func TestApplyFailedIsRecorded(t *testing.T) {
-	h := newHarness(t, "apply-failed", 3)
+	h := newHarness(t, "apply-failed")
 
 	// The headless Service exists with a cluster IP, which is immutable:
 	// applying it as headless fails before the planner runs.

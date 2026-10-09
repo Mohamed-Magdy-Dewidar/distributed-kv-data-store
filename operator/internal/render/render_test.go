@@ -159,10 +159,20 @@ type intended struct {
 	value any
 }
 
-// intendedDifferences is the complete list. Anything else that differs
-// fails TestMatchesDeployK8s.
-func intendedDifferences() []intended {
-	ownerRef := []any{map[string]any{
+// Expected values, spelled out rather than taken from the package's own
+// constants (ManagerName, SelectorLabels): a test that compared the renderer
+// with itself would not notice a wrong constant.
+const (
+	wantApp     = "kvstore"          // the app.kubernetes.io/name label's value
+	wantManager = "kvstore-operator" // the app.kubernetes.io/managed-by label's value
+	appLabel    = "app.kubernetes.io/name"
+	gkePool     = "kvstore" // the GKE database node pool, and its taint's value
+)
+
+// wantOwnerRef is the controller reference to the KVCluster kv (uid-kv), as
+// every owned object carries it.
+func wantOwnerRef() []any {
+	return []any{map[string]any{
 		"apiVersion":         "kvstore.dewidar.dev/v1alpha1",
 		"kind":               "KVCluster",
 		"name":               "kv",
@@ -170,19 +180,24 @@ func intendedDifferences() []intended {
 		"controller":         true,
 		"blockOwnerDeletion": true,
 	}}
+}
+
+// intendedDifferences is the complete list. Anything else that differs
+// fails TestMatchesDeployK8s.
+func intendedDifferences() []intended {
 	meta := func(keys ...string) []string { return append([]string{"metadata"}, keys...) }
 	labelKey := func(key string) []string { return meta("labels", key) }
 	out := make([]intended, 0, 3*len(goldenFiles)+2)
 	for _, f := range goldenFiles {
 		out = append(out,
-			intended{f, meta("ownerReferences"), ownerRef},
-			intended{f, labelKey("app.kubernetes.io/managed-by"), "kvstore-operator"},
+			intended{f, meta("ownerReferences"), wantOwnerRef()},
+			intended{f, labelKey("app.kubernetes.io/managed-by"), wantManager},
 			intended{f, labelKey("app.kubernetes.io/instance"), "kv"},
 		)
 	}
 	tmpl := append([]string{"spec", "template"}, meta("labels")...)
 	out = append(out,
-		intended{fileSTS, append(slices.Clone(tmpl), "app.kubernetes.io/managed-by"), "kvstore-operator"},
+		intended{fileSTS, append(slices.Clone(tmpl), "app.kubernetes.io/managed-by"), wantManager},
 		intended{fileSTS, append(slices.Clone(tmpl), "app.kubernetes.io/instance"), "kv"},
 	)
 	return out
@@ -379,7 +394,7 @@ func TestFollowsNameAndNamespace(t *testing.T) {
 
 	// Nothing of kv/kvstore may be left in any string, except the label
 	// values that name the application and the operator.
-	allowed := map[string]bool{"kvstore": true, ManagerName: true, "kvnode:dev": true}
+	allowed := map[string]bool{wantApp: true, wantManager: true, "kvnode:dev": true}
 	objs["pdb"] = pdb
 	for file, o := range objs {
 		m := toMap(t, o)
@@ -608,9 +623,9 @@ func gkePlacement() *kvv1.Placement {
 	return &kvv1.Placement{
 		OnePodPerNode: true,
 		ZoneSpread:    true,
-		NodeSelector:  map[string]string{"cloud.google.com/gke-nodepool": "kvstore"},
+		NodeSelector:  map[string]string{"cloud.google.com/gke-nodepool": gkePool},
 		Tolerations: []corev1.Toleration{
-			{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "kvstore", Effect: corev1.TaintEffectNoSchedule},
+			{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: gkePool, Effect: corev1.TaintEffectNoSchedule},
 		},
 	}
 }
@@ -623,7 +638,7 @@ func TestStatefulSetPlacement(t *testing.T) {
 	c.Spec.Placement = gkePlacement()
 	sts := StatefulSet(c, 6)
 	pod := sts.Spec.Template.Spec
-	own := &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "kvstore"}}
+	own := &metav1.LabelSelector{MatchLabels: map[string]string{appLabel: wantApp}}
 	if !reflect.DeepEqual(own, sts.Spec.Selector) {
 		t.Fatalf("StatefulSet selector = %v; the placement rules below must select the same pods", sts.Spec.Selector)
 	}
@@ -656,7 +671,7 @@ func TestStatefulSetPlacement(t *testing.T) {
 	// The pod spec is a copy: changing it must not change the KVCluster.
 	pod.NodeSelector["cloud.google.com/gke-nodepool"] = "other"
 	pod.Tolerations[0].Value = "other"
-	if c.Spec.Placement.NodeSelector["cloud.google.com/gke-nodepool"] != "kvstore" || c.Spec.Placement.Tolerations[0].Value != "kvstore" {
+	if c.Spec.Placement.NodeSelector["cloud.google.com/gke-nodepool"] != gkePool || c.Spec.Placement.Tolerations[0].Value != gkePool {
 		t.Errorf("rendering aliases spec.placement: %+v", c.Spec.Placement)
 	}
 
@@ -719,22 +734,15 @@ func TestPodDisruptionBudget(t *testing.T) {
 			"name":      "kv",
 			"namespace": "kvstore",
 			"labels": map[string]any{
-				"app.kubernetes.io/name":       "kvstore",
+				appLabel:                       wantApp,
 				"app.kubernetes.io/instance":   "kv",
-				"app.kubernetes.io/managed-by": "kvstore-operator",
+				"app.kubernetes.io/managed-by": wantManager,
 			},
-			"ownerReferences": []any{map[string]any{
-				"apiVersion":         "kvstore.dewidar.dev/v1alpha1",
-				"kind":               "KVCluster",
-				"name":               "kv",
-				"uid":                "uid-kv",
-				"controller":         true,
-				"blockOwnerDeletion": true,
-			}},
+			"ownerReferences": wantOwnerRef(),
 		},
 		"spec": map[string]any{
 			"maxUnavailable": float64(1),
-			"selector":       map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": "kvstore"}},
+			"selector":       map[string]any{"matchLabels": map[string]any{appLabel: wantApp}},
 		},
 	}
 	var diffs []string

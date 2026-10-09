@@ -39,7 +39,8 @@ type harness struct {
 	now   time.Time
 }
 
-func newHarness(t *testing.T, namespace string, replicas int32) *harness {
+// newHarness creates the KVCluster kv with 3 replicas in a new namespace.
+func newHarness(t *testing.T, namespace string) *harness {
 	t.Helper()
 	h := &harness{
 		t: t, ctx: t.Context(),
@@ -52,7 +53,7 @@ func newHarness(t *testing.T, namespace string, replicas int32) *harness {
 	must(t, admin.Create(h.ctx, &kvv1.KVCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "kv", Namespace: namespace},
 		Spec: kvv1.KVClusterSpec{
-			Replicas: replicas, Image: testImage,
+			Replicas: 3, Image: testImage,
 			DrainTimeout: metav1.Duration{Duration: time.Minute},
 		},
 	}))
@@ -285,7 +286,7 @@ func (h *harness) expectConfigMap(epoch uint64, members int) {
 // through a pod that stops answering, a StatefulSet scaled by hand, and an
 // image change, checking every status field and condition at each step.
 func TestScaleUpAndDown(t *testing.T) {
-	h := newHarness(t, "scale", 3)
+	h := newHarness(t, "scale")
 
 	// --- bootstrap ---
 	h.reconcile()

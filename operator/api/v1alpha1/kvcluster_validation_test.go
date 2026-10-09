@@ -88,6 +88,9 @@ const (
 	errTolerationsMax       = "spec.placement.tolerations: Too many: 33: must have at most 32 items"
 )
 
+// gkePool is the GKE database node pool's name, and its taint's value.
+const gkePool = "kvstore"
+
 var nameSeq int
 
 // newCluster returns a valid KVCluster with a fresh name, with only the
@@ -197,10 +200,10 @@ func TestCreateValidation(t *testing.T) {
 		{"placement, everything set", func(c *kvv1.KVCluster) {
 			c.Spec.Placement = &kvv1.Placement{
 				OnePodPerNode: true, ZoneSpread: true,
-				NodeSelector: map[string]string{"cloud.google.com/gke-nodepool": "kvstore"},
+				NodeSelector: map[string]string{"cloud.google.com/gke-nodepool": gkePool},
 				Tolerations: []corev1.Toleration{
-					{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "kvstore", Effect: corev1.TaintEffectNoSchedule},
-					{Key: "dedicated", Value: "kvstore"}, // operator and effect left out: Equal, every effect
+					{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: gkePool, Effect: corev1.TaintEffectNoSchedule},
+					{Key: "dedicated", Value: gkePool}, // operator and effect left out: Equal, every effect
 					{Operator: corev1.TolerationOpExists},
 					{Key: "node.kubernetes.io/unreachable", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute, TolerationSeconds: new(int64(30))},
 				},
