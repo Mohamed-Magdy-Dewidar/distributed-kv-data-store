@@ -267,8 +267,10 @@ fi
 active=$(k get job "$JOB" -o 'jsonpath={.status.active}' 2>/dev/null || true)
 [ -z "$active" ] || [ "$active" = 0 ] || die "a $JOB Job is still running: wait for it, or deploy/bench/run.sh clean."
 if [ "$OVERLAY" = gke ]; then
-	[ -n "$(kubectl --context "$BENCH_CONTEXT" get nodes -l cloud.google.com/gke-nodepool=loadgen -o name)" ] ||
-		die "no loadgen node: create the pool with loadgen_enabled = true in infra/gke (docs/benchmarks.md)."
+	# One loadgen node per k6 pod: the overlay never puts two on one node.
+	loadgen=$(kubectl --context "$BENCH_CONTEXT" get nodes -l cloud.google.com/gke-nodepool=loadgen -o name | wc -l)
+	[ "$loadgen" -ge "$K6_PODS" ] ||
+		die "K6_PODS=$K6_PODS needs as many loadgen nodes, and there are $loadgen: set loadgen_enabled = true (and loadgen_nodes = 2 for two pods) in infra/gke (docs/gke.md)."
 fi
 
 # --- The run ------------------------------------------------------------

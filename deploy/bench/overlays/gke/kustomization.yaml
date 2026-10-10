@@ -1,7 +1,9 @@
 # GKE: k6 runs on the loadgen node pool (infra/gke, loadgen_enabled = true),
 # never on a database node: the pool's label selects it, its taint is
 # tolerated, and the anti-affinity keeps k6 off any node with a kv pod even
-# if the pool's label were to match one.
+# if the pool's label were to match one. With K6_PODS=2 each k6 pod gets a
+# loadgen node of its own (loadgen_nodes = 2): the second anti-affinity term
+# keeps two k6 pods off the same node, so each keeps its 2-CPU request whole.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -32,3 +34,7 @@ patches:
                     labelSelector:
                       matchLabels:
                         app.kubernetes.io/name: kvstore
+                  - topologyKey: kubernetes.io/hostname
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: k6-bench

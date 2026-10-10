@@ -158,9 +158,10 @@ resource "google_container_node_pool" "system" {
 
 # The loadgen pool, for the k6 benchmarks (docs/benchmarks.md) only: off by
 # default, created for a benchmark session and removed after it
-# (loadgen_enabled). One node in the system zone, for k6 alone: the taint
-# keeps everything else off, and the GKE overlay of deploy/bench selects
-# the pool by name and tolerates the taint. N2, not E2: the database pool at
+# (loadgen_enabled). loadgen_nodes nodes in the system zone, for k6 alone:
+# the taint keeps everything else off, and the GKE overlay of deploy/bench
+# selects the pool by name and tolerates the taint. Two nodes for the
+# two-pod check (K6_PODS=2): the overlay puts each k6 pod on its own node. N2, not E2: the database pool at
 # its maximum already takes 20 of the region's 24 E2_CPUS, and N2 counts
 # against its own quota.
 resource "google_container_node_pool" "loadgen" {
@@ -169,7 +170,7 @@ resource "google_container_node_pool" "loadgen" {
   cluster        = google_container_cluster.kvstore.id
   location       = var.region
   node_locations = [local.system_zone]
-  node_count     = 1
+  node_count     = var.loadgen_nodes
 
   management {
     auto_repair  = true

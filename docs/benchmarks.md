@@ -46,7 +46,8 @@ start Docker Desktop, check `docker info --format '{{.NCPU}} {{.MemTotal}}'`.
 e2-standard-2 over 3 zones, one kv pod each, `standard-rwo` (pd-balanced)
 10Gi volumes; the system pool (1 × e2-standard-2: Prometheus, Grafana, the
 operator); and, for benchmarks, the loadgen pool (1 × n2-standard-4,
-`loadgen_enabled = true`, off by default) where k6 runs, and nothing else.
+`loadgen_enabled = true`, off by default; 2 with `loadgen_nodes = 2` for
+the two-pod check) where k6 runs, and nothing else.
 
 ## The bench KVCluster
 
@@ -209,8 +210,11 @@ A result counts only if k6 was not the limit. For every run:
 - **the spread**: `coordinated_max_over_median` at most 1.5.
 
 **Two k6 pods.** Repeat the knee run with `K6_PODS=2`: the Job runs two
-pods, each with half the VUs and its own execution segment (`0:1/2`,
-`1/2:1`), both starting at the same `START_AT` (they log
+pods (on GKE, each on its own loadgen node with its whole 2-CPU request:
+`loadgen_nodes = 2`, and `run.sh` refuses with fewer nodes than pods; that
+session must not scale the database, see [gke.md](gke.md#quotas)), each
+with half the VUs and its own execution segment (`0:1/2`, `1/2:1`), both
+starting at the same `START_AT` (they log
 `k6-bench-start <unix seconds>`). If the knee's rate and the database-side
 p99 at the knee move by less than 10%, one pod was enough; if throughput
 rises clearly, the single-pod result was k6's limit and is not valid.

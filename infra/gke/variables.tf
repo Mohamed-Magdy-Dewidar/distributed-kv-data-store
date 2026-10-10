@@ -77,3 +77,14 @@ variable "loadgen_machine_type" {
   type        = string
   default     = "n2-standard-4"
 }
+
+variable "loadgen_nodes" {
+  description = "The loadgen pool's nodes: 1, or 2 for the two-pod check (K6_PODS=2), one k6 pod per node. Two bring CPUS_ALL_REGIONS to 22 of 32: do not scale the database in that session (docs/gke.md)."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.loadgen_nodes == 1 || var.loadgen_nodes == 2
+    error_message = "loadgen_nodes must be 1 or 2."
+  }
+}

@@ -36,7 +36,7 @@ Google's price list and the project's quotas.
 | Cluster `kvstore` | Regional, release channel Regular, VPC-native, Dataplane V2 (enforces NetworkPolicy), private nodes, public control-plane endpoint open to `my_ip_cidr` only, the persistent disk CSI driver (`standard-rwo`), system-component logging and monitoring only, `deletion_protection = false`. The default node pool is removed. |
 | Node pool `kvstore` | 3 zones; 2 nodes per zone, autoscaled 2-3 per zone; e2-standard-2; 20 GiB pd-balanced boot disks; taint `dedicated=kvstore:NoSchedule`; no Spot VMs; surge upgrades, 1 new node per zone before an old one is drained. |
 | Node pool `system` | 1 e2-standard-2 in one zone, untainted: GKE's own components (kube-dns, metrics-server), the operator, Prometheus and Grafana. |
-| Node pool `loadgen` | **Only with `loadgen_enabled = true`** (off by default), for the k6 benchmarks ([benchmarks.md](benchmarks.md)): 1 n2-standard-4 (`loadgen_machine_type`) in the system pool's zone, no autoscaling; taint `dedicated=loadgen:NoSchedule`, which the `deploy/bench` GKE overlay tolerates, selecting the pool by name. Set it in `terraform.tfvars` for the session, not with `-var`: a later `apply` without it (a new address, item 6) would remove the pool. |
+| Node pool `loadgen` | **Only with `loadgen_enabled = true`** (off by default), for the k6 benchmarks ([benchmarks.md](benchmarks.md)): `loadgen_nodes` n2-standard-4 (`loadgen_machine_type`) in the system pool's zone, 1 by default and 2 for the two-pod check, no autoscaling; taint `dedicated=loadgen:NoSchedule`, which the `deploy/bench` GKE overlay tolerates, selecting the pool by name. Set it in `terraform.tfvars` for the session, not with `-var`: a later `apply` without it (a new address, item 6) would remove the pool. |
 | Service account `kvstore-nodes` | The nodes run as it: `roles/container.defaultNodeServiceAccount`, and read access to the repository. |
 | Artifact Registry `kvstore` | Docker, in the region. Destroyed with its images. |
 
@@ -129,6 +129,15 @@ The loadgen pool's n2-standard-4 counts against `N2_CPUS` (200), not
 vCPUs, so 18 created and 30 in the last row above. Its own surge upgrade
 adds 4 more, which fits unless it coincides with that row's.
 
+**Two loadgen nodes** (`loadgen_nodes = 2`, for the two-pod check, one k6
+pod per node) are 8 N2 vCPUs: `CPUS_ALL_REGIONS` is 22 of 32 as created,
+and that margin holds **only while the database is not scaled**. Scaling
+eats it: 24 with a seventh database node, 28 at the autoscaler's maximum,
+and a database pool upgrade there surges 3 nodes more, 34. Past 32 GKE
+cannot create the nodes and a surge upgrade waits. So the two-pod session
+runs the benchmarks at 6 replicas and never scales the database; scaling
+experiments go in a session with one loadgen node or none.
+
 **pd-balanced counts against `SSD_TOTAL_GB`**, both boot disks and the
 data volumes (`standard-rwo` is pd-balanced): 13 boot disks of 20 GiB and
 9 data volumes of 10 GiB is 350 GiB of the 500 (370 with the loadgen
@@ -148,7 +157,7 @@ europe-west1, on demand, from the Cloud Billing catalog on 2026-10-07 (N2 on 202
 | Data volumes, 10 GiB pd-balanced each (6, up to 9) | $0.10/GiB·month | $0.008 | $0.012 |
 | Cloud NAT: gateway per VM, and its address | $0.0014/VM·h, $0.005/h | $0.015 | $0.019 |
 | **Total** | | **≈ $0.66/h** | **≈ $0.90/h** |
-| Loadgen pool, if enabled: n2-standard-4 (4 N2 cores at $0.034773/h, 16 GiB at $0.004661/GiB·h), its boot disk and NAT | $0.2137/h | +$0.218 | +$0.218 |
+| Loadgen pool, if enabled, per node (1, or 2 for the two-pod check): n2-standard-4 (4 N2 cores at $0.034773/h, 16 GiB at $0.004661/GiB·h), its boot disk and NAT | $0.2137/h | +$0.218 | +$0.218 |
 
 Plus Cloud NAT data processing at $0.045/GiB (mostly image pulls, a GiB or
 two per session) and Artifact Registry storage (negligible). The free
