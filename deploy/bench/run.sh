@@ -100,6 +100,10 @@ esac
 
 k() { kubectl --context "$BENCH_CONTEXT" -n "$NS" "$@"; }
 
+# CPU quantities on stdin, one per line ("3", "250m", "0.5"), as millicores;
+# an empty line (no request) is 0.
+millicores() { awk '{v = $1; if (v ~ /m$/) {sub(/m$/, "", v); print v + 0} else print v * 1000}'; }
+
 kvc() { k get kvc kv -o "jsonpath=$1" 2>/dev/null || true; }
 
 ledger() { k get configmap k6-bench-ledger -o "jsonpath={.data.$1}" 2>/dev/null || true; }
@@ -287,6 +291,20 @@ if [ "$OVERLAY" = gke ]; then
 	loadgen=$(kubectl --context "$BENCH_CONTEXT" get nodes -l cloud.google.com/gke-nodepool=loadgen -o name | wc -l)
 	[ "$loadgen" -ge "$K6_PODS" ] ||
 		die "K6_PODS=$K6_PODS needs as many loadgen nodes, and there are $loadgen: set loadgen_enabled = true (and loadgen_nodes = 2 for two pods) in infra/gke (docs/gke.md)."
+	# And each of them must have room for k6's whole CPU request next to
+	# GKE's own pods there (DaemonSets), or the k6 pod stays Pending.
+	want=$(kubectl kustomize deploy/bench/overlays/gke | sed -n 's/^ *cpu: //p' | tr -d '"' | head -1 | millicores)
+	fits=0
+	for node in $(kubectl --context "$BENCH_CONTEXT" get nodes -l cloud.google.com/gke-nodepool=loadgen -o name); do
+		node=${node#node/}
+		alloc=$(kubectl --context "$BENCH_CONTEXT" get node "$node" -o 'jsonpath={.status.allocatable.cpu}' | millicores)
+		used=$(kubectl --context "$BENCH_CONTEXT" get pods -A --field-selector "spec.nodeName=$node,status.phase!=Succeeded,status.phase!=Failed" \
+			-o 'jsonpath={range .items[*]}{range .spec.containers[*]}{.resources.requests.cpu}{"\n"}{end}{end}' | millicores | awk '{s += $1} END {print s + 0}')
+		echo "loadgen node $node: allocatable ${alloc}m, requested ${used}m, k6 wants ${want}m"
+		[ $((alloc - used)) -lt "$want" ] || fits=$((fits + 1))
+	done
+	[ "$fits" -ge "$K6_PODS" ] ||
+		die "k6 requests ${want}m CPU, and only $fits loadgen node(s) have that free for K6_PODS=$K6_PODS: GKE's own pods there take more than expected. Use loadgen_machine_type = \"n2-standard-8\" in infra/gke (docs/gke.md)."
 fi
 
 # --- The run ------------------------------------------------------------

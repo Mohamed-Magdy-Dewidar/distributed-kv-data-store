@@ -3,7 +3,12 @@
 # tolerated, and the anti-affinity keeps k6 off any node with a kv pod even
 # if the pool's label were to match one. With K6_PODS=2 each k6 pod gets a
 # loadgen node of its own (loadgen_nodes = 2): the second anti-affinity term
-# keeps two k6 pods off the same node, so each keeps its 2-CPU request whole.
+# keeps two k6 pods off the same node, so each keeps its CPU request whole.
+#
+# k6 requests 3 CPUs here (2 on kind, the base): an n2-standard-4 has 3920m
+# allocatable, so 3000m fits if GKE's own pods on the node request at most
+# 920m. run.sh checks that on the node before every run on GKE, and refuses
+# with the fix (n2-standard-8) if it does not fit.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -27,6 +32,11 @@ patches:
                 operator: Equal
                 value: loadgen
                 effect: NoSchedule
+            containers:
+              - name: k6
+                resources:
+                  requests:
+                    cpu: "3"
             affinity:
               podAntiAffinity:
                 requiredDuringSchedulingIgnoredDuringExecution:

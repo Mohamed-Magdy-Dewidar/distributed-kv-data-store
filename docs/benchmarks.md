@@ -250,13 +250,17 @@ A result counts only if k6 was not the limit. For every run:
 - **`dropped_iterations` is 0** (a constant run with any is not valid; in a
   ramp, dropped iterations past the knee are expected: higher latency holds
   the VUs longer, Little's law);
-- **k6's CPU stays under half its 2-core request** (1000m in `top.txt`);
+- **k6's CPU stays under half its request**, in `top.txt`: 1000m on kind
+  (2 CPUs requested), 1500m on GKE (3 CPUs: the GKE overlay raises the
+  request, and `run.sh` checks on the loadgen node, before every GKE run,
+  that GKE's own pods leave 3 CPUs free of its 3920m allocatable on an
+  n2-standard-4; if not, it refuses and says to use n2-standard-8);
 - **the database's side, for the same window**: Put/Get p99 and fsync p99
   from Prometheus, which k6 cannot inflate, and the kv pods' CPU;
 - **the spread**: `coordinated_max_over_median` at most 1.5.
 
 **Two k6 pods.** Repeat the knee run with `K6_PODS=2`: the Job runs two
-pods (on GKE, each on its own loadgen node with its whole 2-CPU request:
+pods (on GKE, each on its own loadgen node with its whole 3-CPU request:
 `loadgen_nodes = 2`, and `run.sh` refuses with fewer nodes than pods; that
 session must not scale the database, see [gke.md](gke.md#quotas)), each
 with half the VUs and its own execution segment (`0:1/2`, `1/2:1`), both
@@ -299,8 +303,8 @@ On GKE k6 has a node of its own, and the read ramp is sized for it:
   showed. Reads write nothing, so the key cap does not limit them.
 - **The two-pod check is part of the read result, not optional.** k6's CPU
   on kind grew from about 0.28 to 0.58 cores between 200/s and 1000/s; at
-  that cost one pod passes the 1000m validity limit (half its 2-CPU
-  request) somewhere around 2000/s, well inside the range. So the read
+  that cost one pod passes GKE's 1500m validity limit (half its 3-CPU
+  request) somewhere around 3500/s, inside the range. So the read
   ramp runs twice, once with one k6 pod and once with `K6_PODS=2` (two
   loadgen nodes, `loadgen_nodes = 2`), and the knee counts only where both
   agree within 10%. If k6's CPU passes the limit even with two pods before
