@@ -20,13 +20,15 @@
 #                  steps of RAMP_STEP [50, 500, 50]
 #   STEP_SECONDS   ramp: how long each rate is held [30]
 #   RAMP_SECONDS   ramp: how long the move to the next rate takes [5]
-#   VUS            VUs, and so connections, all k6 pods together [60]
+#   VUS            VUs, and so connections, all k6 pods together [120]
 #   PRELOAD_KEYS   keys preload writes and reads choose from [20000]
 #   K6_PODS        1 | 2: k6 pods sharing the load [1]
 #   BENCH_OUT      results directory [docs/results/bench/<run>]
 #   KV_IMAGE       reset on GKE: the node image's Artifact Registry path
 #   BENCH_YES=1    reset without asking
 #   BENCH_EXPORT=0 skip the Prometheus export (deploy/bench/export.sh)
+#   BENCH_SMOKE=1  allow writes, reads and mix on a dirty tree (below); the
+#                  run is recorded as smoke=1, not a result
 # In mix, RATE (or every ramp rate) and VUS are split evenly between writes
 # and reads, so they must be even.
 #
@@ -39,6 +41,13 @@
 #   KEY_CAP = 130,000 keys -> 97,500 per pod, under the ~100k the 512Mi
 #   memory limit of the bench KVCluster is sized for.
 # reset starts a new ledger at 0.
+#
+# A dirty tree: writes, reads and mix refuse to run if a tracked file outside
+# docs/ differs from HEAD (staged or not), so every result names the commit
+# it ran. Untracked files and docs/ do not count: each run's results are
+# untracked until committed, and recording runs edits docs/benchmarks.md.
+# preload is exempt (it loads data, it is not a result), and so is a run
+# with BENCH_SMOKE=1. Either way run.env records the commit, -dirty or not.
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
@@ -158,7 +167,7 @@ RAMP_TO=${RAMP_TO:-500}
 RAMP_STEP=${RAMP_STEP:-50}
 STEP_SECONDS=${STEP_SECONDS:-30}
 RAMP_SECONDS=${RAMP_SECONDS:-5}
-VUS=${VUS:-60}
+VUS=${VUS:-120}
 PRELOAD_KEYS=${PRELOAD_KEYS:-20000}
 K6_PODS=${K6_PODS:-1}
 
@@ -216,6 +225,17 @@ case "$SCENARIO" in
 		done
 		;;
 esac
+
+# --- Preflight: the tree is a commit, unless told otherwise -------------
+
+# Tracked changes outside docs/, staged or not (see the header).
+COMMIT=$(git rev-parse --short HEAD)
+git diff --quiet HEAD -- . ':(exclude)docs' || COMMIT=$COMMIT-dirty
+SMOKE=${BENCH_SMOKE:-0}
+case "$SMOKE" in 0 | 1) ;; *) die "BENCH_SMOKE=$SMOKE: want 0 or 1." ;; esac
+if [ "$SCENARIO" != preload ] && [ "$SMOKE" = 0 ] && [ "$COMMIT" != "${COMMIT%-dirty}" ]; then
+	die "refusing: tracked files outside docs/ differ from HEAD, so this run would not name the code it ran (git status). Commit or stash them, or set BENCH_SMOKE=1 for a run that is not a result."
+fi
 
 # --- Preflight: the cluster is the one docs/benchmarks.md describes ------
 
@@ -305,7 +325,8 @@ kubectl kustomize "deploy/bench/overlays/$OVERLAY" |
 	echo "kv_image=$(kvc '{.spec.image}')"
 	echo "kv_memory_limit=$memlimit"
 	echo "k6_image=$(kubectl kustomize "deploy/bench/overlays/$OVERLAY" | sed -n 's/^ *image: //p')"
-	echo "commit=$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- deploy/bench internal/rpc/pb/kvstore.proto || echo -dirty)"
+	echo "commit=$COMMIT"
+	echo "smoke=$SMOKE"
 	echo "script_sha256=$(sha256sum deploy/bench/script.js | cut -d' ' -f1)"
 } >"$OUT/run.env"
 

@@ -97,8 +97,8 @@ every run. The node stores a client value JSON-encoded, so 258 bytes.
 
 **Connections.** gRPC keeps one connection per client, and `kv-client`
 balances connections, not requests. Each VU opens its own connection on its
-first iteration and keeps it; `preAllocatedVUs = maxVUs = VUS` (default 60,
-about 10 per pod), and arrival-rate executors hand iterations to VUs in
+first iteration and keeps it; `preAllocatedVUs = maxVUs = VUS` (default 120,
+about 20 per pod), and arrival-rate executors hand iterations to VUs in
 turn, so every VU connects in the first seconds (`connects` in each run's
 summary must equal `VUS`). Each pod's share of the load follows its share
 of the connections, which is random: `window.env` records how many
@@ -106,6 +106,14 @@ requests each pod coordinated, and the busiest pod's count over the median
 (`coordinated_max_over_median`, at most 1.5) and the quietest's
 (`coordinated_min_over_median`). The dashboard panel "Requests coordinated
 by pod" shows the same.
+
+**Why 120 VUs.** The VUs bound the requests in flight, so by Little's law
+they bound the latency a rate can have before iterations are dropped:
+rate × latency ≤ VUs. At the default ramp's top, 500/s, 60 VUs drop
+iterations as soon as the latency passes 120 ms; 120 VUs allow 240 ms, so
+the knee shows up as latency first and only then as dropped iterations.
+More connections also even out each pod's share: the smoke run's 60 gave
+the pods 7 to 11 each.
 
 ### The key cap
 
@@ -152,6 +160,17 @@ K6_PODS=2 PROFILE=ramp deploy/bench/run.sh reads   # the two-pod check
 deploy/bench/run.sh clean                       # delete the Job and its ConfigMaps
 ```
 
+**A clean tree.** `writes`, `reads` and `mix` refuse to run if a tracked
+file outside `docs/` differs from HEAD, staged or not: a result must name
+the code it ran, and `commit=` in `run.env` is that name. Untracked files
+and `docs/` do not count, since each run's results are untracked until they
+are committed and recording a run edits this page. Two exceptions, both
+recorded in `run.env` (`commit=<sha>-dirty`): `preload`, which loads data
+and is not a result, and `BENCH_SMOKE=1`, for a pipeline check while
+`deploy/bench` is being changed (`smoke=1`; such a run is listed as a smoke
+run, never as a result). The check covers the tree only: the images must be
+built from the same commit (see [What must match](#what-must-match-between-kind-and-gke)).
+
 On GKE: `BENCH_CONTEXT=gke_<project>_<region>_kvstore`, the loadgen pool
 up, and `KV_IMAGE=<the node image's Artifact Registry path>` for `reset`.
 Prometheus and Grafana (`deploy/observability/`) must be running: the
@@ -164,7 +183,7 @@ to change it):
 
 | File | Contents |
 |---|---|
-| `run.env` | Every parameter, the KVCluster's uid, epoch, image and memory limit, the k6 image, the commit (`-dirty` if `deploy/bench` or the proto had local changes), the script's sha256, k6's node and machine type, the measured window, and the totals: dropped iterations, errors, connections |
+| `run.env` | Every parameter, the KVCluster's uid, epoch, image and memory limit, the k6 image, the commit (`-dirty` if a tracked file outside `docs/` differed from HEAD), `smoke` (1 if run with `BENCH_SMOKE=1`), the script's sha256, k6's node and machine type, the measured window, and the totals: dropped iterations, errors, connections |
 | `k6-<i>.log` | Each k6 pod's log |
 | `summary-<i>.json` | k6's whole end-of-test summary data |
 | `summary-<i>.env` | The same, flat: per op count, rate, p50/p95/p99/max (ms), errors; `dropped_iterations`, `vus_max`, `connects` |
