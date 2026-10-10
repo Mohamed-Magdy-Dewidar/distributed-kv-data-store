@@ -1,0 +1,21 @@
+k6-bench-start 1791668023 index=0 of 1
+time="2026-10-10T21:34:13Z" level=warning msg="put: status DeadlineExceeded stream terminated by RST_STREAM with error code: CANCEL" source=console
+time="2026-10-10T21:34:32Z" level=warning msg="put: status DeadlineExceeded stream terminated by RST_STREAM with error code: CANCEL" source=console
+time="2026-10-10T21:34:38Z" level=warning msg="put: status DeadlineExceeded context deadline exceeded" source=console
+k6 bench: scenario=preload profile=shared run=20261010-213341 132.2s
+  put: 19311 requests (146.0/s), p50 276.69 ms, p95 4162.64 ms, p99 5000.26 ms, max 5004.51 ms, errors 895
+  dropped_iterations 0, vus_max 120, connects 120
+===K6_BENCH_SUMMARY_BEGIN===
+{"options":{"summaryTrendStats":["min","med","avg","p(90)","p(95)","p(99)","max","count"],"summaryTimeUnit":"","noColor":false},"state":{"testRunDurationMs":132228.120689,"isStdOutTTY":false,"isStdErrTTY":false},"metrics":{"data_sent":{"type":"counter","contains":"data","values":{"count":7148969,"rate":54065.42090100748}},"iteration_duration":{"type":"trend","contains":"time","values":{"p(95)":4914.853420999999,"p(99)":5000.93398115,"max":5004.839364,"count":20000,"min":12.936311,"med":289.546468,"avg":786.4945774743013,"p(90)":3467.1135783000177}},"vus_max":{"values":{"value":120,"min":120,"max":120},"type":"gauge","contains":"default"},"data_received":{"type":"counter","contains":"data","values":{"count":1634278,"rate":12359.53435233202}},"iterations":{"type":"counter","contains":"default","values":{"count":20000,"rate":151.25375673333448}},"vus":{"type":"gauge","contains":"default","values":{"value":8,"min":8,"max":120}},"kv_errors":{"type":"rate","contains":"default","values":{"rate":0.04475,"passes":895,"fails":19105}},"grpc_req_duration{op:put}":{"values":{"count":19311,"min":12.819521,"med":276.692594,"avg":635.6003223199747,"p(90)":1038.942446,"p(95)":4162.6425405,"p(99)":5000.259857700001,"max":5004.506958},"thresholds":{"max>=0":{"ok":true}},"type":"trend","contains":"time"},"kv_connects":{"type":"counter","contains":"default","values":{"rate":0.9075225404000069,"count":120}},"grpc_req_duration":{"type":"trend","contains":"time","values":{"p(99)":5000.259857700001,"max":5004.506958,"count":19311,"min":12.819521,"med":276.692594,"avg":635.6003223199747,"p(90)":1038.942446,"p(95)":4162.6425405}},"kv_errors{op:put}":{"values":{"rate":0.04475,"passes":895,"fails":19105},"thresholds":{"rate>=0":{"ok":true}},"type":"rate","contains":"default"}},"root_group":{"name":"","path":"","id":"d41d8cd98f00b204e9800998ecf8427e","groups":[],"checks":[]}}
+===K6_BENCH_SUMMARY_END===
+K6_BENCH duration_s=132.2
+K6_BENCH dropped_iterations=0
+K6_BENCH vus_max=120
+K6_BENCH connects=120
+K6_BENCH put_count=19311
+K6_BENCH put_rate=146.0
+K6_BENCH put_p50_ms=276.69
+K6_BENCH put_p95_ms=4162.64
+K6_BENCH put_p99_ms=5000.26
+K6_BENCH put_max_ms=5004.51
+K6_BENCH put_errors=895

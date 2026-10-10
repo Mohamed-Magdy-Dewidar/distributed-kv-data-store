@@ -76,7 +76,7 @@ the `kv-client` Service, like any client's.
 
 | Scenario | What it does |
 |---|---|
-| `preload` | Writes `PRELOAD_KEYS` keys, `bench-pre-000000` onwards (default 20,000). Closed model (shared iterations), only to load the data `reads` and `mix` need. Once per KVCluster. |
+| `preload` | Writes `PRELOAD_KEYS` keys, `bench-pre-000000` onwards (default 20,000). Closed model (shared iterations) with `PRELOAD_VUS` VUs (default 40), only to load the data `reads` and `mix` need; not measured. Once per KVCluster, and it must be clean ([below](#a-clean-preload)). |
 | `writes` | Puts of keys never written before, `bench-<run>-w-<n>`. |
 | `reads` | Gets of random preloaded keys; each must return exactly the value preloaded, or it counts as an error. |
 | `mix` | `writes` and `reads` at once, each at half the rate and with half the VUs, reported separately. |
@@ -115,6 +115,13 @@ iterations as soon as the latency passes 120 ms; 120 VUs allow 240 ms, so
 the knee shows up as latency first and only then as dropped iterations.
 More connections also even out each pod's share: the smoke run's 60 gave
 the pods 7 to 11 each.
+
+The preload is the exception: it runs with `PRELOAD_VUS` (default 40), not
+`VUS`. It is a closed model, so its VUs are the requests in flight whatever
+the latency, and it is not measured, so it needn't match the runs. At 120
+VUs it overloaded kind: the queue grew past the 5s client timeout and 4.5%
+of its Puts failed ([the record](#kind-2026-10-10-baseline-series-stopped-after-the-preload)).
+At 60 it had none; 40 leaves margin.
 
 ### The key cap
 
@@ -160,6 +167,24 @@ RATE=200 deploy/bench/run.sh mix
 K6_PODS=2 PROFILE=ramp deploy/bench/run.sh reads   # the two-pod check
 deploy/bench/run.sh clean                       # delete the Job and its ConfigMaps
 ```
+
+### A clean preload
+
+`reads` and `mix` choose among the preloaded keys and require each one's
+exact value, so the preload must have written every key: the k6 Job
+succeeded, k6 timed all `PRELOAD_KEYS` Puts (`put_count`), and none failed. Any
+error fails the preload: `run.sh` exits 1, `run.env` says `preload=failed`,
+and the ledger records it, so **every later run on that KVCluster is
+refused** (`reads` and `mix` would count missing keys as errors, and the
+series' data would not be what this page says). A preload that did not
+finish leaves the ledger at `pending`, refused the same way. The only way
+on is `reset` and a new preload.
+
+There are no retries. A Put that failed may still have been applied on
+some replicas, and a retry carries no context: it would version the key
+again, and the store could keep the two as siblings. A preload either
+writes each key once and is acknowledged for all of them, or it is
+discarded.
 
 **A clean tree.** `writes`, `reads` and `mix` refuse to run if a tracked
 file outside `docs/` differs from HEAD, staged or not: a result must name
@@ -230,7 +255,7 @@ a run with any is flagged in the table below.
 
 Identical: the commit and images, the bench KVCluster (replicas, n/w/r,
 requests and limits, ConfigMap intervals), the k6 version and script,
-value size, `PRELOAD_KEYS`, `VUS`, profiles and rates, a fresh KVCluster
+value size, `PRELOAD_KEYS`, `PRELOAD_VUS`, `VUS`, profiles and rates, a fresh KVCluster
 (`reset`) before a series, the scrape interval and the export's queries.
 
 Different, and recorded: the disks (local-path on the laptop's SSD vs
@@ -238,6 +263,18 @@ pd-balanced), the network (one VM vs three zones), the CPUs (8 shared
 vCPUs vs six 2-vCPU nodes plus k6's own), and k6's placement (shared node
 vs its own). So kind against GKE is not a like-for-like comparison: what
 compares is each cluster's knee and its behaviour past it.
+
+## Open questions
+
+**Can a client tell slow from down?** Under overload (the failed preload at
+120 VUs) most failed Puts reached k6 as `Unavailable`, with no quorum
+failures and no pod down. `internal/rpc/client_service.go` maps every
+error that is not a context error to `codes.Unavailable`, whatever its
+cause, so a coordinator that ran out of time for its replicas and one that
+found them gone look alike to a client. To investigate before reading
+anything into GKE's errors past the knee: what the overloaded coordinators
+actually returned (the error text, by cause), and whether a timeout inside
+the coordinator should reach the client as `DeadlineExceeded` instead.
 
 ## Runs
 
@@ -270,3 +307,23 @@ What the smoke run showed besides "it works":
   answers, gets more requests. At a fixed 20/s every VU did the same work,
   so each pod's share was its share of the 60 connections: 220 requests
   for 11 connections, 140 for 7 (min/median 0.64, max/median 1.00).
+
+### kind, 2026-10-10: baseline series (stopped after the preload)
+
+Commit `607b3f1`, clean tree. Images as in the smoke run (`kvnode:dev`,
+`kvstore-operator:dev`, built from `6eccab2`; nothing outside `docs/` and
+`deploy/bench` has changed since). `reset`, then the preload with 120 VUs,
+the runs' default at the time. The series stopped there: the preload had
+errors, and the reads would choose among keys some of which were never
+written. Kept as a result: **overload at 120 VUs in flight**, the queue
+growing past the 5s client timeout. It is why the preload now runs with
+`PRELOAD_VUS` (40) and must be [clean](#a-clean-preload).
+
+| Run | Scenario | Parameters | Data before | k6 summary | Prometheus (window) | k6 CPU | Flags |
+|---|---|---|---|---|---|---|---|
+| [20261010-213341](results/bench/20261010-213341-kind-preload-shared/) | preload | 20,000 keys, 120 VUs (closed) | 0 keys | 20,000 iterations in 132.2s; 19,311 Puts with a duration (146.0/s; k6 recorded none for the other 689); p50 276.7 ms, p95 4,162.6 ms, p99 5,000.3 ms (the 5s client timeout); **895 errors (4.5%)**; 0 dropped; 120 connections | 19,938 Puts, 931 not OK (`Unavailable` most, then `Canceled`, a few `DeadlineExceeded`, from 21:34:28, 45s in, to the end); Put p50 284 / p99 5,000 ms; fsync p50 8.91 / p99 14.85 ms; kv CPU 0.06-0.11 cores; 0 quorum failures, 0 hints; 0 AE rounds | max 181m | SPREAD (1.72) |
+
+With 60 VUs (the smoke run's preload) the same 20,000 Puts had no errors.
+With 120 in flight, throughput did not rise (146/s vs 149.5/s); only the
+queue grew, past the 5s client timeout for the slowest Puts. The kv pods
+were at a tenth of a core and logged nothing, and no pod restarted.

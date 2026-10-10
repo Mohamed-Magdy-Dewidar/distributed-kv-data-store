@@ -22,6 +22,7 @@
 #   RAMP_SECONDS   ramp: how long the move to the next rate takes [5]
 #   VUS            VUs, and so connections, all k6 pods together [120]
 #   PRELOAD_KEYS   keys preload writes and reads choose from [20000]
+#   PRELOAD_VUS    preload's VUs, in place of VUS [40]
 #   K6_PODS        1 | 2: k6 pods sharing the load [1]
 #   BENCH_OUT      results directory [docs/results/bench/<run>]
 #   KV_IMAGE       reset on GKE: the node image's Artifact Registry path
@@ -41,6 +42,14 @@
 #   KEY_CAP = 130,000 keys -> 97,500 per pod, under the ~100k the 512Mi
 #   memory limit of the bench KVCluster is sized for.
 # reset starts a new ledger at 0.
+#
+# The preload must be clean: every one of PRELOAD_KEYS Puts acknowledged, no
+# error. A preload with any error (or one that did not finish) fails, and
+# the ledger records it as failed: every later run on this KVCluster is
+# refused, reads because some keys they choose were never written, and
+# another preload because a failed Put may still have been applied on some
+# replicas. Only reset clears it. No retries: a retried Put carries no
+# context, so it could create a sibling of a write that did land.
 #
 # A dirty tree: writes, reads and mix refuse to run if a tracked file outside
 # docs/ differs from HEAD (staged or not), so every result names the commit
@@ -169,11 +178,15 @@ STEP_SECONDS=${STEP_SECONDS:-30}
 RAMP_SECONDS=${RAMP_SECONDS:-5}
 VUS=${VUS:-120}
 PRELOAD_KEYS=${PRELOAD_KEYS:-20000}
+PRELOAD_VUS=${PRELOAD_VUS:-40}
 K6_PODS=${K6_PODS:-1}
 
-for v in RATE DURATION RAMP_FROM RAMP_TO RAMP_STEP STEP_SECONDS RAMP_SECONDS VUS PRELOAD_KEYS; do
+for v in RATE DURATION RAMP_FROM RAMP_TO RAMP_STEP STEP_SECONDS RAMP_SECONDS VUS PRELOAD_KEYS PRELOAD_VUS; do
 	case "${!v}" in '' | *[!0-9]*) die "$v=${!v} is not a non-negative integer." ;; esac
 done
+# The preload is not measured, so it needn't run with the runs' VUs: at 120
+# in flight it overloaded kind past the 5s client timeout (docs/benchmarks.md).
+[ "$SCENARIO" != preload ] || VUS=$PRELOAD_VUS
 [ "$VUS" -ge 1 ] || die "VUS must be at least 1."
 case "$K6_PODS" in 1 | 2) ;; *) die "K6_PODS=$K6_PODS: want 1 or 2." ;; esac
 [ "$SCENARIO" != preload ] || [ "$K6_PODS" = 1 ] || die "preload runs with K6_PODS=1 only."
@@ -255,6 +268,9 @@ fi
 keys=$(ledger keys)
 preloaded=$(ledger preload)
 runs=$(ledger runs)
+case "$preloaded" in
+	failed | pending) die "refusing: this KVCluster's preload is $preloaded (see the header), so some preloaded keys may be missing. Start again: deploy/bench/run.sh reset, then preload." ;;
+esac
 if [ "$SCENARIO" = preload ]; then
 	[ "$preloaded" = 0 ] || die "this KVCluster is already preloaded ($preloaded keys)."
 elif [ "$SCENARIO" != writes ]; then
@@ -281,7 +297,9 @@ mkdir -p "$OUT"
 START_AT=0
 [ "$K6_PODS" = 1 ] || START_AT=$(($(date +%s) + 60))
 
-write_ledger "$uid" $((keys + WRITES)) "$([ "$SCENARIO" = preload ] && echo "$PRELOAD_KEYS" || echo "$preloaded")" $((runs + 1))
+# A preload is pending until its result is in (below): if run.sh stops
+# before then, the ledger still says the preload is not clean.
+write_ledger "$uid" $((keys + WRITES)) "$([ "$SCENARIO" = preload ] && echo pending || echo "$preloaded")" $((runs + 1))
 
 k create configmap k6-bench-script --from-file=deploy/bench/script.js \
 	--from-file=internal/rpc/pb/kvstore.proto --dry-run=client -o yaml | k apply -f - >/dev/null
@@ -317,6 +335,7 @@ kubectl kustomize "deploy/bench/overlays/$OVERLAY" |
 	echo "vus=$VUS"
 	echo "k6_pods=$K6_PODS"
 	echo "preload_keys=$PRELOAD_KEYS"
+	echo "preload_vus=$PRELOAD_VUS"
 	echo "value_size=$VALUE_SIZE"
 	echo "planned_writes=$WRITES"
 	echo "keys_before=$keys"
@@ -405,6 +424,19 @@ echo
 echo "dropped_iterations $dropped (must be 0 below the knee), errors $errors, connections $connects of $VUS VUs"
 echo "k6 CPU (kubectl top, millicores): $(awk '$2 ~ /^k6-bench/ {print $4}' "$OUT/top.txt" | sort -n | awk '{a[NR] = $1} END {if (NR) print "max " a[NR] ", median " a[int((NR + 1) / 2)]; else print "no samples"}')"
 [ "$status" = 0 ] || echo "run.sh: the k6 Job failed (succeeded '${succeeded:-0}', failed '${failed:-0}'); see $OUT/k6-*.log" >&2
+if [ "$SCENARIO" = preload ]; then
+	# Clean: the Job succeeded, k6 timed every Put (put_count), none failed.
+	puts=$(cat "$OUT"/summary-*.env 2>/dev/null | awk -F= '$1 == "put_count" {s += $2} END {print s + 0}')
+	if [ "$status" = 0 ] && [ "$errors" = 0 ] && [ "$puts" = "$PRELOAD_KEYS" ]; then
+		write_ledger "$uid" $((keys + WRITES)) "$PRELOAD_KEYS" $((runs + 1))
+		echo "preload=clean" >>"$OUT/run.env"
+	else
+		write_ledger "$uid" $((keys + WRITES)) failed $((runs + 1))
+		echo "preload=failed" >>"$OUT/run.env"
+		echo "run.sh: the preload FAILED ($puts of $PRELOAD_KEYS Puts timed, $errors errors): every run on this KVCluster is refused until deploy/bench/run.sh reset and a clean preload." >&2
+		status=1
+	fi
+fi
 if [ "${BENCH_EXPORT:-1}" != 0 ] && grep -q '^window_end=' "$OUT/run.env"; then
 	echo
 	deploy/bench/export.sh "$OUT" || status=1
