@@ -1,0 +1,6 @@
+# kind: one node, so k6 runs next to the database and shares its CPUs. No
+# placement to set; docs/benchmarks.md says what kind runs are good for.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

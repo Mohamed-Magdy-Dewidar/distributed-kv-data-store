@@ -1,0 +1,72 @@
+# The k6 load generator of docs/benchmarks.md. deploy/bench/run.sh renders
+# it through an overlay (kind or gke), sets parallelism and completions to
+# the number of k6 pods, and creates the two ConfigMaps it reads:
+#   k6-bench-script  script.js and kvstore.proto, mounted at /scripts
+#   k6-bench-params  the run's parameters, as environment variables
+# Indexed: with K6_PODS=2 each pod runs its own execution segment (its
+# JOB_COMPLETION_INDEX), so the two share the load without overlapping. Both
+# wait for START_AT (Unix seconds), so they start within a second of each
+# other even if one was scheduled or pulled its image later.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-bench
+  namespace: kvstore
+  labels:
+    app.kubernetes.io/name: k6-bench
+spec:
+  completionMode: Indexed
+  completions: 1
+  parallelism: 1
+  # A failed k6 run is a result to look at, not something to retry.
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: k6-bench
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:2.3.0@sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d4555d0b3486a5aeb34
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: k6-bench-params
+          command:
+            - sh
+            - -c
+            - |
+              now=$(date +%s)
+              if [ "${START_AT:-0}" -gt "$now" ]; then sleep $((START_AT - now)); fi
+              echo "k6-bench-start $(date +%s) index=$JOB_COMPLETION_INDEX of $K6_PODS"
+              if [ "$K6_PODS" -gt 1 ]; then
+                i=$JOB_COMPLETION_INDEX
+                seq=0; j=1
+                while [ "$j" -le "$K6_PODS" ]; do seq="$seq,$j/$K6_PODS"; j=$((j + 1)); done
+                exec k6 run -q --execution-segment "$i/$K6_PODS:$((i + 1))/$K6_PODS" \
+                  --execution-segment-sequence "$seq" /scripts/script.js
+              fi
+              exec k6 run -q /scripts/script.js
+          # No CPU limit: a throttled k6 would show up as database latency.
+          # The request keeps the scheduler from packing k6 onto a busy node;
+          # run.sh samples k6's actual CPU (kubectl top) for every run.
+          resources:
+            requests:
+              cpu: "2"
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-bench-script

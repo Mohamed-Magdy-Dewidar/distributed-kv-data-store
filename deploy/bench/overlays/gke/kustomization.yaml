@@ -1,0 +1,34 @@
+# GKE: k6 runs on the loadgen node pool (infra/gke, loadgen_enabled = true),
+# never on a database node: the pool's label selects it, its taint is
+# tolerated, and the anti-affinity keeps k6 off any node with a kv pod even
+# if the pool's label were to match one.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target:
+      kind: Job
+      name: k6-bench
+    patch: |-
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: k6-bench
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              cloud.google.com/gke-nodepool: loadgen
+            tolerations:
+              - key: dedicated
+                operator: Equal
+                value: loadgen
+                effect: NoSchedule
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - topologyKey: kubernetes.io/hostname
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: kvstore

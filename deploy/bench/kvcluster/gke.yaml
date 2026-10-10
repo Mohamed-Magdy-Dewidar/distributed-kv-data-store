@@ -1,0 +1,36 @@
+# The KVCluster every benchmark runs against on GKE (docs/benchmarks.md):
+# the GKE sample (operator/config/samples/kvstore_v1alpha1_kvcluster_gke.yaml)
+# with the same resources as kind.yaml, the bench sample for kind. Keep the
+# two identical apart from image, storage and placement.
+# deploy/bench/run.sh reset creates it, replacing KV_IMAGE with the node
+# image's Artifact Registry path (the KV_IMAGE environment variable).
+apiVersion: kvstore.dewidar.dev/v1alpha1
+kind: KVCluster
+metadata:
+  name: kv
+  namespace: kvstore
+  labels:
+    app.kubernetes.io/name: kvstore-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 6
+  image: KV_IMAGE
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 512Mi
+  storage:
+    size: 10Gi
+    storageClassName: standard-rwo
+  placement:
+    onePodPerNode: true
+    zoneSpread: true
+    nodeSelector:
+      cloud.google.com/gke-nodepool: kvstore
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: kvstore
+        effect: NoSchedule

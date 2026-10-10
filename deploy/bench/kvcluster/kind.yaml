@@ -1,0 +1,24 @@
+# The KVCluster every benchmark runs against on kind (docs/benchmarks.md):
+# the kind sample (operator/config/samples/kvstore_v1alpha1_kvcluster.yaml)
+# with a 512Mi memory limit instead of 256Mi, so a run that stores up to
+# ~100k keys per pod stays clear of an OOM kill. resources replaces the
+# default as a whole, so the default requests are repeated here. The GKE
+# twin is gke.yaml; the two must keep the same spec apart from image,
+# storage and placement. deploy/bench/run.sh reset creates it.
+apiVersion: kvstore.dewidar.dev/v1alpha1
+kind: KVCluster
+metadata:
+  name: kv
+  namespace: kvstore
+  labels:
+    app.kubernetes.io/name: kvstore-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 6
+  image: kvnode:dev
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 512Mi

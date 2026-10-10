@@ -68,6 +68,17 @@ scale: ## Scale the KVCluster kv to N replicas (default 6), one node at a time.
 load: ## Start the steady writer (deploy/loadgen/writer.yaml) and the toolbox.
 	kubectl apply -f deploy/loadgen/loadgen.yaml -f deploy/loadgen/writer.yaml
 
+# The k6 benchmarks (docs/benchmarks.md): the logic is in deploy/bench/run.sh,
+# which runs on Windows too, and refuses any context but BENCH_CONTEXT
+# (default kind-kvstore, or gke_<project>_<region>_kvstore). Parameters are
+# passed through, e.g. make bench SCENARIO=writes PROFILE=ramp.
+SCENARIO ?=
+
+.PHONY: bench
+bench: ## Run one k6 benchmark: SCENARIO=reset|preload|writes|reads|mix|clean (docs/benchmarks.md).
+	@[ -n "$(SCENARIO)" ] || { echo "Set SCENARIO: reset, preload, writes, reads, mix or clean." >&2; exit 2; }
+	deploy/bench/run.sh $(SCENARIO)
+
 .PHONY: operator-test-e2e
 operator-test-e2e: kind-context ## Run the operator's kind e2e (kind only; the test pins kind's context too).
 	$(MAKE) -C operator test-e2e KIND_CLUSTER=$(KIND_CLUSTER)
