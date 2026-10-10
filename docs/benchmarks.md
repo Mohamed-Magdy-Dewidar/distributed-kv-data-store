@@ -327,3 +327,27 @@ With 60 VUs (the smoke run's preload) the same 20,000 Puts had no errors.
 With 120 in flight, throughput did not rise (146/s vs 149.5/s); only the
 queue grew, past the 5s client timeout for the slowest Puts. The kv pods
 were at a tenth of a core and logged nothing, and no pod restarted.
+
+### kind, 2026-10-10: baseline series, second attempt (stopped at run 2: no read knee)
+
+Commit `74bbac0`, clean tree. Images as in the smoke run (`kvnode:dev`,
+`kvstore-operator:dev`, built from `6eccab2`; nothing outside `docs/` and
+`deploy/bench` has changed since). `reset`, the preload with
+`PRELOAD_VUS=40`, then the approved series. It stopped after run 2: the
+read ramp found no knee up to its top rate, 1000/s, and the stop rules say
+not to extend a range without asking. Runs 3 to 7 (the two-pod read ramp,
+writes, mix) were not run.
+
+| Run | Scenario | Parameters | Data before | k6 summary | Prometheus (window) | k6 CPU | Flags |
+|---|---|---|---|---|---|---|---|
+| [20261010-221235](results/bench/20261010-221235-kind-preload-shared/) | preload | 20,000 keys, 40 VUs (closed) | 0 keys | 20,000 Puts in 139.5s (143.4/s); p50 187.1 ms, p95 915.4 ms, p99 1,563.6 ms; **0 errors, clean**; 40 connections | Put p50 196.1 / p99 2,190.5 ms; fsync p50 8.95 / p99 14.85 ms; kv CPU 0.06-0.11 cores; 0 AE rounds | max 130m | SPREAD (1.64) |
+| [20261010-221549](results/bench/20261010-221549-kind-reads-constant/) | 1. reads, constant | 200/s, 300s, 120 VUs | 20,000 keys | 60,001 Gets (200.0/s); p50 0.89 ms, p95 1.58 ms, p99 2.00 ms; 0 errors; 0 dropped; 120 connections | Get p50 0.40 / p99 1.33 ms; no fsyncs (reads write nothing); kv CPU 0.08-0.13 cores; spread 1.12 / 0.73 | max 281m | AE (2) |
+| [20261010-222146](results/bench/20261010-222146-kind-reads-ramp/) | 2. reads, ramp | 100 to 1000/s, steps of 100, 30s held, 5s moves (345s), 120 VUs | 20,000 keys | 189,746 Gets (550.0/s average); p50 0.58 ms, p95 1.26 ms, p99 1.76 ms, max 19.65 ms; 0 errors; 0 dropped; 120 connections | Get p50 0.29 / p99 0.99 ms over the window; no fsyncs; kv CPU 0.14-0.23 cores; spread 1.15 / 0.60 | max 578m | AE (2); **no knee** |
+
+**No read knee up to 1000/s.** Get p99 in Prometheus, by 15s step, stayed
+at 0.95-0.99 ms from 237/s to 959/s (1.1-2.3 ms at the low rates at the
+start, where few requests make the quantile coarse); nothing turned up, no
+error, no dropped iteration. The kv pods used at most 0.23 cores each, k6
+0.58 cores at the top. A Get with r=2 does no fsync, so the disk that limits
+the writes on kind is not in its path. Finding the read knee on kind needs
+a higher range, which is a decision for the next series.
