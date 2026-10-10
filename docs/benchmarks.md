@@ -93,6 +93,26 @@ free VU are `dropped_iterations`):
   knee is the rate where p99 turns up sharply, or errors or dropped
   iterations start.
 
+**Reading the knee.** In a ramp, k6 tags every iteration with the step it
+starts in (each held rate is a step, numbered from 1; iterations that
+start during a move between steps belong to none), and `run.sh` saves one
+row per step and op as `steps.csv`: target and achieved rate, p50/p95/p99
+and max, errors, dropped iterations. **The knee is read from `steps.csv`**
+(client side, each step on its own) **and confirmed in Prometheus** (server
+side: the Put/Get and fsync p99 series over the same minutes, which k6
+cannot inflate). The Prometheus series alone cannot place it: they are 1m
+rates, so each point blends the steps around it.
+
+| `steps.csv` column | Meaning |
+|---|---|
+| `pod` | The k6 pod (0, or 0 and 1 with `K6_PODS=2`: rates and counts add across a step's two rows, percentiles do not) |
+| `step`, `op` | The step, from 1, and `put` or `get` (mix has a row for each) |
+| `target_rate`, `seconds` | The rate this pod and op were to hold (mix halves it per op, two pods per pod), and for how long |
+| `started`, `achieved_rate` | Iterations that started in the step, and per second |
+| `count`, `p50_ms` ... `max_ms` | Their requests that k6 timed, and the latency quantiles |
+| `errors` | Their failed requests |
+| `dropped` | Target arrivals (`target_rate` × `seconds`) less `started`. k6 tags `dropped_iterations` with the scenario only, so this is derived; the steps' sum is within about one per step of k6's total, which also counts the moves |
+
 **Values** are 256 ASCII characters (the key, `|`, `x` padding), fixed for
 every run. The node stores a client value JSON-encoded, so 258 bytes.
 
@@ -213,6 +233,7 @@ to change it):
 | `k6-<i>.log` | Each k6 pod's log |
 | `summary-<i>.json` | k6's whole end-of-test summary data |
 | `summary-<i>.env` | The same, flat: per op count, rate, p50/p95/p99/max (ms), errors; `dropped_iterations`, `vus_max`, `connects` |
+| `steps.csv` | Ramps only: one row per k6 pod, step and op ([Reading the knee](#the-workload)) |
 | `top.txt` | `kubectl top pod --containers` every 15s through the run: k6's CPU next to every kv pod's |
 | `prometheus/*.csv` | `deploy/bench/export.sh`: one CSV per query, 15s steps, from 60s before the window to 30s after, in the shape of [results/gke-session1/](results/gke-session1/): Put and Get rates by code and p50/p99, data-engine fsync p50/p99, requests coordinated by pod, storage writes by pod, CPU and memory by pod, anti-entropy rounds by pod, quorum failures, hints |
 | `prometheus/window.env` | The whole window at once: request and fsync counts, quantiles over the window (`histogram_quantile` of the buckets' `increase`, interpolated inside a bucket), anti-entropy rounds, quorum failures, hints, CPU by pod, the spread |
@@ -404,7 +425,8 @@ What the validation found:
   share of those again: 30 per pod, 60 in all, where 120 were meant. Fixed:
   `run.sh` passes the total, and the segments split it, as they already
   split the rates. Re-checked as a smoke run (the last row).
-- **Nothing reports a knee; it is read off the series.** `run.sh` and the
+- **Nothing reports a knee; it is read off the series.** (Since then,
+  k6 reports each step itself: `steps.csv`, [Reading the knee](#the-workload).) `run.sh` and the
   export give whole-run quantiles and per-15s series of 1m rates. In V2 the
   per-step Put p99 was 19-37 ms up to about 70/s, then 51-59 ms at the
   top, with fsync p99 from 10 to 14 ms: perhaps the start of a knee, but
@@ -413,3 +435,30 @@ What the validation found:
   need steps of 60s or more ([the GKE plan](#the-read-knee-is-measured-on-gke)),
   or series over a shorter rate window; for writes, longer steps cost keys
   against the cap.
+
+### kind, 2026-10-10: per-step report check (smoke)
+
+`steps.csv` checked with one short mix ramp on the validation KVCluster
+(ledger 27,500 keys before, 34,500 after), with the change uncommitted:
+`commit=0e0c4df-dirty`, `smoke=1`. A pipeline check, not a result.
+
+| Run | Parameters | k6 summary | Prometheus (window) | k6 CPU |
+|---|---|---|---|---|
+| [20261010-230442](results/bench/20261010-230442-kind-mix-ramp/) | mix, ramp 100 to 300/s (50 to 150 per op), steps of 100, 20s held, 5s moves (70s), 120 VUs | Put: 6,916, p99 1,411.6 ms; Get: 6,999, p99 394.9 ms; 0 errors; 83 dropped | Put p50 19.68 / p99 1,650.5 ms; Get p99 368.7 ms; fsync p99 14.61 ms; spread 1.56 / 0.86 | max 171m |
+
+| Step | Op | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Errors | Dropped |
+|---|---|---|---|---|---|---|---|---|
+| 1 | put | 50 | 50.0 | 11.35 | 14.35 | 17.37 | 0 | 0 |
+| 1 | get | 50 | 50.0 | 1.06 | 1.82 | 6.59 | 0 | 0 |
+| 2 | put | 100 | 100.0 | 12.62 | 35.94 | 100.09 | 0 | 0 |
+| 2 | get | 100 | 100.0 | 0.95 | 10.31 | 21.03 | 0 | 0 |
+| 3 | put | 150 | 145.8 | 173.57 | 1,286.17 | 1,519.30 | 0 | 84 |
+| 3 | get | 150 | 149.9 | 35.18 | 279.22 | 690.29 | 0 | 1 |
+
+What it checked: the three held rates came out as steps 1-3 with their
+targets, each op on its own row; the steps' derived drops (85) match k6's
+total (83) within one per step; and the knee shows where a whole-run
+summary could not: Put p99 17, 100, then 1,519 ms. On kind, with this
+short a ramp, mix's knee lies between 200 and 300/s in all (writes
+between 100 and 150/s), in line with the preloads' 145/s. That is an
+observation from a smoke run, not a measured knee.

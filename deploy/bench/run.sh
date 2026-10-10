@@ -387,8 +387,20 @@ k get pods -l "job-name=$JOB" --no-headers \
 		k logs "$pod" >"$OUT/k6-$index.log" 2>&1 || true
 		sed -n '/^===K6_BENCH_SUMMARY_BEGIN===$/,/^===K6_BENCH_SUMMARY_END===$/p' "$OUT/k6-$index.log" | sed '1d;$d' >"$OUT/summary-$index.json"
 		sed -n 's/^K6_BENCH //p' "$OUT/k6-$index.log" >"$OUT/summary-$index.env"
+		sed -n '/^===K6_BENCH_STEPS_BEGIN===$/,/^===K6_BENCH_STEPS_END===$/p' "$OUT/k6-$index.log" | sed '1d;$d' >"$OUT/steps-$index.csv"
+		[ -s "$OUT/steps-$index.csv" ] || rm -f "$OUT/steps-$index.csv"
 		echo "k6_node_$index=$node" >>"$OUT/run.env"
 	done
+# A ramp's steps, one row per k6 pod, step and op (deploy/bench/script.js):
+# the client side of the knee. With two pods, rates and counts add across
+# a step's rows; percentiles do not.
+if ls "$OUT"/steps-*.csv >/dev/null 2>&1; then
+	for f in "$OUT"/steps-*.csv; do
+		i=${f##*/steps-}
+		awk -F, -v pod="${i%.csv}" 'NR == 1 {print "pod," $0; next} {print pod "," $0}' "$f"
+	done | awk 'NR == 1 || !/^pod,/' >"$OUT/steps.csv"
+	rm -f "$OUT"/steps-*.csv
+fi
 
 # The measured window: from the first pod's start to the last pod's end.
 window=$(for f in "$OUT"/k6-*.log; do
@@ -422,6 +434,11 @@ connects=$(cat "$OUT"/summary-*.env 2>/dev/null | awk -F= '$1 == "connects" {s +
 	echo "connects=$connects"
 } >>"$OUT/run.env"
 echo
+if [ -f "$OUT/steps.csv" ]; then
+	echo "Steps (steps.csv; the knee is read here and confirmed in Prometheus):"
+	awk -F, 'NR == 1 {next} {printf "  pod %s step %2s %s: target %7s/s achieved %7s/s  p50 %8s  p95 %8s  p99 %8s ms  errors %s  dropped %s\n", $1, $2, $3, $4, $7, $9, $10, $11, $13, $14}' "$OUT/steps.csv"
+	echo
+fi
 echo "dropped_iterations $dropped (must be 0 below the knee), errors $errors, connections $connects of $VUS VUs"
 echo "k6 CPU (kubectl top, millicores): $(awk '$2 ~ /^k6-bench/ {print $4}' "$OUT/top.txt" | sort -n | awk '{a[NR] = $1} END {if (NR) print "max " a[NR] ", median " a[int((NR + 1) / 2)]; else print "no samples"}')"
 [ "$status" = 0 ] || echo "run.sh: the k6 Job failed (succeeded '${succeeded:-0}', failed '${failed:-0}'); see $OUT/k6-*.log" >&2
