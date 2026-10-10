@@ -466,6 +466,161 @@ When the project is no longer needed, delete it
 (`gcloud projects delete kvstore-gke`): that removes anything Terraform's
 state lost track of.
 
+## Session 2: the benchmarks (runbook)
+
+The k6 benchmarks of [benchmarks.md](benchmarks.md) on this cluster. Not
+run yet; this is the plan. It follows [A session](#a-session) for the
+set-up and the teardown, with the loadgen pool added, and replaces its
+steps 7 to 9 (the steady writer and the experiments) with the benchmark
+series. **No scaling of the database in this session**: the two-pod step
+needs the CPU quota a scale would take ([Quotas](#quotas)).
+
+**Estimate: about 2.5 hours, about $2.40** (the cluster with one loadgen
+node at $0.88/h; the second loadgen node, for its half hour, $0.11; NAT
+data processing $0.05-0.10). Budget 3.5 hours and $3.50; the decision
+point for writes adds about 20 minutes if taken.
+
+| Part | Time |
+|---|---|
+| Before, set-up (cluster creation about 15 min, not timed in session 1) | ~30 min |
+| Series A: reads and writes | ~35 min |
+| Decision point for writes above 500/s, if taken | ~20 min |
+| Series B: mix | ~25 min |
+| The two-pod step | ~28 min |
+| Recording between runs | ~15 min |
+| Teardown | ~15 min |
+
+### Before
+
+1. The tree is clean, at the commit the images will be built from:
+   `git status --short` shows nothing tracked. `run.sh` refuses `writes`,
+   `reads` and `mix` on a dirty tree ([benchmarks.md](benchmarks.md#running)).
+2. Your address matches `my_ip_cidr` ([Before the first session](#before-the-first-session), item 6).
+3. In `infra/gke/terraform.tfvars` (not with `-var`: a later plain
+   `apply` would drop the pool):
+
+   ```hcl
+   loadgen_enabled = true
+   loadgen_nodes   = 1
+   ```
+
+### Set-up
+
+4. [A session](#a-session), steps 1 to 6, with `--context $CTX` on every
+   kubectl call. The plan says 16 to add; `get nodes` shows 8: 6
+   `kvstore`, 1 `system`, 1 `loadgen`.
+5. **The loadgen node has room for k6** (3 CPUs requested; 3920m
+   allocatable on an n2-standard-4). Before anything else lands on it:
+
+   ```sh
+   kubectl --context $CTX describe node -l cloud.google.com/gke-nodepool=loadgen \
+     | sed -n '/Allocated resources/,/memory/p'
+   ```
+
+   CPU requests must be 920m or less. If more, set
+   `loadgen_machine_type = "n2-standard-8"` in `terraform.tfvars` and
+   `apply` (the pool is replaced; about $0.43/h instead of $0.21/h).
+   `run.sh` makes the same check before every run and refuses if k6 does
+   not fit.
+6. Step 5 of [A session](#a-session) only up to the namespace: **the
+   KVCluster is the bench one**, from `run.sh`, with the node image by
+   digest:
+
+   ```sh
+   kubectl create namespace kvstore --dry-run=client -o yaml | kubectl --context $CTX apply -f -
+   export BENCH_CONTEXT=$CTX
+   KV_IMAGE=$NODE_IMG deploy/bench/run.sh reset      # type the context name to confirm
+   ```
+
+   Then the placement and membership checks of step 5 (6 distinct nodes,
+   each zone twice; every pod `epoch=0 members=6`), and Prometheus's 6 of
+   6 targets (step 6). **Do not start `deploy/loadgen/writer.yaml`**: its
+   keys are not in the ledger, and its load would be in every window.
+
+### Series A: reads and writes
+
+On the fresh KVCluster. Ramps hold each rate 60s (`STEP_SECONDS=60`). After
+each run: errors 0, `dropped_iterations` 0 below the knee, k6's CPU under
+1500m (half its 3-CPU request), the spread at most 1.5
+([Is the database the bottleneck?](benchmarks.md#is-the-database-the-bottleneck)).
+
+| Run | Command | Keys | Time |
+|---|---|---|---|
+| preload | `deploy/bench/run.sh preload` (40 VUs; must be clean) | 20,000 | ~4 min |
+| reads, constant | `RATE=1000 deploy/bench/run.sh reads` | 0 | ~6.5 min |
+| reads, ramp | `PROFILE=ramp RAMP_FROM=1000 RAMP_TO=5000 RAMP_STEP=500 STEP_SECONDS=60 deploy/bench/run.sh reads` (9m40s) | 0 | ~11 min |
+| writes, constant | `RATE=40 deploy/bench/run.sh writes` | 12,000 | ~6.5 min |
+| writes, ramp | `PROFILE=ramp RAMP_FROM=100 RAMP_TO=500 RAMP_STEP=100 STEP_SECONDS=60 deploy/bench/run.sh writes` (5m20s) | 96,000 | ~7 min |
+| | | **128,000 of 130,000** | |
+
+**Reading each knee.** From the run's `steps.csv`: the first step where p99
+turns up sharply, or errors start, or `dropped` is above 0, or the achieved
+rate falls short of the target. Then confirm it in Prometheus over the
+same minutes (`prometheus/put_latency_p99.csv` or `get_latency_p99.csv`,
+and `wal_fsync_latency_p99_data.csv` for writes): the database's own p99
+must turn up there too, or the knee is k6's or the network's, not the
+store's.
+
+### Decision point: writes above 500/s
+
+If the write ramp's last step (500/s) shows no knee, the cap stops the
+series from going higher on this KVCluster (the ledger is at 128,000).
+The choice, made on the day:
+
+- **Stop here**, and record the write knee as above 500/s on GKE.
+- **Reset and ramp higher**: `reset`, `preload`, then
+  `PROFILE=ramp RAMP_FROM=500 RAMP_TO=800 RAMP_STEP=100 STEP_SECONDS=30`
+  (`writes`, 87,750 keys, 2m15s; 20 minutes in all with the reset).
+  Steps of 30s fit the cap; `steps.csv` still places the knee step by
+  step, while the Prometheus series (1m rates) confirm it less sharply.
+  Any higher needs the memory limit and the cap raised together
+  ([The key cap](benchmarks.md#the-key-cap)), which is a change to make
+  before a session, not during one.
+
+### Series B: mix
+
+`reset`, `preload`, then:
+
+| Run | Command | Keys | Time |
+|---|---|---|---|
+| mix, constant | `RATE=80 deploy/bench/run.sh mix` (40 writes + 40 reads) | 12,000 | ~6.5 min |
+| mix, ramp | `PROFILE=ramp RAMP_FROM=200 RAMP_TO=1000 RAMP_STEP=200 STEP_SECONDS=60 deploy/bench/run.sh mix` (5m20s) | 96,000 | ~7 min |
+
+`steps.csv` has a row per op in each step: the knee is where either op's
+turns up.
+
+### The two-pod step
+
+On the Series B KVCluster (reads write nothing, so its 128,000 keys do not
+matter).
+
+7. Set `loadgen_nodes = 2` in `terraform.tfvars` and
+   `terraform -chdir=infra/gke apply`: the plan says `1 to change` (the
+   pool, resized in place). `get nodes` shows 9. Check the new node as in
+   step 5.
+8. The read ramp twice, back to back, on the same data:
+
+   ```sh
+   PROFILE=ramp RAMP_FROM=1000 RAMP_TO=5000 RAMP_STEP=500 STEP_SECONDS=60 deploy/bench/run.sh reads
+   K6_PODS=2 PROFILE=ramp RAMP_FROM=1000 RAMP_TO=5000 RAMP_STEP=500 STEP_SECONDS=60 deploy/bench/run.sh reads
+   ```
+
+   With two pods, `steps.csv` has a row per pod: add their achieved rates
+   per step; compare percentiles per pod. The read knee counts only where
+   the two runs agree within 10% (rate and Prometheus's Get p99 at the
+   knee). If k6 passes 1500m even with two pods before the database's p99
+   turns up, the result is a lower bound on the read knee, and is recorded
+   as one.
+9. Set `loadgen_nodes = 1` again only if the session goes on; otherwise
+   the teardown removes the pool.
+
+### Teardown
+
+10. [A session](#a-session), step 10: check your address, delete the
+    KVCluster and its volumes, `terraform destroy`, and every list empty.
+    Then set `loadgen_enabled = false` in `terraform.tfvars`, so the next
+    session starts without the pool unless it asks for it.
+
 ## The gcloud configuration
 
 `kvstore` is a separate gcloud configuration, so that commands here never
