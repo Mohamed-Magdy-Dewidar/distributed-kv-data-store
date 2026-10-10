@@ -307,12 +307,13 @@ k create configmap k6-bench-params --dry-run=client -o yaml \
 	--from-literal=SCENARIO="$SCENARIO" --from-literal=PROFILE="$PROFILE" \
 	--from-literal=RATE="$RATE" --from-literal=DURATION="$DURATION" \
 	--from-literal=START_RATE="$START_RATE" --from-literal=STAGES="$STAGES" \
-	--from-literal=VUS="$((VUS / K6_PODS))" --from-literal=PRELOAD_KEYS="$PRELOAD_KEYS" \
+	--from-literal=VUS="$VUS" --from-literal=PRELOAD_KEYS="$PRELOAD_KEYS" \
 	--from-literal=VALUE_SIZE="$VALUE_SIZE" --from-literal=RUN_ID="$RUN_ID" \
 	--from-literal=K6_PODS="$K6_PODS" --from-literal=START_AT="$START_AT" | k apply -f - >/dev/null
 
-# Each k6 pod gets VUS / K6_PODS VUs; the rates are split by the execution
-# segments, so RATE stays the total.
+# VUS and the rates are totals: each k6 pod's execution segment takes its
+# share of both (VUS / K6_PODS VUs each). Dividing VUS here as well would
+# halve it twice: the 2026-10-10 validation run got 30 VUs per pod, not 60.
 delete_job
 kubectl kustomize "deploy/bench/overlays/$OVERLAY" |
 	sed -e "s/^  completions: 1$/  completions: $K6_PODS/" -e "s/^  parallelism: 1$/  parallelism: $K6_PODS/" |

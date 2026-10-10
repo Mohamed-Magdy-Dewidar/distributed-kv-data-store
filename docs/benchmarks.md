@@ -264,6 +264,32 @@ vCPUs vs six 2-vCPU nodes plus k6's own), and k6's placement (shared node
 vs its own). So kind against GKE is not a like-for-like comparison: what
 compares is each cluster's knee and its behaviour past it.
 
+## The read knee is measured on GKE
+
+The kind read ramp found no knee up to 1000/s (Get p99 flat at about 1 ms,
+[below](#kind-2026-10-10-baseline-series-second-attempt-stopped-at-run-2-no-read-knee)),
+and it is not extended on kind: above about 1000/s k6 takes a growing
+share of the one node's CPUs (0.58 cores at 1000/s, next to the database
+it is loading), so a knee found there could be k6's, not the database's.
+On GKE k6 has a node of its own, and the read ramp is sized for it:
+
+- **Range: 1000 to at least 5000/s** (`RAMP_FROM=1000 RAMP_TO=5000
+  RAMP_STEP=500`), after a constant run at 1000/s, the top of what kind
+  showed. Reads write nothing, so the key cap does not limit them.
+- **The two-pod check is part of the read result, not optional.** k6's CPU
+  on kind grew from about 0.28 to 0.58 cores between 200/s and 1000/s; at
+  that cost one pod passes the 1000m validity limit (half its 2-CPU
+  request) somewhere around 2000/s, well inside the range. So the read
+  ramp runs twice, once with one k6 pod and once with `K6_PODS=2` (two
+  loadgen nodes, `loadgen_nodes = 2`), and the knee counts only where both
+  agree within 10%. If k6's CPU passes the limit even with two pods before
+  the database's latency turns up, the result is a lower bound on the read
+  knee, and says so.
+- **Steps long enough to place the knee.** The export's series are rates
+  over 1m; a 30s step blends two steps into each point (see the validation
+  below). Use `STEP_SECONDS=60` for the read ramps (9 rates, about 9.7
+  minutes each), so each step has a point of its own.
+
 ## Open questions
 
 **Can a client tell slow from down?** Under overload (the failed preload at
@@ -351,3 +377,39 @@ error, no dropped iteration. The kv pods used at most 0.23 cores each, k6
 0.58 cores at the top. A Get with r=2 does no fsync, so the disk that limits
 the writes on kind is not in its path. Finding the read knee on kind needs
 a higher range, which is a decision for the next series.
+
+### kind, 2026-10-10: validation of the untested paths (not a baseline)
+
+On the KVCluster of the second attempt (ledger at 20,000 keys, the clean
+preload), from commit `0ea9d60`, clean tree: short runs to check the
+mechanics nothing had exercised yet: two k6 pods, a write ramp, mix. **Not
+a baseline, and kind's write capacity was not measured** beyond these
+short runs; runs 3 to 7 of the approved series were replaced by these.
+
+| Run | What | Parameters | Data before | k6 summary | Prometheus (window) | k6 CPU | Checked |
+|---|---|---|---|---|---|---|---|
+| [20261010-223145](results/bench/20261010-223145-kind-reads-constant/) | V1. two k6 pods | reads, constant 200/s, 60s, `K6_PODS=2`, VUS 120 | 20,000 keys | pod 0: 6,001 Gets, p50 1.00 / p95 1.69 / p99 2.00 ms; pod 1: 6,000, p50 0.80 / p95 1.57 / p99 1.88 ms; 0 errors; 0 dropped; **30 + 30 connections** | 12,001 Gets; Get p50 0.42 / p99 1.49 ms; spread 1.89 / 0.67 | max 127m | Both pods logged `k6-bench-start 1791671565`; 6,001 + 6,000 = 200/s × 60s, so the segments did not overlap; the summaries combine. **Bug: 30 VUs per pod, not 60** |
+| [20261010-223456](results/bench/20261010-223456-kind-writes-ramp/) | V2. write ramp | 20 to 100/s, steps of 20, 15s held, 5s moves (95s) | 20,000 keys | 5,699 Puts (60.0/s average); p50 11.13 / p95 24.75 / p99 44.56 ms; 0 errors; 0 dropped; 120 connections | Put p50 11.67 / p99 43.04 ms; fsync p50 4.48 / p99 12.62 ms; spread 1.34 / 0.74 | max 85m | The ledger went from 20,000 to 25,700, the 5,700 planned (5,699 written). No knee is reported: see below |
+| [20261010-223739](results/bench/20261010-223739-kind-mix-constant/) | V3. mix | constant 60/s (30 writes + 30 reads), 60s | 25,700 keys | Put: 1,800, p50 11.87 / p95 15.26 / p99 17.10 ms; Get: 1,801, p50 1.25 / p95 2.23 / p99 6.84 ms; 0 errors; 0 dropped; 120 connections | Put p50 12.07 / p99 18.54 ms; Get p50 0.69 / p99 5.68 ms; fsync p99 12.23 ms; spread 1.46 / 0.73 | max 92m | Reads and writes reported separately, by k6 and Prometheus; ledger +1,800 (to 27,500) |
+| [20261010-223943](results/bench/20261010-223943-kind-reads-constant/) | V1 again, with the fix | as V1; `BENCH_SMOKE=1` (`commit=0ea9d60-dirty`, `smoke=1`: the fix uncommitted) | 27,500 keys | pod 0: 6,001 Gets, p99 2.32 ms; pod 1: 6,000, p99 2.25 ms; 0 errors; 0 dropped; **60 + 60 connections** | 12,001 Gets; Get p50 0.47 / p99 2.11 ms; spread 1.22 / 0.63 | max 127m | Same start second (`1791672043`); 120 connections of 120 VUs |
+
+No anti-entropy rounds fell in these windows. k6's CPU median in the
+two-pod runs is 0m because it includes the 60s the pods wait for
+`START_AT`.
+
+What the validation found:
+
+- **The two-pod split halved the VUs twice.** `run.sh` gave each pod
+  `VUS / K6_PODS` VUs, and k6's execution segment then took that pod's
+  share of those again: 30 per pod, 60 in all, where 120 were meant. Fixed:
+  `run.sh` passes the total, and the segments split it, as they already
+  split the rates. Re-checked as a smoke run (the last row).
+- **Nothing reports a knee; it is read off the series.** `run.sh` and the
+  export give whole-run quantiles and per-15s series of 1m rates. In V2 the
+  per-step Put p99 was 19-37 ms up to about 70/s, then 51-59 ms at the
+  top, with fsync p99 from 10 to 14 ms: perhaps the start of a knee, but
+  with 15s steps each point spans three or four steps, so it cannot be
+  placed. The default 30s steps blend two. Ramps meant to locate a knee
+  need steps of 60s or more ([the GKE plan](#the-read-knee-is-measured-on-gke)),
+  or series over a shorter rate window; for writes, longer steps cost keys
+  against the cap.

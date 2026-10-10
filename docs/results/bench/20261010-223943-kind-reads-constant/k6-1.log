@@ -1,0 +1,18 @@
+k6-bench-start 1791672043 index=1 of 2
+k6 bench: scenario=reads profile=constant run=20261010-223943 60.0s
+  get: 6000 requests (100.0/s), p50 0.98 ms, p95 1.78 ms, p99 2.25 ms, max 5.60 ms, errors 0
+  dropped_iterations 0, vus_max 60, connects 60
+===K6_BENCH_SUMMARY_BEGIN===
+{"root_group":{"path":"","id":"d41d8cd98f00b204e9800998ecf8427e","groups":[],"checks":[],"name":""},"options":{"summaryTrendStats":["min","med","avg","p(90)","p(95)","p(99)","max","count"],"summaryTimeUnit":"","noColor":false},"state":{"isStdOutTTY":false,"isStdErrTTY":false,"testRunDurationMs":59996.099768},"metrics":{"grpc_req_duration":{"contains":"time","values":{"p(95)":1.7833540000000003,"p(99)":2.2540604400000017,"max":5.602982,"count":6000,"min":0.435561,"med":0.9827950000000001,"avg":1.0738453949999995,"p(90)":1.5503184},"type":"trend"},"iterations":{"values":{"count":6000,"rate":100.0065008092444},"type":"counter","contains":"default"},"vus_max":{"type":"gauge","contains":"default","values":{"value":60,"min":60,"max":60}},"kv_errors{op:get}":{"type":"rate","contains":"default","values":{"passes":0,"fails":6000,"rate":0},"thresholds":{"rate>=0":{"ok":true}}},"kv_errors":{"type":"rate","contains":"default","values":{"rate":0,"passes":0,"fails":6000}},"data_sent":{"type":"counter","contains":"data","values":{"count":610288,"rate":10172.127894312025}},"data_received":{"contains":"data","values":{"count":2241106,"rate":37354.194833767084},"type":"counter"},"grpc_req_duration{op:get}":{"type":"trend","contains":"time","values":{"min":0.435561,"med":0.9827950000000001,"avg":1.0738453949999995,"p(90)":1.5503184,"p(95)":1.7833540000000003,"p(99)":2.2540604400000017,"max":5.602982,"count":6000},"thresholds":{"max>=0":{"ok":true}}},"iteration_duration":{"type":"trend","contains":"time","values":{"min":0.554411,"med":1.2217825,"avg":1.3437101671666696,"p(90)":1.9013225,"p(95)":2.1659715000000004,"p(99)":2.7987282200000005,"max":48.357852,"count":6000}},"vus":{"type":"gauge","contains":"default","values":{"value":0,"min":0,"max":0}},"kv_connects":{"values":{"count":60,"rate":1.000065008092444},"type":"counter","contains":"default"}}}
+===K6_BENCH_SUMMARY_END===
+K6_BENCH duration_s=60.0
+K6_BENCH dropped_iterations=0
+K6_BENCH vus_max=60
+K6_BENCH connects=60
+K6_BENCH get_count=6000
+K6_BENCH get_rate=100.0
+K6_BENCH get_p50_ms=0.98
+K6_BENCH get_p95_ms=1.78
+K6_BENCH get_p99_ms=2.25
+K6_BENCH get_max_ms=5.60
+K6_BENCH get_errors=0
