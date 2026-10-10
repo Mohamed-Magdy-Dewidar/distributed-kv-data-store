@@ -8,6 +8,7 @@
 | [gke.md](gke.md) | The GKE cluster in `infra/gke/` (Terraform): what it creates and why, quotas, cost per hour, and a session from `terraform apply` to `terraform destroy`. |
 | [membership.md](membership.md) | The procedure for adding a node, removing one, and removing a crashed one, and what the admin API's answers mean. |
 | [observability.md](observability.md) | The metrics each node serves on `/metrics`, and the local Prometheus and Grafana in `deploy/observability/`: how to run them, the dashboard, and measured latencies. |
+| [benchmarks.md](benchmarks.md) | The k6 load tests in `deploy/bench/`: scenarios, how to run them on kind and GKE, how a result is shown to be the database's limit, and every run's versions, parameters and results. |
 | [testing.md](testing.md) | What the unit and end-to-end tests cover, how to run them, where they have been run, and what the crash tests do not prove. |
 | [development.md](development.md) | Building, testing, and regenerating the checked-in gRPC code with pinned tool versions. |
 | [known-limitations.md](known-limitations.md) | What the store does not do, or does imperfectly, and why: consistency, data model, membership, operations, durability. |

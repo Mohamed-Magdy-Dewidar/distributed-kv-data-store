@@ -26,6 +26,7 @@
 #   BENCH_OUT      results directory [docs/results/bench/<run>]
 #   KV_IMAGE       reset on GKE: the node image's Artifact Registry path
 #   BENCH_YES=1    reset without asking
+#   BENCH_EXPORT=0 skip the Prometheus export (deploy/bench/export.sh)
 # In mix, RATE (or every ramp rate) and VUS are split evenly between writes
 # and reads, so they must be even.
 #
@@ -299,7 +300,8 @@ kubectl kustomize "deploy/bench/overlays/$OVERLAY" |
 	echo "keys_before=$keys"
 	echo "keys_after=$((keys + WRITES))"
 	echo "kvcluster_uid=$uid"
-	echo "kvcluster_epoch=$(kvc '{.status.epoch}')"
+	epoch=$(kvc '{.status.epoch}')
+	echo "kvcluster_epoch=${epoch:-0}"
 	echo "kv_image=$(kvc '{.spec.image}')"
 	echo "kv_memory_limit=$memlimit"
 	echo "k6_image=$(kubectl kustomize "deploy/bench/overlays/$OVERLAY" | sed -n 's/^ *image: //p')"
@@ -360,8 +362,10 @@ if [ -n "$window" ]; then
 		echo "window_end=$(date -u -d "@$wend" +%FT%TZ)"
 	} >>"$OUT/run.env"
 fi
+# The machine type (GKE's instance-type label; kind's node has none).
 sed -n 's/^k6_node_[0-9]*=//p' "$OUT/run.env" | sort -u | while read -r node; do
-	echo "k6_node_type_$node=$(kubectl --context "$BENCH_CONTEXT" get node "$node" -o 'jsonpath={.metadata.labels.node\.kubernetes\.io/instance-type}')" >>"$OUT/run.env"
+	type=$(kubectl --context "$BENCH_CONTEXT" get node "$node" -o 'jsonpath={.metadata.labels.node\.kubernetes\.io/instance-type}')
+	echo "k6_node_type_$node=${type:-none}" >>"$OUT/run.env"
 done
 
 echo
@@ -378,5 +382,9 @@ echo
 echo "dropped_iterations $dropped (must be 0 below the knee), errors $errors, connections $connects of $VUS VUs"
 echo "k6 CPU (kubectl top, millicores): $(awk '$2 ~ /^k6-bench/ {print $4}' "$OUT/top.txt" | sort -n | awk '{a[NR] = $1} END {if (NR) print "max " a[NR] ", median " a[int((NR + 1) / 2)]; else print "no samples"}')"
 [ "$status" = 0 ] || echo "run.sh: the k6 Job failed (succeeded '${succeeded:-0}', failed '${failed:-0}'); see $OUT/k6-*.log" >&2
+if [ "${BENCH_EXPORT:-1}" != 0 ] && grep -q '^window_end=' "$OUT/run.env"; then
+	echo
+	deploy/bench/export.sh "$OUT" || status=1
+fi
 echo "Results: $OUT"
 exit "$status"
