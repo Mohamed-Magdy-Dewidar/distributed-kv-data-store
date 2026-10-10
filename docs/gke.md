@@ -36,6 +36,7 @@ Google's price list and the project's quotas.
 | Cluster `kvstore` | Regional, release channel Regular, VPC-native, Dataplane V2 (enforces NetworkPolicy), private nodes, public control-plane endpoint open to `my_ip_cidr` only, the persistent disk CSI driver (`standard-rwo`), system-component logging and monitoring only, `deletion_protection = false`. The default node pool is removed. |
 | Node pool `kvstore` | 3 zones; 2 nodes per zone, autoscaled 2-3 per zone; e2-standard-2; 20 GiB pd-balanced boot disks; taint `dedicated=kvstore:NoSchedule`; no Spot VMs; surge upgrades, 1 new node per zone before an old one is drained. |
 | Node pool `system` | 1 e2-standard-2 in one zone, untainted: GKE's own components (kube-dns, metrics-server), the operator, Prometheus and Grafana. |
+| Node pool `loadgen` | **Only with `loadgen_enabled = true`** (off by default), for the k6 benchmarks ([benchmarks.md](benchmarks.md)): 1 n2-standard-4 (`loadgen_machine_type`) in the system pool's zone, no autoscaling; taint `dedicated=loadgen:NoSchedule`, which the `deploy/bench` GKE overlay tolerates, selecting the pool by name. Set it in `terraform.tfvars` for the session, not with `-var`: a later `apply` without it (a new address, item 6) would remove the pool. |
 | Service account `kvstore-nodes` | The nodes run as it: `roles/container.defaultNodeServiceAccount`, and read access to the repository. |
 | Artifact Registry `kvstore` | Docker, in the region. Destroyed with its images. |
 
@@ -49,6 +50,10 @@ Why these choices:
 - **No Spot VMs**: a preemption in the middle of a failure test would be a
   second, unplanned failure.
 - **One system node**: see the quotas below.
+- **The loadgen pool off by default**: it is for benchmark sessions, and
+  costs about a third as much again while it exists. N2 rather than E2
+  because the database pool at its maximum takes 20 of the 24 `E2_CPUS`;
+  N2 has its own quota.
 - **Local state**, gitignored: one user, a short-lived project, and deleting
   the project is the final cleanup. A GCS backend needs a bucket that exists
   before the first apply and outlives every destroy, for no gain here. The
@@ -119,15 +124,21 @@ node until the resources are available"
 A second system node would make the 7-replica upgrade 24 and leave nothing
 for anything else, hence one.
 
+The loadgen pool's n2-standard-4 counts against `N2_CPUS` (200), not
+`E2_CPUS`, and against `CPUS_ALL_REGIONS` (32) like every node: 4 more
+vCPUs, so 18 created and 30 in the last row above. Its own surge upgrade
+adds 4 more, which fits unless it coincides with that row's.
+
 **pd-balanced counts against `SSD_TOTAL_GB`**, both boot disks and the
 data volumes (`standard-rwo` is pd-balanced): 13 boot disks of 20 GiB and
-9 data volumes of 10 GiB is 350 GiB of the 500. The default node pool GKE
-creates and removes while the cluster is created uses three more boot disks
-(and three e2-small nodes, 6 E2 vCPUs) for a few minutes.
+9 data volumes of 10 GiB is 350 GiB of the 500 (370 with the loadgen
+node's). The default node pool GKE creates and removes while the cluster
+is created uses three more boot disks (and three e2-small nodes, 6 E2
+vCPUs) for a few minutes.
 
 ## Cost
 
-europe-west1, on demand, from the Cloud Billing catalog on 2026-10-07:
+europe-west1, on demand, from the Cloud Billing catalog on 2026-10-07 (N2 on 2026-10-11):
 
 | Item | Price | Created (7 nodes) | Maximum (10 nodes) |
 |---|---|---|---|
@@ -137,6 +148,7 @@ europe-west1, on demand, from the Cloud Billing catalog on 2026-10-07:
 | Data volumes, 10 GiB pd-balanced each (6, up to 9) | $0.10/GiB·month | $0.008 | $0.012 |
 | Cloud NAT: gateway per VM, and its address | $0.0014/VM·h, $0.005/h | $0.015 | $0.019 |
 | **Total** | | **≈ $0.66/h** | **≈ $0.90/h** |
+| Loadgen pool, if enabled: n2-standard-4 (4 N2 cores at $0.034773/h, 16 GiB at $0.004661/GiB·h), its boot disk and NAT | $0.2137/h | +$0.218 | +$0.218 |
 
 Plus Cloud NAT data processing at $0.045/GiB (mostly image pulls, a GiB or
 two per session) and Artifact Registry storage (negligible). The free

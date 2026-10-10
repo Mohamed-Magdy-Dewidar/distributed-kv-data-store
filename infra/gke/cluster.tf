@@ -1,6 +1,6 @@
 # A regional GKE Standard cluster with two node pools: kvstore, which
 # matches operator/config/samples/kvstore_v1alpha1_kvcluster_gke.yaml, and
-# system, for everything else.
+# system, for everything else; and, for benchmarks only, a third: loadgen.
 
 resource "google_container_cluster" "kvstore" {
   name     = var.cluster_name
@@ -149,6 +149,52 @@ resource "google_container_node_pool" "system" {
     spot            = false
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    shielded_instance_config {
+      enable_secure_boot = true
+    }
+  }
+}
+
+# The loadgen pool, for the k6 benchmarks (docs/benchmarks.md) only: off by
+# default, created for a benchmark session and removed after it
+# (loadgen_enabled). One node in the system zone, for k6 alone: the taint
+# keeps everything else off, and the GKE overlay of deploy/bench selects
+# the pool by name and tolerates the taint. N2, not E2: the database pool at
+# its maximum already takes 20 of the region's 24 E2_CPUS, and N2 counts
+# against its own quota.
+resource "google_container_node_pool" "loadgen" {
+  count          = var.loadgen_enabled ? 1 : 0
+  name           = "loadgen"
+  cluster        = google_container_cluster.kvstore.id
+  location       = var.region
+  node_locations = [local.system_zone]
+  node_count     = 1
+
+  management {
+    auto_repair  = true
+    auto_upgrade = true
+  }
+
+  upgrade_settings {
+    strategy        = "SURGE"
+    max_surge       = 1
+    max_unavailable = 0
+  }
+
+  node_config {
+    machine_type    = var.loadgen_machine_type
+    disk_type       = "pd-balanced"
+    disk_size_gb    = var.boot_disk_gb
+    spot            = false
+    service_account = google_service_account.nodes.email
+    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    taint {
+      key    = "dedicated"
+      value  = "loadgen"
+      effect = "NO_SCHEDULE"
+    }
 
     shielded_instance_config {
       enable_secure_boot = true

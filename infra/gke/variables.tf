@@ -65,3 +65,15 @@ variable "boot_disk_gb" {
   type        = number
   default     = 20
 }
+
+variable "loadgen_enabled" {
+  description = "Create the loadgen pool, one node for the k6 benchmarks (docs/benchmarks.md). Off by default: set it for a benchmark session only."
+  type        = bool
+  default     = false
+}
+
+variable "loadgen_machine_type" {
+  description = "The loadgen node's machine type. n2-standard-4: 4 vCPUs that are not shared, for k6 alone."
+  type        = string
+  default     = "n2-standard-4"
+}
