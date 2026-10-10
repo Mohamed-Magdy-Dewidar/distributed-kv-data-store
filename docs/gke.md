@@ -8,9 +8,10 @@ node pool, the network, and an Artifact Registry repository. The cluster
 costs money every hour it exists: **every session ends with
 `terraform destroy`**.
 
-None of this has been applied yet: `terraform validate` passes, and the
-numbers below come from Google's price list and the project's quotas, not
-from a running cluster.
+Session 1 (2026-10-10) ran this page end to end on the cluster it
+describes: see [Session 1](#session-1-2026-10-10) for what was measured
+and what differed from the plan. The prices and quotas below come from
+Google's price list and the project's quotas.
 
 > **Never run `make image`, `make operator-deploy` or the operator's e2e
 > (`make operator-test-e2e`, `go test -tags e2e ./test/e2e/`) against GKE.**
@@ -150,8 +151,17 @@ From the repository root, in Git Bash, with the `kvstore` configuration
 active. First check your address (item 6 above). The checks below parse
 JSON with `python`.
 
+**Every kubectl command names the GKE context** (`--context $CTX`).
+`get-credentials` makes it the current context, but the kind cluster lives
+on the same machine: a later `kubectl config use-context kind-kvstore`
+would otherwise send this page's commands, the teardown's deletes among
+them, to kind. In Git Bash, a `kubectl exec` whose command is an absolute
+path needs `MSYS_NO_PATHCONV=1`, or Git Bash rewrites `/scripts/...` into a
+Windows path.
+
 ```sh
 R=europe-west1
+CTX=gke_kvstore-gke_${R}_kvstore
 ```
 
 1. **Create.**
@@ -168,8 +178,8 @@ R=europe-west1
 
    ```sh
    $(terraform -chdir=infra/gke output -raw get_credentials)
-   kubectl config current-context        # gke_kvstore-gke_<R>_kvstore
-   kubectl get nodes -L cloud.google.com/gke-nodepool,topology.kubernetes.io/zone
+   kubectl config get-contexts -o name | grep -x "$CTX"
+   kubectl --context $CTX get nodes -L cloud.google.com/gke-nodepool,topology.kubernetes.io/zone
    ```
 
    Seven nodes: two `kvstore` nodes in each of three zones, one `system`.
@@ -197,7 +207,10 @@ R=europe-west1
    that tag again, so an image rebuilt under a reused tag would silently not
    run. A digest names exactly one image: what was pushed is what runs, and
    the KVCluster's `spec.image` records which. The unique tag keeps the
-   registry readable; the digest is what is deployed.
+   registry readable; the digest is what is deployed. (Docker Desktop
+   pushes each image as an index with an attestation manifest, so the
+   registry also lists two untagged digests per image; the tagged one is
+   the index, and the one to deploy.)
 
 4. **Install the operator** with the registry image, as in
    [operator.md](operator.md#install) with the kind image replaced:
@@ -205,9 +218,9 @@ R=europe-west1
    ```sh
    kubectl kustomize operator/config/default \
      | sed "s|image: controller:latest|image: $OPERATOR_IMG|" \
-     | kubectl apply --server-side -f -
-   kubectl -n kvstore-operator-system rollout status deploy/kvstore-operator-controller-manager
-   kubectl -n kvstore-operator-system get pods -o wide   # on the system node
+     | kubectl --context $CTX apply --server-side -f -
+   kubectl --context $CTX -n kvstore-operator-system rollout status deploy/kvstore-operator-controller-manager
+   kubectl --context $CTX -n kvstore-operator-system get pods -o wide   # on the system node
    ```
 
    It lands on the system node: it does not tolerate the database pool's
@@ -216,21 +229,21 @@ R=europe-west1
 5. **Create the cluster** from the GKE sample, with the image set:
 
    ```sh
-   kubectl create namespace kvstore --dry-run=client -o yaml | kubectl apply -f -
+   kubectl create namespace kvstore --dry-run=client -o yaml | kubectl --context $CTX apply -f -
    sed "s|REGION-docker.pkg.dev/PROJECT/REPOSITORY/kvnode:TAG|$NODE_IMG|" \
      operator/config/samples/kvstore_v1alpha1_kvcluster_gke.yaml \
-     | kubectl -n kvstore apply -f -
-   kubectl -n kvstore get kvc kv -w                       # until Ready 6/6, epoch 0
+     | kubectl --context $CTX -n kvstore apply -f -
+   kubectl --context $CTX -n kvstore get kvc kv -w        # until Ready 6/6 (epoch 0 is not shown)
    ```
 
    **Placement**: every pod, its node and the node's zone. Expect 6
    distinct nodes, and each of the 3 zones twice:
 
    ```sh
-   kubectl -n kvstore get pods -l app.kubernetes.io/name=kvstore \
+   kubectl --context $CTX -n kvstore get pods -l app.kubernetes.io/name=kvstore \
      -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName --no-headers \
      | while read pod node; do
-         echo "$pod $node $(kubectl get node "$node" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')"
+         echo "$pod $node $(kubectl --context $CTX get node "$node" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')"
        done
    ```
 
@@ -239,32 +252,38 @@ R=europe-west1
    of kv-0 .. kv-5 to print `epoch=0 members=6 peers=5 alive=5 reachable=5`:
 
    ```sh
-   kubectl apply -f deploy/loadgen/loadgen.yaml
-   kubectl -n kvstore wait pod/toolbox --for=condition=Ready --timeout=120s
+   kubectl --context $CTX apply -f deploy/loadgen/loadgen.yaml
+   kubectl --context $CTX -n kvstore wait pod/toolbox --for=condition=Ready --timeout=120s
    for i in 0 1 2 3 4 5; do
-     kubectl -n kvstore exec toolbox -- wget -qO- "http://kv-$i.kv.kvstore.svc.cluster.local:8080/admin/membership" \
+     kubectl --context $CTX -n kvstore exec toolbox -- wget -qO- "http://kv-$i.kv.kvstore.svc.cluster.local:8080/admin/membership" \
        | python -c "import json,sys; m=json.load(sys.stdin); p=m['peers'].values(); print('kv-$i', 'epoch=%d members=%d peers=%d alive=%d reachable=%d' % (m['epoch'], len(m['members']), len(m['peers']), sum(x['alive'] for x in p), sum(x['reachable'] for x in m['peers'].values())))"
    done
    ```
 
-6. **Observability** (Prometheus and Grafana, on the system node):
+6. **Observability** (Prometheus and Grafana, on the system node). Wait
+   for both, then check that Prometheus scrapes all six pods: expect six
+   lines, `up` 1 for kv-0 .. kv-5.
 
    ```sh
-   kubectl apply -k deploy/observability/
-   kubectl -n observability port-forward svc/grafana 3000
+   kubectl --context $CTX apply -k deploy/observability/
+   kubectl --context $CTX -n observability rollout status deploy/prometheus
+   kubectl --context $CTX -n observability rollout status deploy/grafana
+   kubectl --context $CTX -n observability port-forward svc/prometheus 9090 &
+   q() { curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" \
+         | python -c "import json,sys; [print(r['metric'], r['value'][1]) for r in json.load(sys.stdin)['data']['result']]"; }
+   q 'up{job="kvstore"}'
    ```
 
-   GKE already runs metrics-server, so `kubectl top` works without the
-   kind-specific install of [kubernetes.md](kubernetes.md).
+   Grafana: `kubectl --context $CTX -n observability port-forward svc/grafana 3000`.
+   GKE already runs metrics-server, so `kubectl --context $CTX top nodes`
+   works without the kind-specific install of [kubernetes.md](kubernetes.md).
 
 7. **Traffic reaches every pod.** Start the steady writer (about 11
    writes/s through `kv-client`), give it two minutes, and ask Prometheus:
 
    ```sh
-   kubectl apply -f deploy/loadgen/writer.yaml
-   kubectl -n observability port-forward svc/prometheus 9090 &
-   q() { curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" \
-         | python -c "import json,sys; [print(r['metric'], r['value'][1]) for r in json.load(sys.stdin)['data']['result']]"; }
+   kubectl --context $CTX apply -f deploy/loadgen/writer.yaml
+   sleep 120
    q 'sum by (instance, method) (rate(kv_client_request_duration_seconds_count{job="kvstore"}[1m]))'
    q 'sum by (instance) (rate(kv_wal_fsync_duration_seconds_count{engine="data"}[1m]))'
    ```
@@ -273,24 +292,39 @@ R=europe-west1
    Puts); the second, the writes each pod stored, as coordinator or replica
    (one data-engine fsync per write; three per Put across the cluster).
    **All six pods must be above zero on both.** A pod at zero on the first
-   gets no client traffic (check `kubectl -n kvstore get endpoints
-   kv-client`); at zero on the second, it stores nothing. Grafana shows the
-   same two series by pod: "Requests coordinated by pod" (Requests row) and
-   "Storage writes by pod (data engine)" (Storage row). Stop the writer when
-   done: `kubectl -n kvstore delete pod load`.
+   gets no client traffic (check `kubectl --context $CTX -n kvstore get
+   endpoints kv-client`); at zero on the second, it stores nothing. Grafana
+   shows the same two series by pod: "Requests coordinated by pod"
+   (Requests row) and "Storage writes by pod (data engine)" (Storage row).
+   Leave the writer running through the experiments.
 
-8. **The experiments.**
+8. **The experiments**, e.g. `kubectl --context $CTX -n kvstore scale
+   kvc/kv --replicas=7` and back to 6 (see [Session 1](#session-1-2026-10-10)
+   for what to expect).
 
-9. **Destroy**, every time. Check your address first (item 6 above): the
+9. **Read back every acknowledged write.** Save the writer's log before
+   deleting it (the log goes with the pod), then check every key it
+   acknowledged through the toolbox. Expect `checked=<n> missing=0`:
+
+   ```sh
+   kubectl --context $CTX -n kvstore logs load > load.log
+   kubectl --context $CTX -n kvstore delete pod load
+   awk '$4=="ok" {print $3, "v-" $3}' load.log > acked.txt
+   MSYS_NO_PATHCONV=1 kubectl --context $CTX -n kvstore exec -i toolbox -- /scripts/verify.sh < acked.txt | tail -1
+   ```
+
+   It reads one key at a time: about 3 minutes for 5,000 keys.
+
+10. **Destroy**, every time. Check your address first (item 6 above): the
    first steps need kubectl. The data disks go first, while the cluster can
    still delete them: deleting the KVCluster keeps its volumes (the
    StatefulSet's `whenDeleted: Retain`), and `terraform destroy` does not
    know about them.
 
    ```sh
-   kubectl -n kvstore delete kvc kv
-   kubectl -n kvstore delete pvc --all       # standard-rwo deletes each disk
-   kubectl wait --for=delete pv --all --timeout=5m
+   kubectl --context $CTX -n kvstore delete kvc kv
+   kubectl --context $CTX -n kvstore delete pvc --all     # standard-rwo deletes each disk
+   kubectl --context $CTX wait --for=delete pv --all --timeout=5m
    terraform -chdir=infra/gke destroy
    ```
 
@@ -307,6 +341,105 @@ R=europe-west1
 
    A disk still listed costs money until deleted
    (`gcloud compute disks delete <name> --zone <zone> --project kvstore-gke`).
+
+## Session 1 (2026-10-10)
+
+The whole of [A session](#a-session) up to the teardown, on the cluster as
+created (europe-west1; GKE 1.35.8-gke.1225000), from commit `cce60c7`. The
+writer ran from step 7 to the read-back, about 11 writes/s.
+
+| Step | Took | Result |
+|---|---|---|
+| 2. kubectl | 20s | 7 nodes: 2 `kvstore` in each of b, c, d; `system` in b |
+| 3. Build and push both images | 4m26s | Digests recorded; the tagged digests are the ones pushed |
+| 4. Operator | 24s | On the system node, from the digest |
+| 5. KVCluster 6 | 23s | Ready 6/6; 6 distinct nodes, 2 per zone; `data-kv-*` 10Gi `standard-rwo`, Bound |
+| 5. Membership | 11s | every pod `epoch=0 members=6 peers=5 alive=5 reachable=5` |
+| 6. Observability | 59s | 6 of 6 targets up; Prometheus and Grafana on the system node |
+| 7. Traffic | 98s | coordinated 1.6-2.0 Put/s per pod (10.9 in all); stored 3.3-7.4 fsync/s per pod (31.3 in all, about 3 per Put); 1,016 writes, 0 errors |
+| 6 -> 7, a new node | 174s | Ready at epoch 1 |
+| 7 -> 6 | 20s | Ready at epoch 2; `data-kv-6` deleted |
+| 6 -> 7, node already there | 25s | Ready at epoch 3 |
+| 7 -> 6, operator pod deleted in D2 | 41s | Ready at epoch 4 |
+| 9. Read back | 167s | `checked=4994 missing=0`; the writer saw 0 failures |
+
+**Scale-up onto a new node, 174s** (times from the scale command). kv-6
+was unschedulable at once (6 nodes had a kvstore pod; the system node lacks
+the pool's label), and the cluster autoscaler grew the zone-c group from 2 to 3 nodes 2s later
+(`TriggeredScaleUp`; every zone had 2 pods, so any zone satisfied the
+spread). The node was Ready at +86s, but kv-6 was scheduled only at +146s:
+provisioning its zonal disk first failed with `no topology key found for
+node` (the persistent disk CSI driver had not registered on the new node
+yet) and succeeded a minute later. That minute put the scale-up past the
+2-minute grace period, so the cluster was `Degraded`/`PodUnavailable`
+(`kv-6 has been not ready for 2m2s`) from +127s to +149s, and cleared on
+its own when the pod scheduled. The pod was Ready at +163s, every handoff
+done at +174s. The next scale-up, onto the same node (the autoscaler had not
+removed it yet), took 25s.
+
+**Scale-down, 20s.** The drain took about 6s (kv-6 had been a member for
+3 minutes). While it drained, kv-6 reported not ready, as a node outside
+its own membership does ([membership.md](membership.md)).
+
+**The operator deleted in D2.** Deleted 4s into the drain (`1243 keys
+still to hand off`); its replacement was running 4s later and ready 15s
+after the delete, and carried on from D2: the ConfigMap at epoch 4 at +20s
+after the delete, Ready at +37s. The epoch moved exactly once for the
+removal (3 to 4): from epoch 0 to 4 over the two cycles, one per membership
+change.
+
+**Latency.** Quantiles of every Put, and of every data-engine WAL fsync,
+in each window: `histogram_quantile` over the buckets' `increase` across
+the window, so each value is interpolated inside its bucket (Put buckets
+5, 7.5, 10 ms; fsync buckets 1, 2.5, 5 ms around these values):
+
+| Window | Puts | Put p50 | Put p99 | Fsyncs (data) | Fsync p50 | Fsync p99 |
+|---|---|---|---|---|---|---|
+| Before the first scale, 11:00:31-11:02:33 UTC (122s) | 1,308 | 6.31 ms | 9.63 ms | 3,797 | 1.88 ms | 4.85 ms |
+| The whole writer run, 11:00:31-11:08:33 UTC (482s), both scale cycles | 4,968 | 6.28 ms | 9.93 ms | 36,789 | 1.85 ms | 4.85 ms |
+
+The counts come from `increase()`, which extrapolates at the window's
+edges: the writer's own log has 4,994 acknowledged Puts, all `OK`. Before
+the first scale there were 2.9 fsyncs per Put (three replicas each); over
+the whole run, 7.4, the rest being the four membership changes' handoffs
+and repairs storing keys on their new owners. The two scale cycles moved
+p99 by 0.3 ms. On kind (10 nodes, Docker Desktop;
+[observability.md](observability.md#measured-on-kind)) the same writer saw
+Put p50 / p99 17.0 / 42.9 ms and fsync 7.4 / 23.7 ms; the setups differ in
+more than the disks, so this is not a like-for-like comparison.
+
+Over 11:00:00-11:09:30: 347 hints created and 347 delivered (around the
+membership changes), anti-entropy pulled 419 keys and pushed 2 (one peer
+failure), and no quorum failures. Each pod's last handoff took 1.0-9.2 s.
+
+The time series are in [results/gke-session1/](results/gke-session1/), one
+CSV per query, 15 s steps from 11:00:00 to 11:09:30 UTC (`time`, the
+series' labels, the value; rates over 1 m):
+
+| File | Query |
+|---|---|
+| `put_rate_by_code.csv` | `sum by (code) (rate(kv_client_request_duration_seconds_count{job="kvstore",method="Put"}[1m]))` |
+| `put_latency_p50.csv`, `put_latency_p99.csv` | `histogram_quantile(0.50 / 0.99, sum by (le) (rate(kv_client_request_duration_seconds_bucket{job="kvstore",method="Put"}[1m])))` |
+| `wal_fsync_latency_p50_data.csv`, `wal_fsync_latency_p99_data.csv` | the same over `kv_wal_fsync_duration_seconds_bucket{job="kvstore",engine="data"}` |
+| `requests_coordinated_by_pod.csv` | `sum by (instance, method) (rate(kv_client_request_duration_seconds_count{job="kvstore"}[1m]))` |
+| `storage_writes_by_pod.csv` | `sum by (instance) (rate(kv_wal_fsync_duration_seconds_count{job="kvstore",engine="data"}[1m]))` |
+| `membership_epoch_by_pod.csv` | `kv_membership_epoch{job="kvstore"}` |
+| `hints_created.csv`, `hints_delivered.csv` | `sum(rate(kv_hints_created_total{job="kvstore"}[1m]))`, the same for `kv_hints_delivered_total` |
+| `antientropy_keys_repaired.csv` | `sum by (direction) (increase(kv_antientropy_keys_repaired_total{job="kvstore"}[1m]))` |
+| `handoff_last_duration_by_pod.csv` | `kv_handoff_last_duration_seconds{job="kvstore"}` |
+
+`kubectl top nodes`:
+
+| When | `kvstore` nodes | `system` node |
+|---|---|---|
+| 6 replicas, no load | 124-153m CPU, about 960Mi | 691m (35%), 2,399Mi (39%) |
+| 7 replicas, under load, just scaled | 235-381m, 920-982Mi | 936m (48%), 3,053Mi (50%) |
+| 6 replicas, under load, after the cycles | 172-308m, 926-1,016Mi | 818m (42%), 3,042Mi (50%) |
+
+The system node carries GKE's own components, the operator, Prometheus,
+Grafana and the toolbox: half its memory, under half its CPU. Room for
+more tooling (k6) there is limited; see the quotas above before adding a
+second system node.
 
 When the project is no longer needed, delete it
 (`gcloud projects delete kvstore-gke`): that removes anything Terraform's
