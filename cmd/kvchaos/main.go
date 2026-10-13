@@ -29,6 +29,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -256,7 +257,7 @@ func record(ctx context.Context, args []string) error {
 	tf := addTargetFlags(fs)
 	fs.StringVar(&cfg.Service, "service", "", "send through this Service address instead of to each pod (the realism run)")
 	fs.IntVar(&cfg.ServiceConns, "service-conns", 12, "with -service: connections to it")
-	fs.StringVar(&cfg.WritePrefix, "write-prefix", "", "write keys' prefix (default chaos-<test>)")
+	fs.StringVar(&cfg.WritePrefix, "write-prefix", "", "write keys' prefix (default chaos-<test>-<run>, <run> the start time: a rerun of a test never writes the keys an earlier run did)")
 	fs.IntVar(&cfg.Writes, "writes", 0, "write this many keys and stop, never dropping one (a preload); 0: until the run ends")
 	fs.Float64Var(&cfg.WriteRate, "write-rate", 100, "writes per second (0: none)")
 	fs.StringVar(&cfg.ReadPrefix, "read-prefix", "chaos-pre", "read keys' prefix")
@@ -277,7 +278,7 @@ func record(ctx context.Context, args []string) error {
 		return errors.New("-test is required")
 	}
 	if cfg.WritePrefix == "" {
-		cfg.WritePrefix = "chaos-" + cfg.Test
+		cfg.WritePrefix = "chaos-" + cfg.Test + "-" + strconv.FormatInt(time.Now().Unix(), 36)
 	}
 	if cfg.Service == "" {
 		ts, _, err := tf.resolve(ctx)
@@ -285,6 +286,9 @@ func record(ctx context.Context, args []string) error {
 			return err
 		}
 		cfg.Targets = ts
+	}
+	cfg.Ready = func(conns []string) {
+		fmt.Fprintf(os.Stderr, "kvchaos record %s: connections ready: %s\n", cfg.Test, strings.Join(conns, " "))
 	}
 	err := writeOut(*out, func(w io.Writer) error {
 		start := time.Now()

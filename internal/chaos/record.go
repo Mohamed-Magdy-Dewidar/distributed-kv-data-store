@@ -214,7 +214,11 @@ type pool struct {
 // request outstanding and nothing received for Time is pinged, and closed
 // if the ping is not answered within Timeout. Without it a connection to a
 // VM that vanished (no FIN, no RST) hangs until TCP gives up. grpc-go
-// raises a Time under 10s to 10s.
+// raises a Time under 10s to 10s, so a vanished pod's connection is closed
+// about 13s after its last answer; until then the pod is still picked, and
+// its requests time out. They are recorded as unknown, and the check, which
+// predicts every request sent to a pod that is down as target-down, counts
+// them as predicted.
 var Keepalive = keepalive.ClientParameters{Time: 10 * time.Second, Timeout: 3 * time.Second}
 
 // dialPool opens a connection to every target (direct), or conns connections
@@ -324,6 +328,10 @@ type RecordConfig struct {
 	Duration time.Duration
 	StopFile string
 	Seed     uint64
+
+	// Ready, if set, is called once every connection is ready, before the
+	// first request, with their names.
+	Ready func(conns []string)
 }
 
 // Counts counts requests by op and result.
@@ -363,6 +371,13 @@ func Record(ctx context.Context, cfg RecordConfig, out io.Writer) (Counts, error
 		return nil, fmt.Errorf("record: %w", err)
 	}
 	defer p.close()
+	if cfg.Ready != nil {
+		names := make([]string, len(p.conns))
+		for i, c := range p.conns {
+			names[i] = c.id
+		}
+		cfg.Ready(names)
+	}
 
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()

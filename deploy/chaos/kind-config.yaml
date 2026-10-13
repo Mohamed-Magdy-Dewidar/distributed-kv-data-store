@@ -1,0 +1,28 @@
+# The kind cluster the failure tests are rehearsed on (docs/chaos.md):
+# kvstore-chaos, a second cluster next to kvstore (docs/kubernetes.md).
+#
+# Three workers, each labelled as a zone, stand for GKE's three zones; the
+# KVCluster (kvcluster-kind.yaml) puts two pods on each, so a worker is a
+# zone. The control plane stands for GKE's system node: deploy/chaos/chaos.sh
+# kind-up moves the operator and CoreDNS there, and the recorders run there,
+# so a worker fault never takes them down.
+#
+# kind's own network plugin (kindnet) ignores NetworkPolicy; Cilium, which
+# chaos.sh kind-up installs, enforces it, as GKE's Dataplane V2 (built on
+# Cilium) does.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: kvstore-chaos
+networking:
+  disableDefaultCNI: true
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-c

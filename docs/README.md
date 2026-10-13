@@ -9,6 +9,7 @@
 | [membership.md](membership.md) | The procedure for adding a node, removing one, and removing a crashed one, and what the admin API's answers mean. |
 | [observability.md](observability.md) | The metrics each node serves on `/metrics`, and the local Prometheus and Grafana in `deploy/observability/`: how to run them, the dashboard, and measured latencies. |
 | [benchmarks.md](benchmarks.md) | The k6 load tests in `deploy/bench/`: scenarios, how to run them on kind and GKE, how a result is shown to be the database's limit, and every run's versions, parameters and results. |
+| [chaos.md](chaos.md) | The failure tests (VM, zone, partition, system node) under load: `kvchaos` and `deploy/chaos/chaos.sh`, how a prediction is made and checked request by request, and the kind rehearsal with its findings. |
 | [testing.md](testing.md) | What the unit and end-to-end tests cover, how to run them, where they have been run, and what the crash tests do not prove. |
 | [development.md](development.md) | Building, testing, and regenerating the checked-in gRPC code with pinned tool versions. |
 | [known-limitations.md](known-limitations.md) | What the store does not do, or does imperfectly, and why: consistency, data model, membership, operations, durability. |

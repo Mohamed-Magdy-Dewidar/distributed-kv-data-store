@@ -1,0 +1,8 @@
+# A failure test run's per-request records and read-backs: tens of MB per
+# session, kept locally. The fault timeline (faults.jsonl), the topology,
+# predictions, hint counts, operator log and the check's report are kept.
+records.jsonl
+readback.jsonl
+final-readback.jsonl
+recorder.log
+watch.pid

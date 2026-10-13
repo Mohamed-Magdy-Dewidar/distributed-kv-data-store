@@ -94,6 +94,9 @@ func TestCheckBucketsEveryRequest(t *testing.T) {
 	if tr.Hints != 3 || tr.UnderReplicated != 1 { // two[1]: 2 replicas down, one[0]: 1
 		t.Errorf("hints %d, under-replicated %d: want 3 and 1", tr.Hints, tr.UnderReplicated)
 	}
+	if tr.HintsMaybe != 1 { // one[2], written before the fault was noticed
+		t.Errorf("hints maybe %d, want 1", tr.HintsMaybe)
+	}
 	if rep.Acked != 6 || rep.Lost != 1 || rep.LostKeys[0] != two[1] || rep.NotReadBack != 0 {
 		t.Errorf("acked %d lost %d %v not read back %d", rep.Acked, rep.Lost, rep.LostKeys, rep.NotReadBack)
 	}
@@ -154,6 +157,50 @@ func TestCheckLatestReadbackCounts(t *testing.T) {
 	}
 }
 
+func TestCheckReportsTheRecoveryTimeline(t *testing.T) {
+	topo := sixPods(t)
+	events := append(zoneAEvents(),
+		Event{Time: t0.Add(40 * time.Second), Test: "t1", Event: EventMark, Mark: "node-ready"},
+		Event{Time: t0.Add(25 * time.Second), Test: "t1", Event: EventMark, Mark: "vm-recreated"})
+	rep, err := Check(CheckConfig{Topology: topo, Events: events, Records: []Request{req(OpPut, "k", "kv-1", -time.Minute, ResultOK)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text bytes.Buffer
+	rep.WriteText(&text)
+	if want := "timeline:  +0s inject, +25.0s vm-recreated, +40.0s node-ready, +60.0s heal"; !strings.Contains(text.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, text.String())
+	}
+}
+
+// Once a down fault's pods answer again (serving), the other nodes stop
+// treating them as dead before the kubelet reports them Ready (the heal):
+// that stretch is a transition, and its hints are only possible.
+func TestCheckServingEndsTheFault(t *testing.T) {
+	topo := sixPods(t)
+	one := keysWith(t, topo, 2, func(r []string) bool { return countIn(r, "kv-0", "kv-2") == 1 })
+	events := append(zoneAEvents(),
+		Event{Time: t0.Add(30 * time.Second), Test: "t1", Event: EventMark, Mark: MarkServing},
+		Event{Time: t0.Add(90 * time.Second), Test: "t1", Event: EventMark, Mark: "hints-delivered"})
+	records := []Request{
+		req(OpPut, one[0], "kv-1", 20*time.Second, ResultOK), // the fault: one hint
+		req(OpPut, one[1], "kv-1", 45*time.Second, ResultOK), // serving, not yet Ready
+	}
+	rep, err := Check(CheckConfig{Topology: topo, Events: events, Records: records})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := rep.Tests[0]
+	if tr.Hints != 1 || tr.HintsMaybe != 1 || tr.Buckets[Transition] != 1 {
+		t.Errorf("hints %d, maybe %d, buckets %v: want 1, 1 and one transition", tr.Hints, tr.HintsMaybe, tr.Buckets)
+	}
+	var text bytes.Buffer
+	rep.WriteText(&text)
+	if want := "+30.0s serving, +60.0s heal, +90.0s hints-delivered"; !strings.Contains(text.String(), want) {
+		t.Errorf("report lacks %q (marks and heal in time order):\n%s", want, text.String())
+	}
+}
+
 func TestCheckRefusesABadTimeline(t *testing.T) {
 	topo := sixPods(t)
 	for name, events := range map[string][]Event{
@@ -162,6 +209,8 @@ func TestCheckRefusesABadTimeline(t *testing.T) {
 		"heal first":     {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0.Add(-time.Second), Test: "t", Event: EventHeal}},
 		"bad fault":      {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-9"}},
 		"bad event":      {{Time: t0, Test: "t", Event: "crash"}},
+		"unnamed mark":   {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0, Test: "t", Event: EventMark}},
+		"mark only":      {{Time: t0, Test: "t", Event: EventMark, Mark: "node-ready"}},
 	} {
 		if _, err := Check(CheckConfig{Topology: topo, Events: events}); err == nil {
 			t.Errorf("%s: accepted", name)

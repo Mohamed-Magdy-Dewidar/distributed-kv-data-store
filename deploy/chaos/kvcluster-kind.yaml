@@ -1,0 +1,21 @@
+# The KVCluster the failure tests are rehearsed on, in the kind cluster
+# kvstore-chaos (kind-config.yaml): six pods, two per worker (zone), the
+# bench KVCluster's resources (deploy/bench/kvcluster/kind.yaml). The
+# control plane's taint keeps them off it. zoneSpread puts two in each zone,
+# as on GKE; onePodPerNode stays off, since each zone is one worker here.
+apiVersion: kvstore.dewidar.dev/v1alpha1
+kind: KVCluster
+metadata:
+  name: kv
+  namespace: kvstore
+spec:
+  replicas: 6
+  image: kvnode:dev
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 512Mi
+  placement:
+    zoneSpread: true

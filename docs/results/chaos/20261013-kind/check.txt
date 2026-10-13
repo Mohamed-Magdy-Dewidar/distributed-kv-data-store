@@ -1,0 +1,100 @@
+== test pre
+  normal     put  ok=5000
+  compared:  as-predicted=5000
+== test t1: down:kv-3, injected 2026-10-13T14:44:36.023Z, healed 2026-10-13T14:44:39.461Z (3s)
+  timeline:  +0s inject, +3.4s pod-ready-kv-3, +3.4s heal
+  normal     put  ok=5504
+  normal     get  ok=5504
+  transition put  ok=747
+  transition get  ok=747
+  compared:  as-predicted=11008 transition=1494
+  predicted: hints 0 to 415; under-replicated until anti-entropy 246
+  e.g. transition         get chaos-pre-0001247 via kv-0 at 14:44:34.028: ok  
+  e.g. transition         put chaos-t1-0002955 via kv-1 at 14:44:34.028: ok  
+  e.g. transition         get chaos-pre-0000276 via kv-2 at 14:44:34.047: ok  
+  e.g. transition         put chaos-t1-0002956 via kv-3 at 14:44:34.047: ok  
+  e.g. transition         get chaos-pre-0002387 via kv-4 at 14:44:34.067: ok  
+== test t1n: down:kv-2,kv-5, injected 2026-10-13T14:52:42.237Z, healed 2026-10-13T14:56:34.572Z (3m52s)
+  timeline:  +0s inject, +52.4s node-notready, +52.6s pods-unready, +181.1s vm-started, +185.5s node-ready, +231.0s pod-ready-kv-2, +232.3s pod-ready-kv-5, +232.3s heal, +345.2s hints-delivered
+  normal     put  ok=5508
+  normal     get  ok=5508
+  transition put  failed=16 ok=935
+  transition get  failed=68 ok=880 unknown=2
+  fault      put  failed=2512 ok=8730
+  fault      get  failed=2246 ok=8997
+  compared:  as-predicted=33501 transition=1901
+  predicted: hints 6451 to 7491; under-replicated until anti-entropy 265
+  e.g. transition         get chaos-pre-0003743 via kv-4 at 14:52:40.245: ok  
+  e.g. transition         put chaos-t1n-0002963 via kv-5 at 14:52:40.245: ok  
+  e.g. transition         get chaos-pre-0004730 via kv-0 at 14:52:40.265: ok  
+  e.g. transition         put chaos-t1n-0002964 via kv-1 at 14:52:40.265: ok  
+  e.g. transition         get chaos-pre-0002639 via kv-2 at 14:52:40.285: ok  
+== test t1s: down:kv-3, injected 2026-10-13T14:47:43.559Z, healed 2026-10-13T14:49:09.471Z (1m26s)
+  timeline:  +0s inject, +85.4s container-restarted, +85.9s pod-ready-kv-3, +85.9s heal
+  normal     put  ok=5479
+  normal     get  ok=5480
+  transition put  dropped=64 ok=850 unknown=36
+  transition get  dropped=61 ok=860 unknown=29
+  fault      put  dropped=74 ok=3800 unknown=47
+  fault      get  dropped=77 ok=3786 unknown=58
+  compared:  as-predicted=18650 dropped=276 transition=1775
+  predicted: hints 1562 to 1841; under-replicated until anti-entropy 100
+  e.g. transition         get chaos-pre-0003968 via kv-3 at 14:47:41.566: ok  
+  e.g. transition         put chaos-t1s-0002929 via kv-2 at 14:47:41.566: ok  
+  e.g. transition         get chaos-pre-0004898 via kv-5 at 14:47:41.586: ok  
+  e.g. transition         put chaos-t1s-0002930 via kv-4 at 14:47:41.586: ok  
+  e.g. transition         get chaos-pre-0001851 via kv-1 at 14:47:41.605: ok  
+== test t2: down:kv-0,kv-4, injected 2026-10-13T15:01:29.476Z, healed 2026-10-13T15:04:59.376Z (3m30s)
+  timeline:  +0s inject, +45.9s node-notready, +200.5s vm-unpaused, +201.1s node-ready, +201.5s serving, +209.9s pods-ready-from-operator-log, +209.9s heal, +1580.6s hints-delivered
+  normal     put  ok=67942
+  normal     get  ok=67944
+  transition put  dropped=337 failed=27 ok=1492 unknown=96
+  transition get  dropped=340 failed=19 ok=1515 unknown=74
+  fault      put  dropped=1995 failed=2878 ok=7439 unknown=1235
+  fault      get  dropped=1982 failed=2661 ok=7637 unknown=1270
+  compared:  as-predicted=157312 dropped=4654 service-failure=1694 transition=3223
+  predicted: hints 6549 to 8374; under-replicated until anti-entropy 196
+  e.g. service-failure    put chaos-t2svc-0001332 via svc-11 at 15:01:35.000: unknown DeadlineExceeded context deadline exceeded
+  e.g. service-failure    get chaos-pre-0001523 via svc-3 at 15:01:35.099: unknown DeadlineExceeded context deadline exceeded
+  e.g. service-failure    put chaos-t2svc-0001335 via svc-4 at 15:01:35.149: unknown DeadlineExceeded context deadline exceeded
+  e.g. service-failure    get chaos-pre-0004523 via svc-5 at 15:01:35.149: unknown DeadlineExceeded context deadline exceeded
+  e.g. service-failure    get chaos-pre-0004577 via svc-7 at 15:01:35.200: unknown DeadlineExceeded context deadline exceeded
+  e.g. transition         put chaos-t2-0003034 via kv-3 at 15:01:27.472: ok  
+  e.g. transition         get chaos-pre-0002065 via kv-4 at 15:01:27.492: ok  
+  e.g. transition         put chaos-t2-0003035 via kv-5 at 15:01:27.492: ok  
+  e.g. transition         get chaos-pre-0000141 via kv-1 at 15:01:27.512: ok  
+  e.g. transition         put chaos-t2-0003036 via kv-0 at 15:01:27.512: ok  
+== test t3a: partition:kv-1,kv-3, injected 2026-10-13T16:58:47.237Z, healed 2026-10-13T17:00:48.096Z (2m1s)
+  timeline:  +0s inject, +4.4s rest-sees-group-dead, +120.9s heal, +126.9s rest-sees-group-alive, +254.6s hints-delivered
+  normal     put  ok=5582
+  normal     get  ok=5583
+  transition put  dropped=178 failed=108 ok=627 unknown=39
+  transition get  dropped=177 failed=107 ok=641 unknown=25
+  fault      put  failed=2047 ok=3620
+  fault      get  failed=2057 ok=3611
+  compared:  as-predicted=22500 dropped=355 transition=1547
+  predicted: hints 2708 to 3401; under-replicated until anti-entropy 93
+  e.g. transition         put chaos-t3a-20261013165749-0002728 via kv-3 at 16:58:45.232: ok  
+  e.g. transition         get chaos-pre-0002633 via kv-5 at 16:58:45.252: ok  
+  e.g. transition         put chaos-t3a-20261013165749-0002729 via kv-4 at 16:58:45.252: ok  
+  e.g. transition         get chaos-pre-0004702 via kv-0 at 16:58:45.272: ok  
+  e.g. transition         put chaos-t3a-20261013165749-0002730 via kv-1 at 16:58:45.272: ok  
+== test t4: none, injected 2026-10-13T17:13:31.007Z, healed 2026-10-13T17:16:24.333Z (2m53s)
+  timeline:  +0s inject, +6.9s dns-down, +7.1s operator-down, +170.2s operator-back, +173.2s dns-back, +173.3s heal, +236.5s hints-delivered
+  normal     put  ok=5509
+  normal     get  ok=5509
+  transition put  ok=951
+  transition get  ok=950
+  fault      put  ok=8291
+  fault      get  ok=8292
+  compared:  as-predicted=27601 transition=1901
+  predicted: hints 0 to 0; under-replicated until anti-entropy 0
+  e.g. transition         get chaos-pre-0001687 via kv-4 at 17:13:29.009: ok  
+  e.g. transition         put chaos-t4-20261013171229-0002939 via kv-5 at 17:13:29.009: ok  
+  e.g. transition         get chaos-pre-0003012 via kv-0 at 17:13:29.029: ok  
+  e.g. transition         put chaos-t4-20261013171229-0002940 via kv-1 at 17:13:29.029: ok  
+  e.g. transition         get chaos-pre-0003601 via kv-2 at 17:13:29.048: ok  
+== read-back: 138006 acknowledged writes: lost 0, not read back 0, unreadable 0
+  unacknowledged writes: present 287, absent 8754 (either is allowed)
+  copies: 138006 checked, 53 on fewer than all owners: 53 predicted, 0 not
+== PASS

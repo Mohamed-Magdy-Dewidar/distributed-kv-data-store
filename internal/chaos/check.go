@@ -15,15 +15,19 @@ import (
 // and heals each test's fault:
 //
 //	{"time":"2026-10-14T09:12:03.120Z","test":"t1","event":"inject","fault":"down:kv-3"}
+//	{"time":"2026-10-14T09:13:31.877Z","test":"t1","event":"mark","mark":"node-ready"}
 //	{"time":"2026-10-14T09:15:40.002Z","test":"t1","event":"heal"}
 //
 // A down fault heals when its pods are Ready again, a partition when its
-// NetworkPolicy is deleted.
+// NetworkPolicy is deleted. Marks record the moments in between (a VM
+// recreated, its node Ready, its volume attached), so the report can break
+// the recovery time down; they change no prediction.
 type Event struct {
 	Time  time.Time `json:"time"`
 	Test  string    `json:"test"`
-	Event string    `json:"event"`           // inject or heal
+	Event string    `json:"event"`           // inject, mark or heal
 	Fault string    `json:"fault,omitempty"` // on inject: a ParseFault spec
+	Mark  string    `json:"mark,omitempty"`  // on mark: what happened
 }
 
 // ReadEvents reads a fault timeline.
@@ -117,14 +121,17 @@ type TestReport struct {
 	Test         string
 	Fault        *Fault // nil: no fault was injected
 	Inject, Heal time.Time
+	Marks        []Event // the test's marks, in time order
 	Counts       map[Phase]map[Op]map[Result]int
 	Buckets      map[Bucket]int
 	Examples     map[Bucket][]Request
 	// Hints is how many hints the acknowledged writes of the fault phase
 	// should have created (one per replica the coordinator could not
 	// reach); HintsUnknown counts those whose coordinator's side is
-	// unknown.
-	Hints, HintsUnknown int
+	// unknown. HintsMaybe counts those of the transitions: a replica that
+	// was not yet marked dead (or already marked alive again) is not
+	// hinted, so the count is between Hints and Hints+HintsMaybe.
+	Hints, HintsUnknown, HintsMaybe int
 	// UnderReplicated counts the acknowledged writes predicted to be left
 	// under-replicated: written while the fault was not yet noticed, with
 	// a replica the coordinator could not reach (a write to a peer that
@@ -158,6 +165,7 @@ type testTimeline struct {
 	fault        *Fault
 	inject, heal time.Time
 	in, out      window
+	marks        []Event
 }
 
 // Check compares cfg's records with the prediction, request by request,
@@ -198,7 +206,12 @@ func Check(cfg CheckConfig) (*Report, error) {
 // Event names.
 const (
 	EventInject = "inject"
+	EventMark   = "mark"
 	EventHeal   = "heal"
+
+	// MarkServing is the mark of the moment a down fault's pods answer
+	// again: from it to the heal is a transition, not the fault.
+	MarkServing = "serving"
 )
 
 // parseTimelines is each test's fault and windows, from cfg.Events.
@@ -220,25 +233,40 @@ func parseTimelines(cfg CheckConfig) (map[string]*testTimeline, error) {
 				return nil, fmt.Errorf("test %s: %w", e.Test, err)
 			}
 			tl.fault, tl.inject = &f, e.Time
+		case EventMark:
+			if e.Mark == "" {
+				return nil, fmt.Errorf("test %s: a mark without a name", e.Test)
+			}
+			tl.marks = append(tl.marks, e)
 		case EventHeal:
 			if !tl.heal.IsZero() {
 				return nil, fmt.Errorf("test %s: healed twice", e.Test)
 			}
 			tl.heal = e.Time
 		default:
-			return nil, fmt.Errorf("test %s: event %q: want %s or %s", e.Test, e.Event, EventInject, EventHeal)
+			return nil, fmt.Errorf("test %s: event %q: want %s, %s or %s", e.Test, e.Event, EventInject, EventMark, EventHeal)
 		}
 	}
 	for name, tl := range timelines {
 		if tl.fault == nil {
-			return nil, fmt.Errorf("test %s: healed but never injected", name)
+			return nil, fmt.Errorf("test %s: marked or healed but never injected", name)
 		}
+		slices.SortStableFunc(tl.marks, func(a, b Event) int { return a.Time.Compare(b.Time) })
 		if !tl.heal.IsZero() && tl.heal.Before(tl.inject) {
 			return nil, fmt.Errorf("test %s: healed before it was injected", name)
 		}
 		tl.in = window{tl.inject.Add(-cfg.Tolerance), tl.inject.Add(cfg.Detection + cfg.Tolerance)}
 		if !tl.heal.IsZero() {
-			tl.out = window{tl.heal.Add(-cfg.Tolerance), tl.heal.Add(cfg.Recovery + cfg.Tolerance)}
+			// The fault ends for the other nodes once its pods answer
+			// again (MarkServing), which can be well before the kubelet
+			// reports them Ready (the heal).
+			from := tl.heal
+			for _, m := range tl.marks {
+				if m.Mark == MarkServing && m.Time.Before(from) {
+					from = m.Time
+				}
+			}
+			tl.out = window{from.Add(-cfg.Tolerance), tl.heal.Add(cfg.Recovery + cfg.Tolerance)}
 		}
 	}
 	return timelines, nil
@@ -256,7 +284,7 @@ func compareRecords(cfg CheckConfig, timelines map[string]*testTimeline, ackedAt
 		if tr == nil {
 			tr = &TestReport{Test: r.Test, Counts: map[Phase]map[Op]map[Result]int{}, Buckets: map[Bucket]int{}, Examples: map[Bucket][]Request{}}
 			if tl != nil {
-				tr.Fault, tr.Inject, tr.Heal = tl.fault, tl.inject, tl.heal
+				tr.Fault, tr.Inject, tr.Heal, tr.Marks = tl.fault, tl.inject, tl.heal, tl.marks
 			}
 			byTest[r.Test] = tr
 			rep.Tests = append(rep.Tests, tr)
@@ -275,16 +303,22 @@ func compareRecords(cfg CheckConfig, timelines map[string]*testTimeline, ackedAt
 			target = "" // through the Service
 		}
 		if r.Op == OpPut && r.Result == ResultOK && tl != nil {
-			switch {
-			case phase == PhaseFault:
+			switch phase {
+			case PhaseFault:
 				if n := t.Unreachable(*tl.fault, r.Key, target); n < 0 {
 					tr.HintsUnknown++
 				} else {
 					tr.Hints += n
 				}
-			case tl.in.overlaps(r) && t.Unreachable(*tl.fault, r.Key, target) != 0:
-				expectedUnder[r.Key] = true
-				tr.UnderReplicated++
+			case PhaseTransition:
+				n := t.Unreachable(*tl.fault, r.Key, target)
+				if n != 0 && tl.in.overlaps(r) {
+					expectedUnder[r.Key] = true
+					tr.UnderReplicated++
+				}
+				if n > 0 {
+					tr.HintsMaybe += n
+				}
 			}
 		}
 
@@ -435,6 +469,18 @@ func (rep *Report) WriteText(w io.Writer) {
 			}
 		}
 		fmt.Fprintln(w)
+		if len(tr.Marks) > 0 {
+			events := slices.Clone(tr.Marks)
+			if !tr.Heal.IsZero() {
+				events = append(events, Event{Time: tr.Heal, Mark: EventHeal})
+			}
+			slices.SortStableFunc(events, func(a, b Event) int { return a.Time.Compare(b.Time) })
+			steps := []string{"+0s inject"}
+			for _, m := range events {
+				steps = append(steps, fmt.Sprintf("%+.1fs %s", m.Time.Sub(tr.Inject).Seconds(), m.Mark))
+			}
+			fmt.Fprintf(w, "  timeline:  %s\n", strings.Join(steps, ", "))
+		}
 		for _, ph := range []Phase{PhaseNormal, PhaseTransition, PhaseFault} {
 			for _, op := range []Op{OpPut, OpGet} {
 				c := tr.Counts[ph][op]
@@ -458,7 +504,7 @@ func (rep *Report) WriteText(w io.Writer) {
 		}
 		fmt.Fprintf(w, "  compared:  %s\n", strings.Join(parts, " "))
 		if tr.Fault != nil {
-			fmt.Fprintf(w, "  predicted: hints %d", tr.Hints)
+			fmt.Fprintf(w, "  predicted: hints %d to %d", tr.Hints, tr.Hints+tr.HintsMaybe)
 			if tr.HintsUnknown > 0 {
 				fmt.Fprintf(w, " (+ up to %d through the Service)", tr.HintsUnknown)
 			}
