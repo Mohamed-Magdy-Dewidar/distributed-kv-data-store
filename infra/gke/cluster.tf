@@ -57,9 +57,11 @@ resource "google_container_cluster" "kvstore" {
   }
 
   # Prometheus and Grafana run in the cluster (deploy/observability); keep
-  # Google's own collection to the system components.
+  # Google's own collection to the system components, and the workloads'
+  # logs too with workload_logging (the failure tests: a deleted VM's pods,
+  # and the operator on the deleted system node, take their logs with them).
   logging_config {
-    enable_components = ["SYSTEM_COMPONENTS"]
+    enable_components = var.workload_logging ? ["SYSTEM_COMPONENTS", "WORKLOADS"] : ["SYSTEM_COMPONENTS"]
   }
   monitoring_config {
     enable_components = ["SYSTEM_COMPONENTS"]

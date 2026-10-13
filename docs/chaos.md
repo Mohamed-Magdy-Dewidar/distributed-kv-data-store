@@ -181,9 +181,9 @@ c=deploy/chaos/chaos.sh
 $c hints-snapshot t2 before
 $c run t2                              # the recorder, on the control plane
 $c mark t2 inject zone:zone-b          # then: docker pause kvstore-chaos-worker2
-$c mark t2 node-notready               # any other event name is a mark
-$c mark t2 vm-unpaused                 # then: docker unpause kvstore-chaos-worker2
-$c wait-node t2 kvstore-chaos-worker2  # marks node-ready
+$c wait-node-down t2 kvstore-chaos-worker2  # marks node-notready-kvstore-chaos-worker2
+$c mark t2 vm-unpaused                 # any other event name is a mark; then: docker unpause kvstore-chaos-worker2
+$c wait-node t2 kvstore-chaos-worker2  # marks node-ready-kvstore-chaos-worker2
 $c wait-ready t2 kv-0 kv-4             # marks serving, pod-ready-*, heal
 $c stop t2
 $c wait-hints t2
@@ -197,3 +197,7 @@ A partition: `$c partition t3a kv-1 kv-3` (marks inject), then
 After the last test and a full anti-entropy interval (15 minutes):
 `$c converge` and `$c check-final`, which requires every acknowledged write
 on all its owners.
+
+On GKE, `$c vm-loss TEST POD...` (tests 1 and 2) and `$c system-loss TEST`
+(test 4) inject the fault through the managed instance groups and mark
+every recovery step themselves: see [gke.md](gke.md#session-3-the-failure-tests-runbook).

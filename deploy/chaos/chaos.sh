@@ -24,7 +24,21 @@
 #   chaos.sh mark TEST EVENT [ARG]
 #                                append to faults.jsonl: inject FAULT, heal,
 #                                or any other EVENT as a mark of that name
-#   chaos.sh wait-node TEST NODE wait until NODE is Ready, mark node-ready
+#   chaos.sh wait-node-down TEST NODE
+#                                wait until NODE is gone or not Ready, mark it
+#   chaos.sh wait-node TEST NODE wait until NODE is Ready again, mark
+#                                node-ready-NODE
+#   chaos.sh wait-volume TEST POD
+#                                wait until POD's volume is attached again,
+#                                mark volume-attached-POD
+#   chaos.sh wait-vm TEST NODE ZONE
+#                                (GKE) wait until NODE's VM is recreated and
+#                                running, mark vm-recreated-NODE
+#   chaos.sh vm-loss TEST POD... (GKE) tests 1 and 2: recreate the pods' VMs
+#                                through their instance groups; inject, then
+#                                every recovery step's mark, then heal
+#   chaos.sh system-loss TEST    (GKE) test 4: recreate the system node's VM;
+#                                inject none, every recovery step, heal
 #   chaos.sh wait-ready TEST POD...
 #                                wait until the pods are Ready, mark each
 #                                pod-ready-POD, then heal
@@ -51,7 +65,7 @@
 #   PRELOAD_KEYS    keys the preload writes and reads choose from [5000]
 #   WRITE_RATE, READ_RATE
 #                   run's writes and reads per second [50, 50 on kind;
-#                   100, 100 on GKE]
+#                   40, 100 on GKE]
 #   CONCURRENCY     a run's requests in flight at most [64 on kind, 256 on
 #                   GKE]: requests to a pod that vanished hang until their
 #                   timeout (5s) for the ~13s keepalive takes to notice, and
@@ -92,7 +106,10 @@ if [ "$PLATFORM" = kind ]; then
   tolerations: [{key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}]'
 else
 	IMAGE=${KV_IMAGE:-}
-	WRITE_RATE=${WRITE_RATE:-100}
+	# 40 writes/s: a session's runs (about 45 minutes of writes in all) then
+	# store about 110,000 keys, within what the bench KVCluster's 512Mi is
+	# sized for (deploy/bench/run.sh, KEY_CAP 130,000).
+	WRITE_RATE=${WRITE_RATE:-40}
 	CONCURRENCY=${CONCURRENCY:-256}
 	READ_RATE=${READ_RATE:-100}
 	# The loadgen pool: neither a database node nor the system node.
@@ -199,6 +216,7 @@ predict_one() {
 start() {
 	local name=$1 pod=chaos-$1
 	shift
+	[ -n "$IMAGE" ] || die "set KV_IMAGE: the node image, by digest (docs/gke.md, step 3)"
 	local args="[record, -out, /out/records.jsonl, -stop-file, /out/STOP, -hold"
 	for a in "$@"; do args="$args, \"$a\""; done
 	args="$args]"
@@ -286,6 +304,7 @@ converge() {
 }
 
 start_tools() {
+	[ -n "$IMAGE" ] || die "set KV_IMAGE: the node image, by digest (docs/gke.md, step 3)"
 	k -n "$NS" apply -f - <<EOF
 apiVersion: v1
 kind: Pod
@@ -321,10 +340,179 @@ mark() {
 	echo "$line"
 }
 
+# inject_time TEST: the time of TEST's last inject, to the second (the
+# timestamps Kubernetes and gcloud give have none finer), as UTC "...Z": a
+# step counts only if it happened since.
+inject_time() {
+	local s
+	s=$(grep "\"test\":\"$1\",\"event\":\"inject\"" "$OUT/faults.jsonl" 2>/dev/null | tail -1 |
+		sed -E 's/.*"time":"([^".]*)[^"]*".*/\1Z/')
+	[ -n "$s" ] || die "$1 has no inject in $OUT/faults.jsonl"
+	echo "$s"
+}
+
+# wait_node_down TEST NODE: wait until NODE is gone (its VM deleted) or not
+# Ready; mark node-gone-NODE or node-notready-NODE.
+wait_node_down() {
+	local test=$1 node=$2 st
+	while :; do
+		if ! st=$(k get node "$node" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null); then
+			mark "$test" "node-gone-$node"
+			return
+		fi
+		if [ "$st" != True ]; then
+			mark "$test" "node-notready-$node"
+			return
+		fi
+		sleep 1
+	done
+}
+
+# wait_node TEST NODE: wait until NODE is Ready again, having been seen gone
+# or not Ready here, or Ready since TEST's inject (a VM recreated under its
+# name comes back as a node of the same name); mark node-ready-NODE.
 wait_node() {
-	local test=$1 node=$2
-	k wait "node/$node" --for=condition=Ready --timeout=900s >/dev/null
-	mark "$test" node-ready
+	local test=$1 node=$2 since st seen=no
+	since=$(inject_time "$test")
+	while :; do
+		if st=$(k get node "$node" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.conditions[?(@.type=="Ready")].lastTransitionTime}' 2>/dev/null) &&
+			[ "${st% *}" = True ]; then
+			{ [ $seen = yes ] || [[ ! "${st#* }" < "$since" ]]; } && break
+		else
+			seen=yes
+		fi
+		sleep 2
+	done
+	mark "$test" "node-ready-$node"
+}
+
+# wait_volume TEST POD: wait until the attach/detach controller reports
+# POD's volume attached (its SuccessfulAttachVolume event) since TEST's
+# inject; mark volume-attached-POD. A zonal disk follows its pod: detached
+# from the old VM, attached to the new one.
+wait_volume() {
+	local test=$1 pod=$2 since
+	since=$(inject_time "$test")
+	until k -n "$NS" get events --field-selector "involvedObject.name=$pod,reason=SuccessfulAttachVolume" \
+		-o jsonpath='{range .items[*]}{.lastTimestamp}{.eventTime}{"\n"}{end}' 2>/dev/null |
+		awk -v s="$since" 'substr($0, 1, 19) "Z" >= s {f = 1} END {exit !f}'; do
+		sleep 2
+	done
+	mark "$test" "volume-attached-$pod"
+}
+
+# wait_vm TEST NODE ZONE (GKE): wait until NODE's VM is RUNNING, created
+# since TEST's inject; mark vm-recreated-NODE.
+wait_vm() {
+	local test=$1 node=$2 zone=$3 since st
+	since=$(inject_time "$test")
+	until st=$(gcloud compute instances describe "$node" --zone "$zone" \
+		--format='value(status,creationTimestamp.date("%Y-%m-%dT%H:%M:%SZ",tz=UTC))' 2>/dev/null) &&
+		[ "${st%%[[:space:]]*}" = RUNNING ] && [[ ! "${st##*[[:space:]]}" < "$since" ]]; do
+		sleep 5
+	done
+	mark "$test" "vm-recreated-$node"
+}
+
+# mig_of NODE ZONE (GKE): the managed instance group NODE's VM belongs to.
+mig_of() {
+	gcloud compute instances describe "$1" --zone "$2" --format=json |
+		python -c "import json, sys; print([i['value'] for i in json.load(sys.stdin)['metadata']['items'] if i['key'] == 'created-by'][0].rsplit('/', 1)[1])"
+}
+
+# vm_loss TEST POD... (GKE): tests 1 and 2. Deletes the VMs that run the
+# pods through their managed instance groups (recreate-instances: each VM is
+# deleted and created again under its name, the group's size unchanged, so
+# the autoscaler has nothing to restore), marks inject down:PODS, and waits
+# through the recovery, marking each step (wait_node_down, wait_vm,
+# wait_node, wait_volume, wait_ready). Run it in the foreground: it returns
+# at the heal.
+vm_loss() {
+	[ "$PLATFORM" = gke ] || die "vm-loss is for GKE (on kind: docker kill or pause a worker, docs/chaos.md)"
+	local test=$1 p node zone mig zm
+	shift
+	[ $# -gt 0 ] || die "vm-loss TEST POD..."
+	local -A instances # "zone mig" -> node,node
+	local -a nodes     # "node zone"
+	for p in "$@"; do
+		node=$(k -n "$NS" get pod "$p" -o jsonpath='{.spec.nodeName}')
+		zone=$(k get node "$node" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')
+		mig=$(mig_of "$node" "$zone")
+		[ -n "$node" ] && [ -n "$zone" ] && [ -n "$mig" ] || die "vm-loss: $p: no node, zone or instance group"
+		instances["$zone $mig"]="${instances["$zone $mig"]:+${instances["$zone $mig"]},}$node"
+		nodes+=("$node $zone")
+		echo "$p on $node ($zone, $mig)"
+	done
+	mark "$test" inject "down:$(IFS=,; echo "$*")"
+	for zm in "${!instances[@]}"; do
+		gcloud compute instance-groups managed recreate-instances "${zm#* }" --zone "${zm% *}" \
+			--instances "${instances[$zm]}" >/dev/null
+	done
+	for p in "${nodes[@]}"; do wait_node_down "$test" "${p% *}"; done
+	for p in "${nodes[@]}"; do wait_vm "$test" "${p% *}" "${p#* }"; done
+	for p in "${nodes[@]}"; do wait_node "$test" "${p% *}"; done
+	for p in "$@"; do wait_volume "$test" "$p"; done
+	wait_ready "$test" "$@"
+}
+
+# ready_replicas NAMESPACE DEPLOYMENT: its ready replicas, 0 if unknown.
+ready_replicas() {
+	local r
+	r=$(k -n "$1" get deploy "$2" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+	echo "${r:-0}"
+}
+
+# system_loss TEST (GKE): test 4. Recreates the system pool's VM (the
+# operator, Prometheus, Grafana and kube-dns), marks inject none, and polls
+# the recovery, marking each step as it is seen: the node gone or not Ready,
+# the VM recreated, the node Ready, operator-back and dns-back (each once
+# seen without a ready replica), then heal. One loop for all of them: the
+# operator and kube-dns come back in either order. Only kubectl get and
+# gcloud: kubectl exec and the API server's proxy to pods may not work while
+# the node is gone.
+system_loss() {
+	[ "$PLATFORM" = gke ] || die "system-loss is for GKE (on kind: scale CoreDNS and the operator to 0, docs/chaos.md)"
+	local test=$1 node zone mig since st
+	node=$(k get nodes -l cloud.google.com/gke-nodepool=system -o jsonpath='{.items[0].metadata.name}')
+	zone=$(k get node "$node" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')
+	mig=$(mig_of "$node" "$zone")
+	[ -n "$node" ] && [ -n "$zone" ] && [ -n "$mig" ] || die "system-loss: no system node, zone or instance group"
+	echo "system node $node ($zone, $mig)"
+	mark "$test" inject none
+	since=$(inject_time "$test")
+	gcloud compute instance-groups managed recreate-instances "$mig" --zone "$zone" --instances "$node" >/dev/null
+	# Each step: no (not yet), down (seen down), done (marked back).
+	local node_s=no vm_s=no op_s=no dns_s=no
+	while [ "$node_s$vm_s$op_s$dns_s" != donedonedonedone ]; do
+		if st=$(k get node "$node" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null); then
+			if [ "$st" != True ] && [ $node_s = no ]; then
+				mark "$test" "node-notready-$node"
+				node_s=down
+			elif [ "$st" = True ] && [ $node_s = down ]; then
+				mark "$test" "node-ready-$node"
+				node_s=done
+			fi
+		elif [ $node_s = no ]; then
+			mark "$test" "node-gone-$node"
+			node_s=down
+		fi
+		if [ $vm_s != done ] && st=$(gcloud compute instances describe "$node" --zone "$zone" \
+			--format='value(status,creationTimestamp.date("%Y-%m-%dT%H:%M:%SZ",tz=UTC))' 2>/dev/null) &&
+			[ "${st%%[[:space:]]*}" = RUNNING ] && [[ ! "${st##*[[:space:]]}" < "$since" ]]; then
+			mark "$test" "vm-recreated-$node"
+			vm_s=done
+		fi
+		case "$op_s:$(ready_replicas kvstore-operator-system kvstore-operator-controller-manager)" in
+		no:0) op_s=down ;;
+		down:[1-9]*) mark "$test" operator-back; op_s=done ;;
+		esac
+		case "$dns_s:$(ready_replicas kube-system kube-dns)" in
+		no:0) dns_s=down ;;
+		down:[1-9]*) mark "$test" dns-back; dns_s=done ;;
+		esac
+		sleep 2
+	done
+	mark "$test" heal
 }
 
 # wait_ready TEST POD...: each pod Ready since after TEST's inject (its Ready
@@ -333,8 +521,7 @@ wait_node() {
 wait_ready() {
 	local test=$1 p since st
 	shift
-	since=$(grep "\"test\":\"$test\",\"event\":\"inject\"" "$OUT/faults.jsonl" | tail -1 | sed -E 's/.*"time":"([^".]*)[^"]*".*/\1Z/')
-	[ -n "$since" ] || die "wait-ready: $test has no inject in $OUT/faults.jsonl"
+	since=$(inject_time "$test")
 	# First every pod answering its admin API: the other nodes see it alive
 	# from then, well before the kubelet reports it Ready.
 	for p in "$@"; do
@@ -536,6 +723,11 @@ converge) converge ;;
 delete) k -n "$NS" delete pod "chaos-$1" --wait=false ;;
 mark) mark "$@" ;;
 wait-node) wait_node "$@" ;;
+wait-node-down) wait_node_down "$@" ;;
+wait-volume) wait_volume "$@" ;;
+wait-vm) wait_vm "$@" ;;
+vm-loss) vm_loss "$@" ;;
+system-loss) system_loss "$@" ;;
 wait-ready) wait_ready "$@" ;;
 wait-hints) wait_hints "$@" ;;
 hints-snapshot) hints_snapshot "$@" ;;

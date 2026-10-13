@@ -33,7 +33,7 @@ Google's price list and the project's quotas.
 |---|---|
 | APIs | compute, container, artifactregistry, iam. Left enabled on destroy. |
 | Network | VPC `kvstore`, subnet `kvstore-nodes` (10.10.0.0/24) with secondary ranges `pods` (10.20.0.0/16) and `services` (10.30.0.0/20), Private Google Access, Cloud Router and Cloud NAT. |
-| Cluster `kvstore` | Regional, release channel Regular, VPC-native, Dataplane V2 (enforces NetworkPolicy), private nodes, public control-plane endpoint open to `my_ip_cidr` only, the persistent disk CSI driver (`standard-rwo`), system-component logging and monitoring only, `deletion_protection = false`. The default node pool is removed. |
+| Cluster `kvstore` | Regional, release channel Regular, VPC-native, Dataplane V2 (enforces NetworkPolicy), private nodes, public control-plane endpoint open to `my_ip_cidr` only, the persistent disk CSI driver (`standard-rwo`), system-component logging and monitoring only (and the workloads' logs too with `workload_logging = true`, off by default: for the failure tests, [Session 3](#session-3-the-failure-tests-runbook)), `deletion_protection = false`. The default node pool is removed. |
 | Node pool `kvstore` | 3 zones; 2 nodes per zone, autoscaled 2-3 per zone; e2-standard-2; 20 GiB pd-balanced boot disks; taint `dedicated=kvstore:NoSchedule`; no Spot VMs; surge upgrades, 1 new node per zone before an old one is drained. |
 | Node pool `system` | 1 e2-standard-2 in one zone, untainted: GKE's own components (kube-dns, metrics-server), the operator, Prometheus and Grafana. |
 | Node pool `loadgen` | **Only with `loadgen_enabled = true`** (off by default), for the k6 benchmarks ([benchmarks.md](benchmarks.md)): `loadgen_nodes` n2-standard-4 (`loadgen_machine_type`) in the system pool's zone, 1 by default and 2 for the two-pod check, no autoscaling; taint `dedicated=loadgen:NoSchedule`, which the `deploy/bench` GKE overlay tolerates, selecting the pool by name. Set it in `terraform.tfvars` for the session, not with `-var`: a later `apply` without it (a new address, item 6) would remove the pool. |
@@ -635,6 +635,285 @@ matter).
     KVCluster and its volumes, `terraform destroy`, and every list empty.
     Then set `loadgen_enabled = false` in `terraform.tfvars`, so the next
     session starts without the pool unless it asks for it.
+
+## Session 3: the failure tests (runbook)
+
+The four failure tests of [chaos.md](chaos.md) on this cluster, under load,
+each with its prediction written down before it runs (part A); then, once
+group commit is built, the write benchmarks again (part B, a placeholder
+until then). It follows [A session](#a-session) for the set-up and the
+teardown, with the loadgen pool (the recorders run there: neither a
+database VM's loss nor the system node's may take them down) and the
+workloads' logs on, and replaces its steps 7 to 9.
+
+**What the rehearsal on kind changes here**
+([chaos.md](chaos.md#findings)):
+
+- Partitions are **egress-only NetworkPolicies on both sides**, selecting a
+  label of their own (`kvchaos/partition`): Cilium, which Dataplane V2 is
+  built on, leaves `statefulset.kubernetes.io/pod-name` out of its
+  identities, and an ingress policy blocked the kubelet's probes on kind.
+  A new label takes a while to reach the pods' identities: `partition`
+  waits for it (60s where there are no CiliumEndpoints to watch) before
+  the cut and the inject.
+- **After a partition heals under load, some peer pairs stay cut for up to
+  minutes** (TCP retransmission backoff on peer connections without
+  keepalive): expect hints above the predicted range in test 3, and record
+  each pair's heal from the logs.
+- **Hint delivery is slow** (about 5/s per sender on kind): every read-back
+  waits for `wait-hints`.
+- **Requests hung on a vanished pod take the recorder's workers**:
+  `chaos.sh` runs 256 in flight on GKE (64 on kind dropped requests).
+- Each run writes keys of its own; `wait-ready` and `wait-node` count a pod
+  or node seen down, not only a newer transition time.
+
+**Questions only GKE answers** (record each on the day):
+
+1. Does deleting a VM shut its guest down (requests to its pods fail at
+   once, as in t1 on kind), or does it vanish (they time out until the
+   recorder's keepalive closes the connection, as in t1s)?
+2. How long from the VM's deletion to its pods Ready again: the Node
+   deleted or only not Ready, the VM recreated, the disk attached, the pod
+   started; does the cluster autoscaler add a node meanwhile; and is the
+   KVCluster `Degraded` (a pod unready for more than 2 minutes)?
+3. Does Dataplane V2 enforce the egress-only partition, and how soon after
+   the policies are applied?
+4. While the system node is gone: do `kubectl exec` and the API server's
+   proxy to pods still work (they go through GKE's konnectivity agents)?
+   kube-dns is down: does anything fail for want of it?
+
+**Estimate: about 3.5 hours, about $3.10** (the cluster with one loadgen
+node at $0.88/h; a node the autoscaler may add in tests 1 and 2, about
+$0.07/h each for a quarter of an hour; NAT data processing $0.05-0.10).
+Without part B, about 2.75 hours and $2.40. Budget 4.5 hours and $4.50.
+The workloads' logs are a few tens of MB, inside Cloud Logging's free
+allotment per project and month (check the current allotment and price
+before the session; this page has not recorded them).
+
+| Part | Time |
+|---|---|
+| Before, set-up (cluster creation about 15 min) | ~40 min |
+| Topology, predictions, preload, baseline | ~20 min |
+| Test 1, VM loss | ~15 min |
+| Test 2, zone loss (with the kv-client run) | ~20 min |
+| Test 3, partition | ~15 min |
+| Test 4, system-node loss | ~15 min |
+| Anti-entropy interval, logs, convergence | ~20 min |
+| Part B, the write benchmarks (placeholder) | ~45 min |
+| Teardown | ~15 min |
+
+### Before
+
+1. The tree is clean at the commit the images will be built from, and
+   `make test` passes. The node image carries `/kvchaos` (`Dockerfile`).
+2. **Group commit**: if it is built and merged, the images have it, and
+   part B runs; record the commit. If not, skip part B: the failure tests
+   do not depend on it.
+3. Your address matches `my_ip_cidr` ([Before the first session](#before-the-first-session), item 6).
+4. In `infra/gke/terraform.tfvars` (not with `-var`: a later plain `apply`
+   would drop them):
+
+   ```hcl
+   loadgen_enabled  = true
+   loadgen_nodes    = 1
+   workload_logging = true
+   ```
+
+### Set-up
+
+5. [A session](#a-session), steps 1 to 4 (create, kubectl, the images by
+   digest, the operator) and step 6 (observability), with `--context $CTX`
+   on every kubectl call. The plan says 16 to add; `get nodes` shows 8:
+   6 `kvstore`, 1 `system`, 1 `loadgen`. Note the time:
+   `SESSION_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)`.
+6. **The KVCluster is the bench one** (512Mi per pod, sized for about
+   100,000 keys a pod; the GKE sample keeps the default 256Mi), as in
+   [Session 2](#session-2-the-benchmarks-runbook), step 6:
+
+   ```sh
+   kubectl create namespace kvstore --dry-run=client -o yaml | kubectl --context $CTX apply -f -
+   export BENCH_CONTEXT=$CTX
+   KV_IMAGE=$NODE_IMG deploy/bench/run.sh reset      # type the context name to confirm
+   ```
+
+   Then the placement and membership checks of step 5 (6 distinct nodes,
+   each zone twice; every pod `epoch=0 members=6 alive=5 reachable=5`).
+   **Do not start `deploy/loadgen/writer.yaml`.** At `chaos.sh`'s GKE rates
+   (40 writes/s, 100 reads/s) the session's runs store about 110,000 keys,
+   within that sizing.
+7. **The topology and every fault's prediction:**
+
+   ```sh
+   export CHAOS_CONTEXT=$CTX KV_IMAGE=$NODE_IMG CHAOS_OUT=docs/results/chaos/$(date -u +%Y%m%d)-gke
+   c=deploy/chaos/chaos.sh
+   $c topology        # topology.json, and predictions.txt over the 5,000 preload keys
+   ```
+
+   **Stop point**: `topology` refuses a cluster that is not settled (a pod
+   not running, a node without a zone, epochs or members that differ, a
+   peer not alive and reachable). Fix that before anything else.
+8. **Choose the targets and write the predictions down, before any
+   fault** (in a "Session 3 (results)" section of this page, dated), from
+   `predictions.txt`:
+
+   | Test | Target | Prediction |
+   |---|---|---|
+   | 1. VM loss | The VM of the pod that holds the most keys (most hints) | No key fails (N=3, W=R=2: one replica down never loses a quorum); requests to that pod fail or time out (target-down); `Degraded` if the pod is unready for more than 2 minutes; epoch unchanged |
+   | 2. Zone loss | The zone whose `down:` row fails the most keys | That row's share of keys fails for Puts and Gets alike; `Degraded`; epoch unchanged |
+   | 3. Partition | Another zone's two pods | Its `partition:` rows: the share failing from the group, and from the rest; every key works on exactly one side; no pod restarts; the operator stays `Ready` |
+   | 4. System-node loss | The system node | Zero errors; the operator back `Ready`, epoch unchanged |
+
+   For all four: no acknowledged write lost, no stale read.
+9. **Preload, read it back, and watch the operator:**
+
+   ```sh
+   $c preload            # must be clean: 5,000 of 5,000 acknowledged
+   $c readback pre
+   $c watch-start        # a background loop: watch-stop at the teardown
+   ```
+
+10. **Baseline, no fault** (5 minutes):
+
+    ```sh
+    $c run t0; sleep 300; $c stop t0
+    $c wait-hints t0; $c readback t0; $c check
+    ```
+
+    **Stop point**: it must say `PASS` with no failure at all. If not,
+    something is wrong before any fault: stop and find it.
+
+### Part A: the failure tests
+
+Every test is the same shape: hint counters before, a run, 2 minutes
+steady, the fault (which marks every step of its own recovery), 2 minutes
+after the heal, then the run stopped, the hints delivered, the counters
+after, the read-back and the check. `vm-loss`, `system-loss` and `partition`
+return when the fault has healed.
+
+**Stop point after each test**: a check that fails on a lost or stale value
+ends the tests. Keep the cluster up long enough to collect the evidence
+(the records are fetched by `stop`; `$c peers`; the logs, below), then the
+teardown. A request against its prediction that is not a loss (an
+unexpected failure or success) is a finding: record it and go on.
+
+11. **Test 1, VM loss.** `kv-N` is the pod chosen in step 8:
+
+    ```sh
+    $c hints-snapshot t1 before
+    $c run t1; sleep 120
+    $c vm-loss t1 kv-N     # node gone or not Ready, VM recreated, node Ready, volume attached, serving, Ready, heal
+    sleep 120
+    $c stop t1; $c wait-hints t1; $c hints-snapshot t1 after; $c readback t1; $c check
+    kubectl --context $CTX get events -A --field-selector reason=TriggeredScaleUp
+    ```
+
+    Record the check's timeline line (question 2), whether the requests to
+    kv-N in the fault were `unknown` or `failed` (question 1), and the
+    operator's `Degraded` span in `operator.log`.
+12. **Test 2, zone loss, with the kv-client run.** `kv-A kv-B` are the
+    zone's two pods. A second recorder goes through the Service, as a naive
+    client would (on kind its connections to the frozen pods timed out for
+    the whole fault):
+
+    ```sh
+    $c hints-snapshot t2 before
+    $c run t2
+    $c start t2svc -test t2 -service kv-client.kvstore.svc.cluster.local:7000 -service-conns 12 \
+      -write-prefix chaos-t2svc-$(date -u +%Y%m%d%H%M%S) -write-rate 10 -read-rate 20 \
+      -read-prefix chaos-pre -read-keys 5000
+    sleep 120
+    $c vm-loss t2 kv-A kv-B
+    sleep 120
+    $c stop t2; $c stop t2svc; $c wait-hints t2; $c hints-snapshot t2 after
+    $c readback t2; $c readback t2svc; $c check
+    ```
+
+    The autoscaler may add a node in the zone while its pods are pending
+    (at most 3 per zone: 20 of the 24 `E2_CPUS` with the system node).
+13. **Test 3, partition.** `kv-C kv-D` are the other zone's pods:
+
+    ```sh
+    $c hints-snapshot t3 before
+    $c run t3; sleep 60
+    $c partition t3 kv-C kv-D   # labels the sides, waits for their identities, applies the policies, marks inject
+    $c peers                    # the rest's pods alive=3, the group's alive=1, within ~5s
+    sleep 120
+    $c unpartition t3; sleep 120
+    $c stop t3; $c unlabel; $c wait-hints t3; $c hints-snapshot t3 after; $c readback t3; $c check
+    kubectl --context $CTX -n kvstore get pods -l app.kubernetes.io/name=kvstore   # restarts unchanged
+    ```
+
+    **Stop point**: if `peers` still shows everyone `alive=5` a minute after
+    the inject, the policies are not enforced (question 3): `unpartition`,
+    `unlabel`, record it, and skip to test 4. After the heal, expect a few
+    pairs to see each other again only after a minute or more, and hints
+    above the predicted range; each pair's times are in the logs (step 16).
+14. **Test 4, system-node loss.** Prometheus and Grafana keep their data on
+    `emptyDir` on that node: their history goes with it. Nothing below reads
+    it; the evidence is in the records, the hint counters, `operator.log`
+    and the workloads' logs.
+
+    ```sh
+    $c hints-snapshot t4 before
+    $c run t4; sleep 120
+    $c system-loss t4      # node gone or not Ready, VM recreated, node Ready, operator-back, dns-back, heal
+    sleep 120
+    $c stop t4; $c wait-hints t4; $c hints-snapshot t4 after; $c readback t4; $c check
+    ```
+
+    `system-loss` uses only `kubectl get` and `gcloud`. While the node is
+    gone, try `$c peers` once (the API server's proxy to a pod) and record
+    whether it answers (question 4). Afterwards: Prometheus's 6 of 6 targets
+    up again (step 6).
+15. **Convergence**, a full anti-entropy interval (15 minutes) after test
+    4's last write; collect the logs (step 16) meanwhile:
+
+    ```sh
+    $c converge; $c check-final     # every acknowledged write on all three owners
+    ```
+
+16. **The workloads' logs** of the session (the kv pods, the recorders, the
+    operator), from Cloud Logging, kept with the results:
+
+    ```sh
+    mkdir -p $CHAOS_OUT/logs
+    for ns in kvstore kvstore-operator-system; do
+      gcloud logging read "resource.type=\"k8s_container\" AND resource.labels.cluster_name=\"kvstore\" AND resource.labels.namespace_name=\"$ns\" AND timestamp>=\"$SESSION_START\"" \
+        --project kvstore-gke --order=asc --format='value(timestamp,resource.labels.pod_name,textPayload)' \
+        > $CHAOS_OUT/logs/$ns.log
+    done
+    grep -E 'is dead|alive again' $CHAOS_OUT/logs/kvstore.log    # every pair's cut and heal
+    ```
+
+### Part B: the write benchmarks with group commit (placeholder)
+
+Not runnable yet: this part is written when group commit exists. Session 2
+put the write knee at 300-400/s for p99 and 500/s for p50, with the kv pods
+under 0.4 cores and fsync p99 near 5 ms, most likely writes queueing for
+the engine's write lock ([benchmarks.md](benchmarks.md#open-questions));
+group commit is the fix to measure. When it is built, fill in:
+
+- **After the convergence check only**: `run.sh reset` replaces the
+  failure tests' KVCluster and its data.
+- The runs: `reset`, `preload`, writes constant (`RATE=40`), the write
+  ramp of [Series A](#series-a-reads-and-writes), and the
+  [decision point](#decision-point-writes-above-500s) if it shows no knee;
+  their keys within the cap.
+- The prediction to write down first: where the knee should move, and what
+  shows that group commit is what moved it (fsyncs per Put, the write
+  lock's wait, if group commit adds a histogram of it).
+- The comparison with session 2, run by run.
+
+### Teardown
+
+17. `$c watch-stop`; check that no `kubectl port-forward` of yours is left.
+18. [A session](#a-session), step 10: check your address, delete the
+    KVCluster and its volumes, `terraform destroy`, and every list empty.
+    Then set `loadgen_enabled = false` and `workload_logging = false` in
+    `terraform.tfvars`.
+19. Record the session (a "Session 3 (results)" section here, the
+    predictions of step 8 first) and commit `$CHAOS_OUT`: the per-request
+    records and read-backs stay out (`docs/results/chaos/.gitignore`).
 
 ## The gcloud configuration
 

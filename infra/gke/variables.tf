@@ -72,6 +72,12 @@ variable "loadgen_enabled" {
   default     = false
 }
 
+variable "workload_logging" {
+  description = "Send the workloads' container logs (the kv pods, the operator, the recorders) to Cloud Logging, not only GKE's system components. Off by default: for the failure-test session (docs/gke.md, session 3), where a deleted node takes its pods' logs with it. Changes the cluster in place."
+  type        = bool
+  default     = false
+}
+
 variable "loadgen_machine_type" {
   description = "The loadgen node's machine type. n2-standard-4: 4 vCPUs that are not shared, for k6 alone."
   type        = string
