@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
 	"distributed-kv-datastore/internal/rpc/pb"
@@ -42,10 +44,19 @@ func Serve(address string, ds *store.DataStore, coord WriteCoordinator, opts ...
 	return ServeListener(lis, ds, coord, opts...), nil
 }
 
+// KeepaliveEnforcement is what the server allows of its clients' keepalive
+// pings: one every MinTime at most, with or without an RPC open. It must
+// allow PeerKeepalive's (MinTime no more than its Time, and
+// PermitWithoutStream): gRPC's default, one every 5 minutes and only with an
+// RPC open, answers more frequent pings with a GOAWAY ("too_many_pings")
+// that closes the connection.
+var KeepaliveEnforcement = keepalive.EnforcementPolicy{MinTime: 5 * time.Second, PermitWithoutStream: true}
+
 // ServeListener is Serve on a listener the caller has already opened, for
 // example on port 0 so the OS picks a free port that stays bound from then
 // on. The returned Listener owns lis: stopping it closes lis.
 func ServeListener(lis net.Listener, ds *store.DataStore, coord WriteCoordinator, opts ...grpc.ServerOption) *Listener {
+	opts = append([]grpc.ServerOption{grpc.KeepaliveEnforcementPolicy(KeepaliveEnforcement)}, opts...)
 	grpcServer := grpc.NewServer(opts...)
 	pb.RegisterKVReplicationServer(grpcServer, NewServer(ds, coord))
 	// The client-facing service shares the server (so StopWithin covers it),

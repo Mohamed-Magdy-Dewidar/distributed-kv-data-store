@@ -1,0 +1,54 @@
+{
+  "epoch": 0,
+  "n": 3,
+  "w": 2,
+  "r": 2,
+  "fingerprint": "163086ed37c3f78838b68b4d2a8cca84db11a1dafb396faf5c643cbe2a94e38a",
+  "timing": {
+    "heartbeatInterval": "1s",
+    "heartbeatTimeout": "500ms",
+    "maxMissedHeartbeats": 3,
+    "replicationTimeout": "5s",
+    "maxReconnectBackoff": "5s",
+    "hintDelivery": "10s",
+    "antiEntropy": "15m0s"
+  },
+  "pods": [
+    {
+      "id": "kv-0",
+      "address": "kv-0.kv.kvstore.svc.cluster.local:7000",
+      "node": "kvstore-chaos-worker2",
+      "zone": "zone-b"
+    },
+    {
+      "id": "kv-1",
+      "address": "kv-1.kv.kvstore.svc.cluster.local:7000",
+      "node": "kvstore-chaos-worker3",
+      "zone": "zone-c"
+    },
+    {
+      "id": "kv-2",
+      "address": "kv-2.kv.kvstore.svc.cluster.local:7000",
+      "node": "kvstore-chaos-worker",
+      "zone": "zone-a"
+    },
+    {
+      "id": "kv-3",
+      "address": "kv-3.kv.kvstore.svc.cluster.local:7000",
+      "node": "kvstore-chaos-worker3",
+      "zone": "zone-c"
+    },
+    {
+      "id": "kv-4",
+      "address": "kv-4.kv.kvstore.svc.cluster.local:7000",
+      "node": "kvstore-chaos-worker2",
+      "zone": "zone-b"
+    },
+    {
+      "id": "kv-5",
+      "address": "kv-5.kv.kvstore.svc.cluster.local:7000",
+      "node": "kvstore-chaos-worker",
+      "zone": "zone-a"
+    }
+  ]
+}

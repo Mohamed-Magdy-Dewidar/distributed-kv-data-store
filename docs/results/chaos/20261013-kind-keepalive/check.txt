@@ -1,0 +1,37 @@
+== test pre
+  normal     put  ok=5000
+  compared:  as-predicted=5000
+== test t3k1: partition:kv-1,kv-3, injected 2026-10-13T18:34:58.048Z, healed 2026-10-13T18:36:59.484Z (2m1s)
+  timeline:  +0s inject, +3.8s pairs-cut, +121.4s heal, +128.5s all-pairs-alive, +191.2s hints-delivered
+  normal     put  ok=5904
+  normal     get  ok=5904
+  transition put  dropped=92 failed=155 ok=703
+  transition get  dropped=92 failed=126 ok=732
+  fault      put  failed=2003 ok=3694
+  fault      get  failed=2032 ok=3665
+  compared:  as-predicted=23202 dropped=184 transition=1716
+  predicted: hints 2489 to 3246; under-replicated until anti-entropy 110
+  e.g. transition         get chaos-pre-0001557 via kv-0 at 18:34:56.055: ok  
+  e.g. transition         put chaos-t3k1-20261013183355-0002985 via kv-1 at 18:34:56.055: ok  
+  e.g. transition         get chaos-pre-0003534 via kv-3 at 18:34:56.076: ok  
+  e.g. transition         put chaos-t3k1-20261013183355-0002986 via kv-2 at 18:34:56.075: ok  
+  e.g. transition         get chaos-pre-0003016 via kv-5 at 18:34:56.095: ok  
+== test t3k2: partition:kv-1,kv-3, injected 2026-10-13T18:39:16.851Z, healed 2026-10-13T18:41:17.632Z (2m1s)
+  timeline:  +0s inject, +2.8s pairs-cut, +120.8s heal, +127.8s all-pairs-alive, +190.9s hints-delivered
+  normal     put  ok=5535
+  normal     get  ok=5537
+  transition put  dropped=83 failed=131 ok=738
+  transition get  dropped=79 failed=136 ok=735
+  fault      put  failed=2007 ok=3657
+  fault      get  failed=2043 ok=3621
+  compared:  as-predicted=22400 dropped=162 transition=1740
+  predicted: hints 2496 to 3261; under-replicated until anti-entropy 221
+  e.g. transition         put chaos-t3k2-20261013183821-0002630 via kv-5 at 18:39:14.829: ok  
+  e.g. transition         put chaos-t3k2-20261013183821-0002631 via kv-1 at 18:39:14.849: ok  
+  e.g. transition         get chaos-pre-0004419 via kv-2 at 18:39:14.869: ok  
+  e.g. transition         put chaos-t3k2-20261013183821-0002632 via kv-3 at 18:39:14.869: ok  
+  e.g. transition         get chaos-pre-0001327 via kv-5 at 18:39:14.889: ok  
+== read-back: 25231 acknowledged writes: lost 0, not read back 0, unreadable 0
+  unacknowledged writes: present 0, absent 4296 (either is allowed)
+  copies: 25231 checked, 0 on fewer than all owners: 0 predicted, 0 not
+== PASS

@@ -146,9 +146,9 @@ after the test, `hints.txt`):
   connection that had data in flight when the cut started backs off its TCP
   retransmissions, and resumes only at the next retransmission after the
   heal; heartbeats share it, so the peer stays dead meanwhile, and writes to
-  it are hinted (the extra hints of t3a). A client keepalive on peer
-  connections would close and redial such a connection; that is a database
-  change, not made here.
+  it are hinted (the extra hints of t3a). **Fixed since** by a client
+  keepalive on peer connections: see
+  [Peer keepalive: the partition again](#peer-keepalive-the-partition-again).
 - **A frozen pod takes 85s to be restarted**: liveness gives up after 30s
   (3 failures 10s apart), and the kubelet's SIGTERM waits out the pod's 60s
   termination grace, since a stopped process cannot exit.
@@ -173,6 +173,42 @@ after the test, `hints.txt`):
 - **A rerun must not write the keys of an earlier run**: same keys, same
   values, so the earlier run's copies would hide a lost write. Each run
   writes under a prefix of its own (`chaos-<test>-<start time>`).
+
+## Peer keepalive: the partition again
+
+The rehearsal's heal finding, fixed: every peer connection now has a gRPC
+client keepalive (`internal/rpc`, `PeerKeepalive`: a ping after 10s with
+nothing received, the connection closed if it is not answered within 3s,
+with or without an RPC open), and the server allows those pings
+(`KeepaliveEnforcement`: one every 5s at most, with or without an RPC
+open; gRPC's default answers them with a GOAWAY, `too_many_pings`). A
+connection a partition broke is now closed and redialed instead of waiting
+for TCP's next retransmission. `internal/rpc/keepalive_test.go` shows both:
+a connection to a peer that went silent leaves Ready 13s later and the next
+RPC after the peer is back goes over a new connection, while a connection
+without keepalive stays Ready; and an idle connection survives the pings on
+a server from `Serve`, while gRPC's default policy closed it at the third
+ping (30s).
+
+Rerun on kind, 2026-10-13, on the same cluster with every pod restarted on
+the new image (each pod's `/kvnode` checked against the build): the
+rehearsal's t3a (zone c, kv-1 and kv-3, partitioned for 120s under load)
+twice, with every member's view of every other polled each second after
+the heal. Results in
+[results/chaos/20261013-kind-keepalive/](results/chaos/20261013-kind-keepalive/).
+
+| Run | Peer keepalive | Every pair alive again after the heal | Hints: predicted, measured |
+|---|---|---|---|
+| t3a (rehearsal) | no | **104s**: kv-1↔kv-5 and kv-3↔kv-4; the other pairs 1 to 7s | 2,708 to 3,401; 3,594 |
+| control, 60s partition (rehearsal) | no | **45 to 55s**: kv-0↔kv-3 | not measured |
+| control, no load (rehearsal) | no | within 10s | none |
+| t3k1 | yes | **7s** | 2,489 to 3,246; 2,695 |
+| t3k2 | yes | **7s** | 2,496 to 3,261; 2,731 |
+
+In both reruns every request was as predicted, no pod restarted, and the
+check passed: 25,231 acknowledged writes (with the preload), none lost,
+all on every owner. The hints are back inside the predicted range: the
+writes that went to hints in t3a only because a pair stayed cut are gone.
 
 ## A test, by hand
 

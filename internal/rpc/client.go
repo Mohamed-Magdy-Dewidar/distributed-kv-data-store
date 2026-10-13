@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 
 	"distributed-kv-datastore/internal/merkle"
 	"distributed-kv-datastore/internal/model"
@@ -44,8 +45,26 @@ func DialBackoff(address string, cfg backoff.Config) (*Client, error) {
 	return dial(address, grpc.WithConnectParams(grpc.ConnectParams{Backoff: cfg}))
 }
 
+// PeerKeepalive is every peer connection's gRPC keepalive: when nothing has
+// been received on the connection for Time, the client pings, and if the
+// ping is not answered within Timeout it closes the connection; the next RPC
+// redials, within the reconnect backoff. PermitWithoutStream pings with no RPC
+// open too: by the time a connection looks dead, the heartbeat RPC on it has
+// already timed out.
+//
+// Without it, a connection a partition broke while data was in flight was
+// never noticed: TCP's retransmission backoff kept it dead for up to minutes
+// after the partition healed, the peer marked dead all that while, and its
+// writes hinted instead of replicated (docs/chaos.md). grpc-go raises a Time
+// under 10s to 10s. The server must allow these pings: see
+// KeepaliveEnforcement.
+var PeerKeepalive = keepalive.ClientParameters{Time: 10 * time.Second, Timeout: 3 * time.Second, PermitWithoutStream: true}
+
 func dial(address string, opts ...grpc.DialOption) (*Client, error) {
-	opts = append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, opts...)
+	opts = append([]grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(PeerKeepalive),
+	}, opts...)
 	conn, err := grpc.NewClient(address, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", address, err)

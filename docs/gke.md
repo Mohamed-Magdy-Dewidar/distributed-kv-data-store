@@ -656,10 +656,13 @@ workloads' logs on, and replaces its steps 7 to 9.
   A new label takes a while to reach the pods' identities: `partition`
   waits for it (60s where there are no CiliumEndpoints to watch) before
   the cut and the inject.
-- **After a partition heals under load, some peer pairs stay cut for up to
-  minutes** (TCP retransmission backoff on peer connections without
-  keepalive): expect hints above the predicted range in test 3, and record
-  each pair's heal from the logs.
+- **After a partition healed under load, some peer pairs stayed cut for up
+  to minutes** (TCP retransmission backoff on peer connections without
+  keepalive). Fixed by the peer keepalive: on kind every pair saw the other
+  again within 7s of the heal
+  ([chaos.md](chaos.md#peer-keepalive-the-partition-again)). Build the
+  images from a commit that has it, and record each pair's heal from the
+  logs.
 - **Hint delivery is slow** (about 5/s per sender on kind): every read-back
   waits for `wait-hints`.
 - **Requests hung on a vanished pod take the recorder's workers**:
@@ -845,9 +848,10 @@ unexpected failure or success) is a finding: record it and go on.
 
     **Stop point**: if `peers` still shows everyone `alive=5` a minute after
     the inject, the policies are not enforced (question 3): `unpartition`,
-    `unlabel`, record it, and skip to test 4. After the heal, expect a few
-    pairs to see each other again only after a minute or more, and hints
-    above the predicted range; each pair's times are in the logs (step 16).
+    `unlabel`, record it, and skip to test 4. After the heal, expect every
+    pair to see the other again within about 15s (the peer keepalive's 13s,
+    and the reconnect), and the hints within the predicted range; each
+    pair's times are in the logs (step 16).
 14. **Test 4, system-node loss.** Prometheus and Grafana keep their data on
     `emptyDir` on that node: their history goes with it. Nothing below reads
     it; the evidence is in the records, the hint counters, `operator.log`

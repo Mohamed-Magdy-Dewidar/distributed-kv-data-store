@@ -1,0 +1,10 @@
+{"time":"2026-10-13T18:34:58.048Z","test":"t3k1","event":"inject","fault":"partition:kv-1,kv-3"}
+{"time":"2026-10-13T18:35:01.860Z","test":"t3k1","event":"mark","mark":"pairs-cut"}
+{"time":"2026-10-13T18:36:59.484Z","test":"t3k1","event":"heal"}
+{"time":"2026-10-13T18:37:06.528Z","test":"t3k1","event":"mark","mark":"all-pairs-alive"}
+{"time":"2026-10-13T18:38:09.279Z","test":"t3k1","event":"mark","mark":"hints-delivered"}
+{"time":"2026-10-13T18:39:16.851Z","test":"t3k2","event":"inject","fault":"partition:kv-1,kv-3"}
+{"time":"2026-10-13T18:39:19.686Z","test":"t3k2","event":"mark","mark":"pairs-cut"}
+{"time":"2026-10-13T18:41:17.632Z","test":"t3k2","event":"heal"}
+{"time":"2026-10-13T18:41:24.630Z","test":"t3k2","event":"mark","mark":"all-pairs-alive"}
+{"time":"2026-10-13T18:42:27.750Z","test":"t3k2","event":"mark","mark":"hints-delivered"}
