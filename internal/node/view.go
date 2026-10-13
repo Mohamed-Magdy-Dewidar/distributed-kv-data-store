@@ -75,6 +75,13 @@ func fingerprint(members map[string]string, n int) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// Fingerprint is the fingerprint of a view of members with replication factor
+// n, as GET /admin/membership reports it. A tool that computes placement
+// outside a node (see VirtualNodesPerPhysical) compares it with a node's: if
+// they match, the tool's ring has the node's members, N, vnode count and ring
+// scheme.
+func Fingerprint(members map[string]string, n int) string { return fingerprint(members, n) }
+
 // validateMembers checks the rules a member set must meet to become a view:
 // it is non-empty and has at least n members; every ID is non-empty and free
 // of '#' (the clock-ID separator) and NUL (the hint-key separator); every
