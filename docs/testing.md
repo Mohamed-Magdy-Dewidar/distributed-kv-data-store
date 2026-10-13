@@ -25,6 +25,37 @@ without it, alongside the `-race` suite:
 go test -count=1 ./internal/telemetry/ ./internal/storage/wal/
 ```
 
+## Write benchmarks
+
+Three Go benchmarks measure the write path from a fixed number of concurrent
+goroutines, for comparing changes to how writes wait for each other and for
+the WAL's fsync:
+
+| Benchmark | What it measures |
+|---|---|
+| `BenchmarkPutParallel` (`internal/storage/engine`) | `StorageEngine.Put` from 1, 8 and 64 writers, each write a new key |
+| `BenchmarkDataStorePutParallel` (`internal/store`) | The same one layer up, `DataStore.Put` with no context (a read of the key, then the write), where a node's writes enter |
+| `BenchmarkDataStoreGetWhileWriting` (`internal/store`) | `DataStore.Get` of existing keys from 8 readers while 8 writers Put other keys: how long a read waits behind writes |
+
+Each reports ns/op (the inverse of throughput), the p50 and p99 latency of
+one operation (`p50-ms`, `p99-ms`), and the Put benchmarks report
+`fsyncs/op`, the WAL fsyncs per write. Values are 256 bytes and the memtable
+4 MiB, as in the cluster, so flushes run during the benchmark.
+
+They measure fsync, so they run on Linux in a container's own filesystem: a
+Windows bind mount or `FlushFileBuffers` gives other numbers. Copy the source
+in, with the temporary directory outside the module, and run each benchmark
+several times, for `benchstat`. Run a fixed number of operations
+(`-benchtime 1000x`), not
+a duration: a Get can take the store's lock ahead of goroutines already
+waiting for it, so the short run Go times first to choose `b.N` can be far
+faster than the rest, and the `b.N` it picks then runs for minutes. A fixed
+count also gives every compared run the same number of writes:
+
+```sh
+docker run --rm -v "${PWD}:/src:ro" -v kv-gomod:/go/pkg/mod -v kv-gocache:/root/.cache golang:1.26 sh -c "mkdir -p /work/src /work/tmp && cp -r /src/. /work/src/ && cd /work/src && TMPDIR=/work/tmp go test -run '^$' -bench . -benchtime 1000x -count 6 ./internal/storage/engine/ ./internal/store/"
+```
+
 ## End-to-end tests (`e2e/`)
 
 The `e2e` package builds `cmd/node` from the working tree once, then starts
