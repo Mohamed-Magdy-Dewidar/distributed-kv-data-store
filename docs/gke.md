@@ -25,7 +25,7 @@ Google's price list and the project's quotas.
 |---|---|
 | Terraform | 1.16.x (`~> 1.16.0`), 64-bit |
 | google provider | 8.6.x (`~> 8.6.0`), locked in `infra/gke/.terraform.lock.hcl` |
-| GKE | Regular channel: the default for new clusters is 1.35.8-gke.1225000 (release notes of 2026-09-23, still the default on 2026-10-06) |
+| GKE | Regular channel: the default for new clusters is 1.35.8-gke.1225000 (release notes of 2026-09-23, still the default on 2026-10-06); session 2's cluster (2026-10-13) got 1.36.4-gke.1391002. The channel's default moves: record the version of every session |
 
 ## What it creates
 
@@ -468,8 +468,9 @@ state lost track of.
 
 ## Session 2: the benchmarks (runbook)
 
-The k6 benchmarks of [benchmarks.md](benchmarks.md) on this cluster. Not
-run yet; this is the plan. It follows [A session](#a-session) for the
+The k6 benchmarks of [benchmarks.md](benchmarks.md) on this cluster. Run
+on 2026-10-13; the results are in
+[benchmarks.md](benchmarks.md#gke-2026-10-13-session-2-the-benchmarks). It follows [A session](#a-session) for the
 set-up and the teardown, with the loadgen pool added, and replaces its
 steps 7 to 9 (the steady writer and the experiments) with the benchmark
 series. **No scaling of the database in this session**: the two-pod step
@@ -596,8 +597,22 @@ matter).
 
 7. Set `loadgen_nodes = 2` in `terraform.tfvars` and
    `terraform -chdir=infra/gke apply`: the plan says `1 to change` (the
-   pool, resized in place). `get nodes` shows 9. Check the new node as in
-   step 5.
+   pool, resized in place), and nothing for the cluster. `get nodes` shows
+   9. Check the new node as in step 5.
+
+   In session 2 the plan also wanted an in-place change to the cluster
+   itself: its `node_config` describes only the default pool, which GKE
+   removes after creating the cluster, and from then on GKE reports
+   another pool's node configuration as the cluster's (here the loadgen
+   pool's n2-standard-4). Nothing had changed; applying it would have
+   been a needless update to the cluster. The pool was resized with
+   gcloud instead (for example `gcloud container clusters resize kvstore
+   --node-pool loadgen --num-nodes 2 --region europe-west1`), which left
+   Terraform's state at one node (harmless for the `destroy`). The cluster now has
+   `lifecycle { ignore_changes = [node_config] }` (`infra/gke/cluster.tf`),
+   so the plan shows only the pool. That was checked with `terraform
+   validate` only: the cluster was gone by then, so the next session's
+   first plan with the pool on is the real test.
 8. The read ramp twice, back to back, on the same data:
 
    ```sh

@@ -9,8 +9,8 @@ resource "google_container_cluster" "kvstore" {
   # terraform destroy must be able to delete it.
   deletion_protection = false
 
-  # The default pool is replaced by the two below. GKE creates it anyway, so
-  # keep it small while it exists.
+  # The default pool is replaced by the pools below. GKE creates it anyway,
+  # so keep it small while it exists.
   remove_default_node_pool = true
   initial_node_count       = 1
   node_config {
@@ -69,6 +69,16 @@ resource "google_container_cluster" "kvstore" {
   }
 
   depends_on = [google_project_service.apis, google_project_iam_member.nodes]
+
+  # node_config above describes only the default pool, which exists for a
+  # few minutes while the cluster is created. Once it is removed, GKE
+  # reports another pool's node configuration as the cluster's (in session
+  # 2, the loadgen pool's n2-standard-4), so every later plan wanted an
+  # in-place change to the cluster that nothing asked for. The node pools
+  # are their own resources, below; ignore the cluster's node_config.
+  lifecycle {
+    ignore_changes = [node_config]
+  }
 }
 
 # The database pool: the node pool name is GKE's cloud.google.com/gke-nodepool
