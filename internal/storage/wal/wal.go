@@ -174,17 +174,44 @@ type SyncObserver interface {
 	WALSynced(d time.Duration)
 }
 
-// WAL is an append-only, crash-safe log file. Every Append fsyncs before
-// returning, so a returned nil error means the entry is durable on disk
-// even if the process crashes immediately after. Safe for concurrent use.
+// File is what a WAL uses of its file. *os.File is the real one;
+// WithOpenFile lets a test put a fake in its place, to fail a write or an
+// fsync, or to drop what was never synced as a crash would.
+type File interface {
+	io.Reader
+	io.Writer
+	io.Seeker
+	Sync() error
+	Truncate(size int64) error
+	Stat() (os.FileInfo, error)
+	Close() error
+}
+
+// OpenFileFunc opens path for reading and writing, creating it if it
+// doesn't exist, as os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644) does.
+type OpenFileFunc func(path string) (File, error)
+
+func openOSFile(path string) (File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err // not f: a nil *os.File in a File is not a nil File
+	}
+	return f, nil
+}
+
+// WAL is an append-only, crash-safe log file. Every Append and WriteBatch
+// fsyncs before returning, so a returned nil error means its entries are
+// durable on disk even if the process crashes immediately after. Safe for
+// concurrent use.
 //
 // obs, when set, is told of each fsync. Only a Log sets it, and only on the
 // segments it starts for writing: a WAL opened to be replayed has none, so
 // replay never reports.
 type WAL struct {
 	mu   sync.Mutex
-	file *os.File
+	file File
 	obs  SyncObserver
+	buf  []byte // WriteBatch's records, joined for its one Write; kept to reuse
 }
 
 // Open opens (creating if necessary) the WAL file at path for reading and
@@ -193,7 +220,12 @@ type WAL struct {
 // Appends still go to the end — Open and Replay both leave the offset
 // there, and every write happens under w.mu.
 func Open(path string) (*WAL, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	return open(path, openOSFile)
+}
+
+// open is Open with the file opened by openFile.
+func open(path string, openFile OpenFileFunc) (*WAL, error) {
+	f, err := openFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("wal: open %s: %w", path, err)
 	}
@@ -204,42 +236,87 @@ func Open(path string) (*WAL, error) {
 	return &WAL{file: f}, nil
 }
 
+// Encode serializes entry as the record Append would write for it: the
+// payload's length and CRC32 checksum, then the payload. It touches no
+// WAL, so writers can encode in their own goroutines, in parallel, and
+// hand the records to WriteBatch.
+func Encode(entry Entry) ([]byte, error) {
+	rec, err := toRecord(entry)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(rec)
+	if err != nil {
+		return nil, fmt.Errorf("wal: marshal record for key %q: %w", entry.Key, err)
+	}
+
+	// Header and payload in one buffer, so one Write writes both: a crash
+	// between two Writes could leave a header with no payload. Replay
+	// would handle that as a torn record too, but one Write is simpler.
+	record := make([]byte, headerSize+len(payload))
+	binary.BigEndian.PutUint32(record[0:4], uint32(len(payload)))
+	binary.BigEndian.PutUint32(record[4:8], crc32.ChecksumIEEE(payload))
+	copy(record[headerSize:], payload)
+	return record, nil
+}
+
 // Append serializes entry, writes it as a length-prefixed, checksummed
 // record, and fsyncs before returning. The entry is not considered
 // durable until this returns a nil error.
 func (w *WAL) Append(entry Entry) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	rec, err := toRecord(entry)
+	record, err := Encode(entry)
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(rec)
-	if err != nil {
-		return fmt.Errorf("wal: marshal record for key %q: %w", entry.Key, err)
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.writeAndSync(record); err != nil {
+		return fmt.Errorf("%w (key %q)", err, entry.Key)
 	}
+	return nil
+}
 
-	checksum := crc32.ChecksumIEEE(payload)
-
-	header := make([]byte, headerSize)
-	binary.BigEndian.PutUint32(header[0:4], uint32(len(payload)))
-	binary.BigEndian.PutUint32(header[4:8], checksum)
-
-	// Write header+payload as one buffer so a single os.File.Write call
-	// handles both — two separate Write calls would leave a window where
-	// a crash between them produces a header with no payload at all,
-	// which Replay would still handle correctly (as a torn record), but
-	// one write is simpler and marginally reduces that window regardless.
-	record := append(header, payload...)
-	if _, err := w.file.Write(record); err != nil {
-		return fmt.Errorf("wal: write record for key %q: %w", entry.Key, err)
+// WriteBatch writes records, each one Encode's output, in order, with one
+// Write and one fsync for all of them, and returns once they are durable.
+// The bytes on disk are exactly those of Appending the same entries one by
+// one; only the number of Writes and fsyncs differs.
+//
+// The batch is durable only if it returns nil. After an error, any prefix
+// of it may be on disk, ending in a torn record, and would be replayed:
+// like a failed Append, a failed batch has an unknown outcome. An empty
+// batch writes nothing and does not fsync.
+func (w *WAL) WriteBatch(records [][]byte) error {
+	if len(records) == 0 {
+		return nil
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
+	var batch []byte
+	if len(records) == 1 {
+		batch = records[0] // nothing to join
+	} else {
+		batch = w.buf[:0]
+		for _, r := range records {
+			batch = append(batch, r...)
+		}
+		w.buf = batch
+	}
+	if err := w.writeAndSync(batch); err != nil {
+		return fmt.Errorf("%w (batch of %d records)", err, len(records))
+	}
+	return nil
+}
+
+// writeAndSync writes b with one Write and fsyncs. The caller holds w.mu.
+func (w *WAL) writeAndSync(b []byte) error {
+	if _, err := w.file.Write(b); err != nil {
+		return fmt.Errorf("wal: write: %w", err)
+	}
 	if err := w.sync(); err != nil {
-		return fmt.Errorf("wal: fsync after writing key %q: %w", entry.Key, err)
+		return fmt.Errorf("wal: fsync after write: %w", err)
 	}
-
 	return nil
 }
 

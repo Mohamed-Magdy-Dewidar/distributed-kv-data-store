@@ -43,12 +43,13 @@ type segment struct {
 // flushed yet": replaying one whose contents were already flushed just
 // re-applies versions the SSTables already hold, which merges away.
 type Log struct {
-	mu      sync.Mutex
-	dir     string
-	obs     SyncObserver // given to every segment started for writing; nil for none
-	current *WAL
-	seq     uint64    // current segment's sequence number
-	sealed  []segment // older segments still on disk, oldest first
+	mu       sync.Mutex
+	dir      string
+	obs      SyncObserver // given to every segment started for writing; nil for none
+	openFile OpenFileFunc // opens every segment, replayed or written
+	current  *WAL
+	seq      uint64    // current segment's sequence number
+	sealed   []segment // older segments still on disk, oldest first
 }
 
 // Option configures a Log.
@@ -58,6 +59,18 @@ type Option func(*Log)
 // Replaying segments in OpenLog is not reported.
 func WithSyncObserver(o SyncObserver) Option {
 	return func(l *Log) { l.obs = o }
+}
+
+// WithOpenFile has the Log open every segment file, those it replays and
+// those it writes, with open instead of the operating system's: for tests
+// that inject faults or simulate a crash. Without it, segments are
+// *os.File, as with a nil open.
+func WithOpenFile(open OpenFileFunc) Option {
+	return func(l *Log) {
+		if open != nil {
+			l.openFile = open
+		}
+	}
 }
 
 // OpenLog opens the segmented log in dir: it replays every existing
@@ -74,14 +87,14 @@ func OpenLog(dir string, opts ...Option) (_ *Log, _ []Entry, err error) {
 		return nil, nil, err
 	}
 
-	l := &Log{dir: dir}
+	l := &Log{dir: dir, openFile: openOSFile}
 	for _, opt := range opts {
 		opt(l)
 	}
 	var entries []Entry
 	var next uint64 = 1
 	for _, seg := range existing {
-		segEntries, err := replayFile(seg.path)
+		segEntries, err := replayFile(seg.path, l.openFile)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -129,10 +142,10 @@ func listSegments(dir string) ([]segment, error) {
 	return segs, nil
 }
 
-// replayFile replays one segment (truncating a torn tail, as WAL.Replay
-// does) and closes it.
-func replayFile(path string) ([]Entry, error) {
-	w, err := Open(path)
+// replayFile replays one segment, opened with openFile (truncating a torn
+// tail, as WAL.Replay does), and closes it.
+func replayFile(path string, openFile OpenFileFunc) ([]Entry, error) {
+	w, err := open(path, openFile)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +163,7 @@ func replayFile(path string) ([]Entry, error) {
 // startSegment creates segment seq, makes its directory entry durable, and
 // makes it current, reporting its fsyncs to l.obs. The caller holds l.mu (or owns l exclusively).
 func (l *Log) startSegment(seq uint64) error {
-	w, err := Open(segmentPath(l.dir, seq))
+	w, err := open(segmentPath(l.dir, seq), l.openFile)
 	if err != nil {
 		return err
 	}
@@ -170,6 +183,14 @@ func (l *Log) Append(entry Entry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.current.Append(entry)
+}
+
+// WriteBatch durably writes records, each one Encode's output, to the
+// current segment with one fsync (see WAL.WriteBatch).
+func (l *Log) WriteBatch(records [][]byte) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.current.WriteBatch(records)
 }
 
 // Rotate seals the current segment and starts the next one, returning the
