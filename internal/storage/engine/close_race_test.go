@@ -50,38 +50,40 @@ func assertNoHalfAppliedWrite(t *testing.T, e *StorageEngine, dir string, key st
 // another goroutine while Put sits there, then both are allowed to
 // proceed at once.
 func TestCloseDuringInFlightPutNeverHalfAppliesAWrite(t *testing.T) {
-	dir := t.TempDir()
-	e, err := Open(dir, 1<<20)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
+	forEachWriteMode(t, func(t *testing.T, mode Option) {
+		dir := t.TempDir()
+		e, err := Open(dir, 1<<20, mode)
+		if err != nil {
+			t.Fatalf("Open failed: %v", err)
+		}
 
-	hookStarted := make(chan struct{})
-	release := make(chan struct{})
-	testHookAfterWALAppend = func(string) {
-		close(hookStarted)
-		<-release
-	}
-	defer func() { testHookAfterWALAppend = nil }()
+		hookStarted := make(chan struct{})
+		release := make(chan struct{})
+		testHookAfterWALAppend = func(string) {
+			close(hookStarted)
+			<-release
+		}
+		defer func() { testHookAfterWALAppend = nil }()
 
-	putDone := make(chan error, 1)
-	go func() {
-		putDone <- e.Put("k", sampleItem("v"))
-	}()
-	<-hookStarted // WAL append durably completed; memtable insert not yet run
+		putDone := make(chan error, 1)
+		go func() {
+			putDone <- e.Put("k", sampleItem("v"))
+		}()
+		<-hookStarted // WAL append durably completed; memtable insert not yet run
 
-	closeDone := make(chan error, 1)
-	go func() {
-		closeDone <- e.Close()
-	}()
+		closeDone := make(chan error, 1)
+		go func() {
+			closeDone <- e.Close()
+		}()
 
-	close(release) // let Put's memtable insert proceed, racing against Close
-	putErr := <-putDone
-	if closeErr := <-closeDone; closeErr != nil {
-		t.Fatalf("Close failed: %v", closeErr)
-	}
+		close(release) // let Put's memtable insert proceed, racing against Close
+		putErr := <-putDone
+		if closeErr := <-closeDone; closeErr != nil {
+			t.Fatalf("Close failed: %v", closeErr)
+		}
 
-	assertNoHalfAppliedWrite(t, e, dir, "k", putErr)
+		assertNoHalfAppliedWrite(t, e, dir, "k", putErr)
+	})
 }
 
 // TestCloseRacingPutRepeatedlyNeverHalfAppliesAWrite is
@@ -94,23 +96,25 @@ func TestCloseDuringInFlightPutNeverHalfAppliesAWrite(t *testing.T) {
 // unsynchronized instead exercises every interleaving directly, including
 // ones a swapped step order would produce.
 func TestCloseRacingPutRepeatedlyNeverHalfAppliesAWrite(t *testing.T) {
-	for i := 0; i < 100; i++ {
-		dir := t.TempDir()
-		e, err := Open(dir, 1<<20)
-		if err != nil {
-			t.Fatalf("run %d: Open failed: %v", i, err)
+	forEachWriteMode(t, func(t *testing.T, mode Option) {
+		for i := 0; i < 100; i++ {
+			dir := t.TempDir()
+			e, err := Open(dir, 1<<20, mode)
+			if err != nil {
+				t.Fatalf("run %d: Open failed: %v", i, err)
+			}
+
+			putDone := make(chan error, 1)
+			go func() { putDone <- e.Put("k", sampleItem("v")) }()
+			closeDone := make(chan error, 1)
+			go func() { closeDone <- e.Close() }()
+
+			putErr := <-putDone
+			if closeErr := <-closeDone; closeErr != nil {
+				t.Fatalf("run %d: Close failed: %v", i, closeErr)
+			}
+
+			assertNoHalfAppliedWrite(t, e, dir, "k", putErr)
 		}
-
-		putDone := make(chan error, 1)
-		go func() { putDone <- e.Put("k", sampleItem("v")) }()
-		closeDone := make(chan error, 1)
-		go func() { closeDone <- e.Close() }()
-
-		putErr := <-putDone
-		if closeErr := <-closeDone; closeErr != nil {
-			t.Fatalf("run %d: Close failed: %v", i, closeErr)
-		}
-
-		assertNoHalfAppliedWrite(t, e, dir, "k", putErr)
-	}
+	})
 }

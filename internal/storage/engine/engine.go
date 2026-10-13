@@ -71,13 +71,32 @@ type StorageEngine struct {
 	maxBytes int
 	lock     *flock.Flock // OS advisory lock on dataDir, held from Open to Close
 
-	// writeMu makes each write's WAL append and memtable insert one step
+	// writeMu makes each batch's WAL write and memtable apply one step
 	// with respect to memtable swaps (and the WAL rotation that goes with
-	// each). Without it, a Put could append to the segment being sealed
-	// but insert into the new active memtable — and once the sealed
-	// segment is deleted after its flush, that write would exist only in
-	// memory. Readers never take it.
+	// each): commit runs only under it (see write.go). Without it, a write
+	// could go to the segment being sealed but into the new active
+	// memtable — and once the sealed segment is deleted after its flush,
+	// that write would exist only in memory. With group commit only the
+	// committer takes it; without, every write does. Readers never take it.
 	writeMu sync.Mutex
+	records [][]byte // commit's batch of records, kept to reuse; guarded by writeMu
+
+	// groupCommit is WithGroupCommit's choice, fixed at Open. With it,
+	// writes queue on queue for the committer goroutine, which closes
+	// committerDone when it exits; queueClosed, guarded by queueMu, is set
+	// when Close closes queue. Without it, writesClosed, guarded by
+	// writeMu, is set when Close begins.
+	groupCommit   bool
+	queue         chan *writeReq
+	queueMu       sync.RWMutex
+	queueClosed   bool
+	committerDone chan struct{}
+	writesClosed  bool
+
+	// halted is set, after haltCause, by the first failed WAL write or
+	// fsync; from then on every write fails (see ErrWritesHalted).
+	halted    atomic.Bool
+	haltCause error
 
 	flushWG sync.WaitGroup // lets tests/Close wait for background flushes
 
@@ -149,13 +168,31 @@ type Observer interface {
 type Option func(*options)
 
 type options struct {
-	observer Observer
+	observer    Observer
+	groupCommit bool
+	walOpenFile wal.OpenFileFunc // tests only: see withWALOpenFile
 }
 
 // WithObserver has the engine report to o. Without it, or with a nil o,
 // nothing is reported.
 func WithObserver(o Observer) Option {
 	return func(opts *options) { opts.observer = o }
+}
+
+// WithGroupCommit chooses how writes reach the WAL (see write.go). On, the
+// default, a committer goroutine writes every write queued while an fsync
+// runs with the next one, one fsync for the batch. Off, each write holds
+// the engine's write lock across its own WAL write and fsync, as before
+// group commit: for rollback, and for measuring one against the other.
+func WithGroupCommit(on bool) Option {
+	return func(opts *options) { opts.groupCommit = on }
+}
+
+// withWALOpenFile has the WAL open its segment files with open (see
+// wal.WithOpenFile): for tests that fail a write or an fsync, or drop what
+// was never synced.
+func withWALOpenFile(open wal.OpenFileFunc) Option {
+	return func(opts *options) { opts.walOpenFile = open }
 }
 
 // Open creates or opens a StorageEngine rooted at dataDir: takes an
@@ -167,7 +204,7 @@ func WithObserver(o Observer) Option {
 // error, every resource already opened (the lock included) is closed
 // before returning.
 func Open(dataDir string, maxMemtableBytes int, opts ...Option) (_ *StorageEngine, err error) {
-	var o options
+	o := options{groupCommit: true}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -190,7 +227,7 @@ func Open(dataDir string, maxMemtableBytes int, opts ...Option) (_ *StorageEngin
 		}
 	}()
 
-	var walOpts []wal.Option
+	walOpts := []wal.Option{wal.WithOpenFile(o.walOpenFile)}
 	if o.observer != nil {
 		walOpts = append(walOpts, wal.WithSyncObserver(o.observer))
 	}
@@ -221,6 +258,8 @@ func Open(dataDir string, maxMemtableBytes int, opts ...Option) (_ *StorageEngin
 		dataDir:  dataDir,
 		maxBytes: maxMemtableBytes,
 		lock:     lock,
+
+		groupCommit: o.groupCommit,
 	}
 
 	// Replay in log order: a Restore's verbatim Replace only reproduces
@@ -238,6 +277,11 @@ func Open(dataDir string, maxMemtableBytes int, opts ...Option) (_ *StorageEngin
 		return nil, err
 	}
 
+	if e.groupCommit { // last: no error path above has a committer to stop
+		e.queue = make(chan *writeReq, maxBatchRecords)
+		e.committerDone = make(chan struct{})
+		go e.runCommitter()
+	}
 	return e, nil
 }
 
@@ -261,13 +305,17 @@ func (e *StorageEngine) loadLiveSSTables() error {
 	return nil
 }
 
-// testHookAfterWALAppend, when set, runs inside Put and Restore between
-// the WAL append and the memtable change. Tests only: it lets one force
-// the interleaving writeMu exists to rule out. Always nil in production.
+// testHookAfterWALAppend, when set, runs for each write of a batch after
+// the batch's WAL write and fsync and before the memtable changes: in the
+// committer with group commit, in the writer without. Tests only: it lets
+// one force the interleaving writeMu exists to rule out. Always nil in
+// production.
 var testHookAfterWALAppend func(key string)
 
-// Put durably writes key/item: WAL append+fsync first, then the in-memory
-// insert — the WAL append is the true point of durability.
+// Put durably writes key/item: WAL write and fsync first, then the
+// in-memory insert — the fsync is the true point of durability, and the
+// write is visible to reads only once it is durable. With group commit,
+// the fsync is shared with every write queued alongside (see write.go).
 //
 // When the insert crosses the memtable threshold (and no flush is already
 // running), the WAL is rotated and the memtable frozen for flushing, so
@@ -275,42 +323,11 @@ var testHookAfterWALAppend func(key string)
 // older put back into it) holds. Both happen under writeMu, so no other
 // write can land between them. If rotation fails, nothing is frozen: the
 // memtable keeps growing and the next Put that crosses tries again.
+//
+// Once a WAL write or fsync has failed, Put fails with ErrWritesHalted;
+// once Close has begun, with ErrClosed.
 func (e *StorageEngine) Put(key string, item *model.DataItem) error {
-	e.writeMu.Lock()
-	defer e.writeMu.Unlock()
-
-	if err := e.wal.Append(wal.Entry{Key: key, Item: item}); err != nil {
-		return fmt.Errorf("engine: wal append for key %q: %w", key, err)
-	}
-	if testHookAfterWALAppend != nil {
-		testHookAfterWALAppend(key)
-	}
-
-	e.mu.Lock()
-	crossed := e.active.Put(key, item)
-	swap := crossed && e.flushing == nil
-	e.mu.Unlock()
-	if !swap {
-		return nil
-	}
-
-	// Rotate outside e.mu so readers aren't blocked on file creation;
-	// writeMu keeps every other write out meanwhile, and only Put (under
-	// writeMu) ever sets e.flushing, so it's still nil below.
-	sealed, err := e.wal.Rotate()
-	if err != nil {
-		return nil // the write itself is durable; the swap waits for the next crossing Put
-	}
-
-	e.mu.Lock()
-	e.flushing = e.active
-	e.active = memtable.New(e.maxBytes)
-	frozen := e.flushing
-	e.flushWG.Add(1)
-	e.mu.Unlock()
-
-	go e.flush(frozen, sealed)
-	return nil
+	return e.write(wal.Entry{Key: key, Item: item})
 }
 
 // flush writes frozen's contents to a new SSTable in the background and
@@ -470,11 +487,11 @@ func (e *StorageEngine) Keys() ([]string, error) {
 // internal/node/node.go). It deliberately skips versioning.Resolve, so it
 // must never be used for ordinary writes — that's what Put is for.
 //
-// Like Put, it is written to the WAL (as a wal.OpRestore entry) before
-// the memtable changes, so a crash right after it returns replays the
-// rollback rather than the rolled-back write. If the WAL append fails,
-// nothing changes and the error is returned. The append and the replace
-// both happen under writeMu, for the reason Put holds it and one more:
+// Like Put, it is written to the WAL (as a wal.OpRestore entry), and
+// fsynced, before the memtable changes, so a crash right after it returns
+// replays the rollback rather than the rolled-back write. If the WAL write
+// fails, nothing changes and the error is returned. The write and the
+// replace both happen under writeMu, for the reason Put's do and one more:
 // Replace isn't order-independent the way Put's merge is, so replay only
 // reproduces its effect if WAL order matches the order the memtable saw.
 // (DataStore.RestoreVersions also serves anti-entropy's reconcileBucket,
@@ -503,33 +520,10 @@ func (e *StorageEngine) Keys() ([]string, error) {
 // held so compaction can't delete a file being read), so a concurrent Put
 // can't make the check pass or fail spuriously. That means Puts wait
 // while the check reads any SSTable holding key — acceptable for a
-// rollback path.
+// rollback path. With group commit, the writes batched with a Restore
+// wait for its check too.
 func (e *StorageEngine) Restore(key string, items []*model.DataItem) error {
-	e.writeMu.Lock()
-	defer e.writeMu.Unlock()
-
-	if err := e.wal.Append(wal.Entry{Op: wal.OpRestore, Key: key, Items: items}); err != nil {
-		return fmt.Errorf("engine: wal append for restore of key %q: %w", key, err)
-	}
-	if testHookAfterWALAppend != nil {
-		testHookAfterWALAppend(key)
-	}
-
-	e.filesMu.RLock()
-	defer e.filesMu.RUnlock()
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.active.Replace(key, items)
-
-	visible, _, err := mergeLayers(key, e.active, e.flushing, e.sstables)
-	if err != nil {
-		return fmt.Errorf("engine: verify restore of key %q: %w", key, err)
-	}
-	if !sameVersions(visible, items) {
-		return fmt.Errorf("engine: restore of key %q: %w", key, store.ErrRestoreIncomplete)
-	}
-	return nil
+	return e.write(wal.Entry{Op: wal.OpRestore, Key: key, Items: items})
 }
 
 // sameVersions reports whether a and b hold the identical *DataItem
@@ -718,13 +712,17 @@ func (e *StorageEngine) StartCompactionLoop(ctx context.Context, interval time.D
 	}()
 }
 
-// Close stops the compaction loop's effect (further ticks are no-ops),
-// closes the manifest and WAL, and releases dataDir's lock last — even if
-// closing the manifest or WAL failed above, so a failed Close still lets a
-// later Open back into this dataDir rather than leaving it permanently
-// locked. flock's Unlock is idempotent (a no-op once already unlocked), so
+// Close first stops writes: every write already accepted is committed (or
+// fails, if writes are halted) before Close goes on, and every write after
+// it fails with ErrClosed, so none is left waiting. Then it waits for
+// in-flight flushes, stops the compaction loop's effect (further ticks are
+// no-ops), closes the manifest and WAL, and releases dataDir's lock last —
+// even if closing the manifest or WAL failed above, so a failed Close
+// still lets a later Open back into this dataDir rather than leaving it
+// permanently locked. flock's Unlock is idempotent (a no-op once already unlocked), so
 // calling Close more than once is safe as far as the lock is concerned.
 func (e *StorageEngine) Close() error {
+	e.closeWrites() // first: a write after it could start a flush nothing waits for
 	e.WaitForPendingFlushes()
 
 	e.compactMu.Lock() // waits out any in-progress compaction

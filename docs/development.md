@@ -25,7 +25,7 @@ below, from the repository root. Defaults: kind cluster `kvstore`, images
 
 | Target | What it does | In PowerShell |
 |---|---|---|
-| `make test` | Vets and tests the database module as [testing.md](testing.md) does: the `-race` suite, then the allocation tests that skip themselves under `-race`. | `go vet ./...; go test -race -count=1 ./...; go test -count=1 ./internal/telemetry/ ./internal/storage/wal/` |
+| `make test` | Vets and tests the database module as [testing.md](testing.md) does: the `-race` suite, then the allocation tests that skip themselves under `-race`. | `go vet ./...; go test -race -count=1 ./...; go test -count=1 ./internal/telemetry/ ./internal/storage/wal/ ./internal/storage/engine/` |
 | `make operator-test` | Tests the operator module (`operator/Makefile`'s `test`; needs Linux for envtest). | `docker run --rm -v "${PWD}:/src" -v kv-gomod:/go/pkg/mod -w /src/operator golang:1.26 make test` |
 | `make image` | Builds the node and operator images and loads them into kind. | `docker build -t kvnode:dev .; docker build -t kvstore-operator:dev operator; kind load docker-image kvnode:dev kvstore-operator:dev --name kvstore` |
 | `make kind-up` | Creates the kind cluster of [kubernetes.md](kubernetes.md#create-the-cluster) (then install metrics-server as described there). | `kind create cluster --name kvstore --wait 120s --image kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0` |

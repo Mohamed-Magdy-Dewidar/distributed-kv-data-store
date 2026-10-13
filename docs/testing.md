@@ -22,7 +22,7 @@ allocates, so these tests skip themselves under `-race`: run them again
 without it, alongside the `-race` suite:
 
 ```sh
-go test -count=1 ./internal/telemetry/ ./internal/storage/wal/
+go test -count=1 ./internal/telemetry/ ./internal/storage/wal/ ./internal/storage/engine/
 ```
 
 ## Write benchmarks
@@ -33,7 +33,7 @@ the WAL's fsync:
 
 | Benchmark | What it measures |
 |---|---|
-| `BenchmarkPutParallel` (`internal/storage/engine`) | `StorageEngine.Put` from 1, 8 and 64 writers, each write a new key |
+| `BenchmarkPutParallel` (`internal/storage/engine`) | `StorageEngine.Put` from 1, 8 and 64 writers, each write a new key, with group commit off (`mode=serial`) and on (`mode=group`) in the same run; it also reports `writes/fsync`, the average batch |
 | `BenchmarkDataStorePutParallel` (`internal/store`) | The same one layer up, `DataStore.Put` with no context (a read of the key, then the write), where a node's writes enter |
 | `BenchmarkDataStoreGetWhileWriting` (`internal/store`) | `DataStore.Get` of existing keys from 8 readers while 8 writers Put other keys: how long a read waits behind writes |
 

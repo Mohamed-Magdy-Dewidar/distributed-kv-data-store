@@ -22,7 +22,7 @@ help: ## Show the targets.
 test: ## Test the database module as docs/testing.md does (the operator's: make operator-test).
 	go vet ./...
 	go test -race -count=1 ./...
-	go test -count=1 ./internal/telemetry/ ./internal/storage/wal/
+	go test -count=1 ./internal/telemetry/ ./internal/storage/wal/ ./internal/storage/engine/
 
 # image, operator-deploy and operator-test-e2e are for the kind cluster only:
 # on another cluster (GKE) they would install images that exist only on this

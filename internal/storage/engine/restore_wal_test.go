@@ -94,55 +94,57 @@ func assertSet(t *testing.T, e *StorageEngine, key string, want []*model.DataIte
 // Restore that removed a key keeps it removed, and a Put made after a
 // Restore still lands on top of it (replay keeps their order).
 func TestRestoreSurvivesCrashAndReplay(t *testing.T) {
-	dir := t.TempDir()
-	e := mustOpen(t, dir, 1<<20) // nothing flushes: everything lives in the WAL
-	defer e.Close()
+	forEachWriteMode(t, func(t *testing.T, mode Option) {
+		dir := t.TempDir()
+		e := mustOpen(t, dir, 1<<20, mode) // nothing flushes: everything lives in the WAL
+		defer e.Close()
 
-	// k: two concurrent siblings, then a write superseding both, rolled back.
-	prev := []*model.DataItem{
-		itemWithClock("b", map[string]uint32{"node-2": 1}),
-		itemWithClock("a", map[string]uint32{"node-1": 1}),
-	}
-	for i := len(prev) - 1; i >= 0; i-- {
-		if err := e.Put("k", prev[i]); err != nil {
+		// k: two concurrent siblings, then a write superseding both, rolled back.
+		prev := []*model.DataItem{
+			itemWithClock("b", map[string]uint32{"node-2": 1}),
+			itemWithClock("a", map[string]uint32{"node-1": 1}),
+		}
+		for i := len(prev) - 1; i >= 0; i-- {
+			if err := e.Put("k", prev[i]); err != nil {
+				t.Fatalf("Put failed: %v", err)
+			}
+		}
+		if err := e.Put("k", itemWithClock("undo-me", map[string]uint32{"node-1": 2, "node-2": 1})); err != nil {
 			t.Fatalf("Put failed: %v", err)
 		}
-	}
-	if err := e.Put("k", itemWithClock("undo-me", map[string]uint32{"node-1": 2, "node-2": 1})); err != nil {
-		t.Fatalf("Put failed: %v", err)
-	}
-	if err := e.Restore("k", prev); err != nil {
-		t.Fatalf("Restore failed: %v", err)
-	}
+		if err := e.Restore("k", prev); err != nil {
+			t.Fatalf("Restore failed: %v", err)
+		}
 
-	// fresh: a first write, rolled back to "no versions".
-	if err := e.Put("fresh", itemWithClock("undo-me", map[string]uint32{"node-1": 1})); err != nil {
-		t.Fatalf("Put failed: %v", err)
-	}
-	if err := e.Restore("fresh", nil); err != nil {
-		t.Fatalf("Restore failed: %v", err)
-	}
+		// fresh: a first write, rolled back to "no versions".
+		if err := e.Put("fresh", itemWithClock("undo-me", map[string]uint32{"node-1": 1})); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+		if err := e.Restore("fresh", nil); err != nil {
+			t.Fatalf("Restore failed: %v", err)
+		}
 
-	// j: removed by a Restore, then written again.
-	if err := e.Put("j", itemWithClock("undo-me", map[string]uint32{"node-1": 1})); err != nil {
-		t.Fatalf("Put failed: %v", err)
-	}
-	if err := e.Restore("j", nil); err != nil {
-		t.Fatalf("Restore failed: %v", err)
-	}
-	after := []*model.DataItem{itemWithClock("after", map[string]uint32{"node-3": 1})}
-	if err := e.Put("j", after[0]); err != nil {
-		t.Fatalf("Put failed: %v", err)
-	}
+		// j: removed by a Restore, then written again.
+		if err := e.Put("j", itemWithClock("undo-me", map[string]uint32{"node-1": 1})); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+		if err := e.Restore("j", nil); err != nil {
+			t.Fatalf("Restore failed: %v", err)
+		}
+		after := []*model.DataItem{itemWithClock("after", map[string]uint32{"node-3": 1})}
+		if err := e.Put("j", after[0]); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
 
-	e2 := mustOpen(t, crashImage(t, dir), 1<<20)
-	defer e2.Close()
-	assertSet(t, e2, "k", prev)
-	assertSet(t, e2, "fresh", nil)
-	assertSet(t, e2, "j", after)
-	if keys, _ := e2.Keys(); !reflect.DeepEqual(keys, []string{"j", "k"}) {
-		t.Fatalf("expected keys [j k] after replay, got %v", keys)
-	}
+		e2 := mustOpen(t, crashImage(t, dir), 1<<20, mode)
+		defer e2.Close()
+		assertSet(t, e2, "k", prev)
+		assertSet(t, e2, "fresh", nil)
+		assertSet(t, e2, "j", after)
+		if keys, _ := e2.Keys(); !reflect.DeepEqual(keys, []string{"j", "k"}) {
+			t.Fatalf("expected keys [j k] after replay, got %v", keys)
+		}
+	})
 }
 
 // TestIncompleteRestoreOverUnflushedFrozenWriteIsHiddenAfterReplay pins
@@ -153,33 +155,35 @@ func TestRestoreSurvivesCrashAndReplay(t *testing.T) {
 // it in one memtable: after the crash it's hidden. The state is built by
 // hand because there's no deterministic way to run Restore mid-flush.
 func TestIncompleteRestoreOverUnflushedFrozenWriteIsHiddenAfterReplay(t *testing.T) {
-	dir := t.TempDir()
-	e := mustOpen(t, dir, 1<<20)
-	defer e.Close()
+	forEachWriteMode(t, func(t *testing.T, mode Option) {
+		dir := t.TempDir()
+		e := mustOpen(t, dir, 1<<20, mode)
+		defer e.Close()
 
-	w := itemWithClock("rolled-back", map[string]uint32{"node-1": 1})
-	if err := e.Put("k", w); err != nil {
-		t.Fatalf("Put failed: %v", err)
-	}
+		w := itemWithClock("rolled-back", map[string]uint32{"node-1": 1})
+		if err := e.Put("k", w); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
 
-	e.mu.Lock() // freeze, as Put's swap does
-	e.flushing = e.active
-	e.active = memtable.New(e.maxBytes)
-	e.mu.Unlock()
+		e.mu.Lock() // freeze, as Put's swap does
+		e.flushing = e.active
+		e.active = memtable.New(e.maxBytes)
+		e.mu.Unlock()
 
-	if err := e.Restore("k", nil); !errors.Is(err, store.ErrRestoreIncomplete) {
-		t.Fatalf("expected ErrRestoreIncomplete, got %v", err)
-	}
+		if err := e.Restore("k", nil); !errors.Is(err, store.ErrRestoreIncomplete) {
+			t.Fatalf("expected ErrRestoreIncomplete, got %v", err)
+		}
 
-	e.mu.Lock() // the flush fails, as flush handles it
-	e.active.PutBackOlder(e.flushing.Snapshot())
-	e.flushing = nil
-	e.mu.Unlock()
-	assertSet(t, e, "k", []*model.DataItem{w}) // visible before the crash
+		e.mu.Lock() // the flush fails, as flush handles it
+		e.active.PutBackOlder(e.flushing.Snapshot())
+		e.flushing = nil
+		e.mu.Unlock()
+		assertSet(t, e, "k", []*model.DataItem{w}) // visible before the crash
 
-	e2 := mustOpen(t, crashImage(t, dir), 1<<20)
-	defer e2.Close()
-	assertSet(t, e2, "k", nil) // hidden after: the rollback wins
+		e2 := mustOpen(t, crashImage(t, dir), 1<<20, mode)
+		defer e2.Close()
+		assertSet(t, e2, "k", nil) // hidden after: the rollback wins
+	})
 }
 
 // TestWriteMuKeepsRestoreAppendAndReplaceInTheSameSegment is
@@ -194,52 +198,54 @@ func TestIncompleteRestoreOverUnflushedFrozenWriteIsHiddenAfterReplay(t *testing
 // to some earlier copy. It also doesn't touch the memtable size, so only B
 // can trigger the flush.
 func TestWriteMuKeepsRestoreAppendAndReplaceInTheSameSegment(t *testing.T) {
-	dir := t.TempDir()
-	e := mustOpen(t, dir, 200)
-	big := strings.Repeat("x", 300)
-	installed := []*model.DataItem{itemWithClock("installed", map[string]uint32{"node-2": 1})}
+	forEachWriteMode(t, func(t *testing.T, mode Option) {
+		dir := t.TempDir()
+		e := mustOpen(t, dir, 200, mode)
+		big := strings.Repeat("x", 300)
+		installed := []*model.DataItem{itemWithClock("installed", map[string]uint32{"node-2": 1})}
 
-	appended := make(chan struct{})
-	release := make(chan struct{})
-	testHookAfterWALAppend = func(key string) {
-		if key == "r" {
-			close(appended)
-			<-release
+		appended := make(chan struct{})
+		release := make(chan struct{})
+		testHookAfterWALAppend = func(key string) {
+			if key == "r" {
+				close(appended)
+				<-release
+			}
 		}
-	}
-	defer func() { testHookAfterWALAppend = nil }()
+		defer func() { testHookAfterWALAppend = nil }()
 
-	rDone := make(chan error, 1)
-	go func() { rDone <- e.Restore("r", installed) }()
-	<-appended // R's record is in the current segment; R hasn't replaced yet
+		rDone := make(chan error, 1)
+		go func() { rDone <- e.Restore("r", installed) }()
+		<-appended // R's record is in the current segment; R hasn't replaced yet
 
-	bDone := make(chan error, 1)
-	go func() { bDone <- e.Put("b", sampleItem(big)) }()
-	select {
-	case err := <-bDone: // only possible without writeMu
-		if err != nil {
+		bDone := make(chan error, 1)
+		go func() { bDone <- e.Put("b", sampleItem(big)) }()
+		select {
+		case err := <-bDone: // only possible without writeMu
+			if err != nil {
+				t.Fatalf("Put b failed: %v", err)
+			}
+			bDone <- nil
+		case <-time.After(200 * time.Millisecond): // with writeMu, B is waiting on R
+		}
+		e.WaitForPendingFlushes() // let B's flush (and segment deletion), if any, finish
+
+		close(release)
+		if err := <-rDone; err != nil {
+			t.Fatalf("Restore r failed: %v", err)
+		}
+		if err := <-bDone; err != nil {
 			t.Fatalf("Put b failed: %v", err)
 		}
-		bDone <- nil
-	case <-time.After(200 * time.Millisecond): // with writeMu, B is waiting on R
-	}
-	e.WaitForPendingFlushes() // let B's flush (and segment deletion), if any, finish
+		e.WaitForPendingFlushes()
+		assertSet(t, e, "r", installed) // visible before the crash either way
 
-	close(release)
-	if err := <-rDone; err != nil {
-		t.Fatalf("Restore r failed: %v", err)
-	}
-	if err := <-bDone; err != nil {
-		t.Fatalf("Put b failed: %v", err)
-	}
-	e.WaitForPendingFlushes()
-	assertSet(t, e, "r", installed) // visible before the crash either way
-
-	e2 := mustOpen(t, crashImage(t, dir), 200)
-	defer e2.Close()
-	assertSet(t, e2, "r", installed)
-	assertPresent(t, e2, "b", big)
-	if err := e.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
+		e2 := mustOpen(t, crashImage(t, dir), 200, mode)
+		defer e2.Close()
+		assertSet(t, e2, "r", installed)
+		assertPresent(t, e2, "b", big)
+		if err := e.Close(); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+	})
 }
