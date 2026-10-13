@@ -22,7 +22,7 @@ cluster, data size, parameters and results.
 | k6-operator | not used. v1.6.0 was considered: its start barrier is what a plain Indexed Job lacks, and `START_AT` stands in for it (see [Two k6 pods](#is-the-database-the-bottleneck)) |
 | Prometheus | v3.15.0 (`deploy/observability/`), 15s scrape interval |
 | kind | v0.33.0, Kubernetes v1.35.8 (`docs/kubernetes.md`) |
-| GKE | 1.35.8-gke.1225000 at session 1 (`docs/gke.md`) |
+| GKE | 1.35.8-gke.1225000 at session 1, 1.36.4-gke.1391002 at session 2 (the Regular channel's default moved; `docs/gke.md`) |
 
 ## The clusters
 
@@ -291,6 +291,10 @@ compares is each cluster's knee and its behaviour past it.
 
 ## The read knee is measured on GKE
 
+Measured in session 2: about 4000/s, with two k6 pods
+([the record](#gke-2026-10-13-session-2-the-benchmarks)). The plan it
+followed:
+
 The kind read ramp found no knee up to 1000/s (Get p99 flat at about 1 ms,
 [below](#kind-2026-10-10-baseline-series-second-attempt-stopped-at-run-2-no-read-knee)),
 and it is not extended on kind: above about 1000/s k6 takes a growing
@@ -326,6 +330,14 @@ found them gone look alike to a client. To investigate before reading
 anything into GKE's errors past the knee: what the overloaded coordinators
 actually returned (the error text, by cause), and whether a timeout inside
 the coordinator should reach the client as `DeadlineExceeded` instead.
+
+**Why does write latency rise while CPU and fsync time stay flat?** In
+GKE session 2, Put p99 went from 10 to 100-280 ms between 200 and 500
+writes/s while the kv pods stayed under 0.4 cores and the fsync p99 near
+5 ms. The likely cause is writes queueing for the engine's write lock
+before each fsync, which no histogram times
+([the record](#gke-2026-10-13-session-2-the-benchmarks)). To confirm with a
+histogram of the wait for `writeMu`; if confirmed, group commit is the fix.
 
 ## Runs
 
@@ -466,3 +478,152 @@ summary could not: Put p99 17, 100, then 1,519 ms. On kind, with this
 short a ramp, mix's knee lies between 200 and 300/s in all (writes
 between 100 and 150/s), in line with the preloads' 145/s. That is an
 observation from a smoke run, not a measured knee.
+
+### GKE, 2026-10-13: session 2 (the benchmarks)
+
+The [Session 2 runbook](gke.md#session-2-the-benchmarks-runbook), from
+commit `b7a905f`, clean tree. **Kubernetes v1.36.4-gke.1391002**: the
+Regular channel's default had moved on since session 1's 1.35.8, so this
+session's cluster is not session 1's version. europe-west1; the database
+pool 6 × e2-standard-2 (two in each of zones b, c, d; 1930m allocatable
+each), the system node e2-standard-2, the loadgen pool n2-standard-4 in
+zone b (one node, two for the two-pod step). Images by digest:
+`kvnode@sha256:7ddae67c7a32…`, `kvstore-operator@sha256:94eff1d78e73…`
+(tag `b7a905f-20261013090908`). k6 requested 3 CPUs; on each loadgen node
+GKE's own pods requested 409m of the 3920m allocatable (`run.sh` saw 403m
+at run time), so it fit. `terraform apply` took 10m43s; the first run
+started 15 minutes later, the last ended at 10:51 UTC.
+
+Two KVClusters, each from `reset` and a clean preload of 20,000 keys, each
+ending at the cap's 128,000: series A (reads and writes, uid `8b102624…`)
+and series B (mix, then the two-pod step, uid `36f54332…`).
+
+**The knees:**
+
+| Load | Knee | How it was read |
+|---|---|---|
+| Reads | **about 4000/s** | Two k6 pods: dropped iterations start at 4000/s with k6 well under its limit, and the server-side Get p99 accelerates (12.4, 18.7, 23.6 ms at 4000, 4500, 5000/s) as the busiest kv pod reaches 1.3-1.6 of its node's 1.93 cores. One pod was not enough (below) |
+| Writes, tail (p99) | **300-400/s** | Series A's write ramp at 300/s (p99 17 to 104 ms, no anti-entropy in the step); in the mix the tail turned at 400 writes/s |
+| Writes, median (p50) | **500/s** | Series A's write ramp (p50 7.9 to 14.4 ms), **flagged**: kv-5's anti-entropy round fell in that step. The mix confirms it without anti-entropy: p50 16.1 ms at 500 writes/s |
+| Mix | **tail at 800/s in all, median at 1000/s** (400 and 500 writes/s) | Flagged SPREAD (1.62) |
+
+| Run | Scenario | Parameters | Data before | k6 summary | Prometheus (window) | k6 CPU | Flags |
+|---|---|---|---|---|---|---|---|
+| [20261013-092406](results/bench/20261013-092406-gke-preload-shared/) | A. preload | 20,000 keys, 40 VUs (closed) | 0 keys | 20,000 Puts in 30.2s (663.1/s); p50 37.8, p95 197.4, p99 385.9 ms; 0 errors, **clean** | Put p50 40.3 / p99 397.9 ms; fsync p50 1.79 / p99 4.55 ms; kv CPU 0.32-0.51 cores | not sampled (the run was shorter than metrics-server's first sample) | SPREAD (1.70; not measured) |
+| [20261013-092600](results/bench/20261013-092600-gke-reads-constant/) | A. reads, constant | 1000/s, 300s | 20,000 keys | 300,001 Gets (1000.0/s); p50 1.55, p95 2.48, p99 4.74 ms; 0 errors; 0 dropped | Get p50 0.95 / p99 3.63 ms; kv CPU 0.44-0.66 cores; spread 1.37 / 0.74 | max 567m | AE (2) |
+| [20261013-093216](results/bench/20261013-093216-gke-reads-ramp/) | A. reads, ramp | 1000 to 5000/s, steps of 500, 60s held (9m40s) | 20,000 keys | 1,739,897 Gets; p99 16.08 ms; 0 errors; 95 dropped (steps 7-9, and 3 in step 1) | Get p50 1.20 / p99 9.79 ms; kv CPU 0.84-1.07 cores; spread 1.07 / 0.84 | max 1944m: **over 1500m from step 6** | AE (4); valid to step 5 only |
+| [20261013-094331](results/bench/20261013-094331-gke-writes-constant/) | A. writes, constant | 40/s, 300s | 20,000 keys | 12,001 Puts (40.0/s); p50 7.80, p95 9.43, p99 10.62 ms; 0 errors; 0 dropped | Put p50 6.68 / p99 9.96 ms; fsync p50 1.95 / p99 4.91 ms; kv CPU 0.04-0.06 cores; spread 1.28 / 0.77 | max 75m | |
+| [20261013-094941](results/bench/20261013-094941-gke-writes-ramp/) | A. writes, ramp | 100 to 500/s, steps of 100, 60s held (5m20s) | 32,000 keys | 95,998 Puts; p99 150.10 ms; 0 errors; 0 dropped | Put p50 7.52 / p99 189.50 ms; fsync p50 1.87 / p99 4.92 ms; kv CPU 0.21-0.37 cores; spread 1.50 / 0.88 | max 304m | AE (2: kv-2 in steps 1-2, kv-5 in step 5) |
+| [20261013-100305](results/bench/20261013-100305-gke-preload-shared/) | B. preload | 20,000 keys, 40 VUs (closed) | 0 keys | 20,000 Puts (615.8/s); p50 33.8, p95 269.4, p99 530.0 ms; 0 errors, **clean** | Put p50 32.6 / p99 712.7 ms; fsync p99 4.87 ms | not sampled | SPREAD (1.84; not measured) |
+| [20261013-100457](results/bench/20261013-100457-gke-mix-constant/) | B. mix, constant | 80/s (40 writes + 40 reads), 300s | 20,000 keys | Put: 12,001, p50 7.48, p95 9.50, p99 11.13 ms; Get: 12,001, p50 2.23, p95 3.14, p99 4.85 ms; 0 errors; 0 dropped | Put p50 6.56 / p99 10.26 ms; Get p50 1.75 / p99 4.20 ms; fsync p99 4.94 ms; kv CPU 0.10-0.18 cores; spread 1.35 / 0.60 | max 93m | AE (2) |
+| [20261013-101106](results/bench/20261013-101106-gke-mix-ramp/) | B. mix, ramp | 200 to 1000/s, steps of 200, 60s held (5m20s) | 32,000 keys | Put: 95,596, p99 243.54 ms; Get: 95,999, p99 74.22 ms; 0 errors; 403 dropped (step 5) | Put p50 7.17 / p99 225.38 ms; Get p50 2.16 / p99 67.40 ms; fsync p99 4.90 ms; kv CPU 0.31-0.47 cores; spread 1.62 / 0.83 | max 545m | **SPREAD (1.62)**; no AE |
+| [20261013-102911](results/bench/20261013-102911-gke-reads-ramp/) | B. reads, ramp, 1 k6 pod | as A's read ramp | 128,000 keys | 1,739,357 Gets; p99 31.89 ms; 0 errors; 626 dropped (steps 7-9, and 4 in step 1) | Get p50 1.91 / p99 20.76 ms; kv CPU 0.86-1.19 cores; spread 1.15 / 0.74 | max 1938m: **over 1500m from step 6** | valid to step 5 only |
+| [20261013-103959](results/bench/20261013-103959-gke-reads-ramp/) | B. reads, ramp, **2 k6 pods** | as A's read ramp, `K6_PODS=2`, one loadgen node each | 128,000 keys | pod 0: 869,885 Gets, p99 23.77 ms, 113 dropped; pod 1: 869,873, p99 24.11 ms, 124 dropped; 0 errors | Get p50 1.72 / p99 14.99 ms; kv CPU 0.96-1.17 cores; spread 1.34 / 0.83 | max 1511m (pod 0, step 9 only) | AE (2, in steps 1-3); valid to step 8 |
+
+**Reads, series A, one k6 pod** (`steps.csv`; server-side Get p99 from
+Prometheus, the 15s points inside each step; k6's CPU from `top.txt`):
+
+| Step | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Dropped | Server p99 (ms) | k6 CPU |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1000 | 1000.0 | 1.53 | 2.26 | 3.85 | 3 | 2.5 | 601m |
+| 2 | 1500 | 1500.0 | 1.45 | 2.66 | 6.10 | 0 | 3.7-4.0 | 720m |
+| 3 | 2000 | 2000.0 | 1.45 | 3.43 | 9.00 | 0 | 6.4-7.0 | 807-1020m |
+| 4 | 2500 | 2500.0 | 1.48 | 3.84 | 10.05 | 0 | 5.1-5.4 | 1028-1205m |
+| 5 | 3000 | 3000.0 | 1.60 | 5.39 | 13.06 | 0 | 7.2-8.0 | 1245-1371m |
+| 6 | 3500 | 3500.0 | 1.75 | 6.66 | 15.20 | 0 | 9.0-9.3 | **1371-1512m** |
+| 7 | 4000 | 3999.6 | 1.82 | 7.99 | 18.09 | 25 | 9.5-11.7 | **1502-1635m** |
+| 8 | 4500 | 4499.1 | 2.09 | 9.17 | 18.83 | 57 | 12.0-12.4 | **1635-1790m** |
+| 9 | 5000 | 4999.8 | 2.27 | 9.87 | 19.73 | 13 | 12.6-13.6 | **1790-1944m** |
+
+**Writes, series A** (server side: Put p50 / p99 and data-engine fsync p99):
+
+| Step | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Dropped | Server Put p50 / p99 (ms) | fsync p99 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 100 | 100.0 | 7.36 | 9.09 | 10.35 | 1 | 6.4 / 9.9 | 4.9 |
+| 2 | 200 | 200.0 | 7.21 | 10.27 | 16.61 | 0 | 6.4 / 9.9-14 | 4.9 |
+| 3 | 300 | 300.0 | 7.97 | 19.59 | **104.24** | 0 | 7.0-7.4 / **94-135** | 6.0-6.1 |
+| 4 | 400 | 400.0 | 7.85 | 19.81 | 41.42 | 0 | 7.2 / 33-178 | 4.7-5.0 |
+| 5 (AE) | 500 | 500.0 | **14.44** | **96.08** | **241.49** | 0 | **8.9-14.4 / 248-280** | 4.8-4.9 |
+
+**Mix, series B** (each op's target is half the step's total):
+
+| Step | Total/s | Op | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Dropped | Server p50 / p99 (ms) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 200 | put | 100 | 100.0 | 7.19 | 8.81 | 10.02 | 1 | 6.4 / 9.9 |
+| | | get | 100 | 100.0 | 2.23 | 3.68 | 5.13 | 1 | - / 4.5-4.7 |
+| 2 | 400 | put | 200 | 200.0 | 6.72 | 8.84 | 12.04 | 0 | 6.2 / 11.7-13.3 |
+| | | get | 200 | 200.0 | 2.14 | 4.04 | 5.82 | 0 | - / 4.9-5.1 |
+| 3 | 600 | put | 300 | 300.0 | 6.96 | 10.26 | 16.60 | 0 | 6.2-6.5 / 14.5-16.4 |
+| | | get | 300 | 300.0 | 2.19 | 5.01 | 8.15 | 0 | - / 6.6-7.4 |
+| 4 | 800 | put | 400 | 400.0 | 7.67 | 17.45 | **64.92** | 0 | 6.6-7.1 / **51-89** |
+| | | get | 400 | 400.0 | 2.41 | 7.00 | **20.24** | 0 | - / **9-19** |
+| 5 | 1000 | put | 500 | 493.3 | **16.07** | **152.48** | **550.36** | **402** | **8.9-16.4 / 170-743** |
+| | | get | 500 | 500.0 | 4.60 | 49.95 | 170.03 | 0 | - / 39-207 |
+
+**Reads, series B: one k6 pod against two, back to back on the same data**
+(two pods: each pod's own p99; their achieved rates add to the target):
+
+| Step | Total/s | 1 pod: p50 / p95 / p99 (ms) | 2 pods: p99, pod 0 / pod 1 (ms) | Server p99 (ms), 1 pod → 2 pods | Dropped, 1 pod → 2 pods | k6 CPU: 1 pod; pod 0 / pod 1 |
+|---|---|---|---|---|---|---|
+| 1 | 1000 | 1.67 / 2.65 / 5.65 | 8.62 / 8.54 | 4.7 → 5.3 | 4 → 2 | 592m; 412 / 308m |
+| 2 | 1500 | 1.61 / 2.90 / 6.29 | 7.99 / 8.20 | 4.6 → 5.4 | 0 → 0 | 702m; 591 / 434m |
+| 3 | 2000 | 1.65 / 3.96 / 10.29 | 8.74 / 8.71 | 6.5 → 5.0 | 0 → 1 | 1021m; 745 / 550m |
+| 4 | 2500 | 1.76 / 5.84 / 16.79 | 16.35 / 16.55 | 7.5 → 10.1 | 0 → 1 | 1216m; 898 / 662m |
+| 5 | 3000 | 2.13 / 9.76 / 24.17 | 15.91 / 15.34 | 14.9 → 9.9 | 0 → 0 | 1353m; 1001 / 744m |
+| 6 | 3500 | 2.57 / 13.29 / 30.88 | 17.20 / 17.19 | 18.0 → 11.6 | 0 → 0 | **1506m**; 1168 / 857m |
+| 7 | 4000 | 2.76 / 15.39 / 35.51 | 21.00 / 20.86 | **23.8 → 12.4** | **104 → 46** | **1602m**; 1292 / 950m |
+| 8 | 4500 | 3.12 / 17.47 / 36.34 | 28.81 / 30.28 | 23.0 → 18.7 | 295 → 37 | **1696m**; 1413 / 1057m |
+| 9 | 5000 | 3.69 / 20.83 / 39.74 | 33.27 / 34.48 | 28.2 → 23.6 | 223 → 157 | **1938m**; **1511** / 1102m |
+
+The busiest kv pod's CPU in the two-pod run, by step: 1.02, 1.06, 0.99,
+1.08, 1.15, 1.23, 1.29, 1.47, 1.58 cores, of 1.93 allocatable.
+
+**Validity.** Errors: 0 in every run. Dropped iterations: 0 below each
+knee, except a handful in the first step of each read ramp (3, 4, 2) while
+the 120 connections open, and those of the one-pod read ramps above k6's
+limit. k6's CPU against 1500m: within it everywhere but the two one-pod
+read ramps from step 6, and pod 0 of the two-pod ramp in step 9. Spread:
+within 1.5 everywhere but the mix ramp (1.62: kv-0 coordinated 47,633
+requests against a median of about 29,400, from its share of the
+connections). Anti-entropy rounds: flagged per run above; the steps that
+locate the knees are free of them except series A's write step 5.
+
+**One k6 pod was not enough for reads.** The two read ramps of series B
+started dropping iterations at the same step (4000/s), but the server-side
+Get p99 there was 23.8 ms with one pod and 12.4 ms with two, far outside
+the 10% the [two-pod check](#is-the-database-the-bottleneck) allows, and
+it differed from step 5 on, as the one pod passed about 1350m. A k6 pod
+near its CPU limit sends its requests in bursts, and the database's own
+latency shows it. So the read knee is the two-pod run's; the one-pod read
+results above 3000/s (series A's included) do not count. With two pods,
+the drops at 4000/s come with k6 at 950-1292m, so they are the database's
+stalls (max latency about 180 ms), not k6's.
+
+**Series A and B differ at the same rates.** One pod, same ramp: at
+3000/s the server-side Get p99 was 7.2-8.0 ms in series A (20,000 keys)
+and 14.4-15.6 ms in series B (128,000 keys, after the mix ramp). The data
+size, or the state the mix ramp left (compactions, memtable flushes), may
+explain it; this session does not separate the two.
+
+**Why the writes' latency rises while CPU and fsync do not (the likely
+explanation, to confirm).** Through the write ramp the kv pods stayed at
+0.21-0.37 cores and the data-engine fsync p99 at 4.7-6.1 ms, while Put p99
+went from 10 to 100-280 ms. That fits writes queueing for the engine's
+write lock before each fsync: `Engine.Put` holds `writeMu` across the WAL
+append (`internal/storage/engine/engine.go`), the append holds the WAL's
+lock across the write and the fsync (`internal/storage/wal/wal.go`), and
+`kv_wal_fsync_duration_seconds` times only the `Sync` call, not the wait
+for the lock. Each Put is stored on 3 of the 6 nodes, so at 300 Puts/s
+each node does about 150 local writes/s; at an fsync of about 2-3 ms
+(p50 1.9 ms, p99 4.9 ms) that keeps one serialized fsync path busy 30-50%
+of the time, and at 500/s 60-75%, where queueing grows quickly and the
+tail first. To confirm with a histogram of the wait for `writeMu`; group
+commit (one fsync for the writes that queued behind it) is the fix it
+points to. See [Open questions](#open-questions).
+
+**Operational notes.** Prometheus found kv-0 and kv-4 about half a minute
+after the others (discovery lag, not a fault). A preload of about 30s is
+too short for GKE's metrics-server to sample k6's CPU; the measured runs
+were all sampled. The two-pod resize was made with `gcloud`, because
+`terraform apply` also wanted an unrelated in-place change to the
+cluster's `node_config`; see [gke.md](gke.md#session-2-the-benchmarks-runbook).
