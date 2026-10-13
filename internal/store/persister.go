@@ -11,7 +11,11 @@ import (
 // real implementation; DataStore depends only on this interface, never on
 // the engine package itself.
 //
-// Every read returns a key's sibling set newest first.
+// Every read returns a key's sibling set newest first. Every method must be
+// safe to call concurrently with every other: DataStore locks only per key
+// for writes and not at all for reads, so reads and writes of different keys,
+// and reads of the key being written, reach the persister at once. A write
+// must become visible to reads all at once.
 type Persister interface {
 	// Put durably merges item into key's sibling set, with the same
 	// causality rules as versioning.Resolve.
@@ -28,9 +32,7 @@ type Persister interface {
 	// the key's whole visible set.
 	Restore(key string, items []*model.DataItem) error
 
-	// Keys returns every key currently stored, tombstoned keys included. It
-	// must be safe to call concurrently with the other methods: DataStore
-	// calls it without holding its lock.
+	// Keys returns every key currently stored, tombstoned keys included.
 	Keys() ([]string, error)
 }
 

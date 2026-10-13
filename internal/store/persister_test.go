@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"distributed-kv-datastore/internal/model"
@@ -15,8 +16,11 @@ import (
 // fakePersister is a single-layer, in-memory Persister with the same
 // contract as StorageEngine: Put merges via versioning.Resolve, reads
 // return siblings newest first, Restore replaces verbatim. Setting err
-// makes every call fail; setting restoreErr makes only Restore fail.
+// makes every call fail; setting restoreErr makes only Restore fail. Like
+// StorageEngine it is safe for concurrent use: DataStore reads without a
+// lock, alongside writes to other keys.
 type fakePersister struct {
+	mu         sync.Mutex
 	data       map[string][]*model.DataItem // newest first
 	err        error
 	restoreErr error
@@ -27,6 +31,8 @@ func newFakePersister() *fakePersister {
 }
 
 func (f *fakePersister) Put(key string, item *model.DataItem) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
@@ -47,6 +53,8 @@ func (f *fakePersister) Put(key string, item *model.DataItem) error {
 }
 
 func (f *fakePersister) GetAll(key string) ([]*model.DataItem, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, false, f.err
 	}
@@ -55,6 +63,8 @@ func (f *fakePersister) GetAll(key string) ([]*model.DataItem, bool, error) {
 }
 
 func (f *fakePersister) Restore(key string, items []*model.DataItem) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
@@ -67,6 +77,8 @@ func (f *fakePersister) Restore(key string, items []*model.DataItem) error {
 }
 
 func (f *fakePersister) Keys() ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}

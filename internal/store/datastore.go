@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"hash/maphash"
 	"log"
 	"sync"
 
@@ -30,11 +31,42 @@ import (
 // internal/identity) so that a replacement node reusing the ID starts a
 // fresh clock entry instead of restarting an old one. The plain constructors
 // use id for both.
+//
+// Locking is per key. Every write (Put, Delete, MergeReplicated,
+// RestoreVersions) holds its key's lock from reading the key to persisting
+// the new version, so two writes to one key never version from the same
+// state, and writes to different keys never wait for each other's fsync.
+// A key's lock is one of keyLockStripes mutexes, chosen by hashing the key:
+// two keys that share one wait for each other needlessly, never unsafely.
+// Each call locks one key and releases it before returning; nothing holds
+// a lock across calls or across keys. Reads (Get, GetLiveItems, Keys) take
+// no lock: each is one call to the persister, which is safe for concurrent
+// use and applies a write all at once, so a read sees a write entirely or
+// not at all.
 type DataStore struct {
 	id        string
 	clockID   string
 	persister Persister
-	mu        sync.Mutex
+	seed      maphash.Seed
+	keyLocks  [keyLockStripes]sync.Mutex
+}
+
+// keyLockStripes is the number of key locks: 512 KiB of mutexes per store.
+// A write whose key shares a lock with another write in flight waits for
+// that write's whole wait, its turn at the WAL included, before starting
+// its own; with k writes in flight, that is 1-(1-1/keyLockStripes)^(k-1)
+// of them: about 0.1% at 64 (the most BenchmarkDataStorePutParallel
+// runs), under 1% at a few hundred. With 1,024 locks, 6% of writes
+// collided at 64 in flight and Put p99 rose to 1.85× p50, against 1.07×
+// for the same writes into the engine directly; with this many, p99
+// matched the engine's. If a later benchmark shows that tail returning,
+// the upgrade is an exact per-key lock: a map of reference-counted
+// mutexes, so that only writes to the same key ever wait for each other.
+const keyLockStripes = 65536
+
+// keyLock returns key's lock.
+func (ds *DataStore) keyLock(key string) *sync.Mutex {
+	return &ds.keyLocks[maphash.String(ds.seed, key)%keyLockStripes]
 }
 
 // NewDataStoreWithPersister returns a DataStore whose versions live in p.
@@ -50,6 +82,7 @@ func NewDataStoreWithPersisterAndClockID(id, clockID string, p Persister) *DataS
 		id:        id,
 		clockID:   clockID,
 		persister: p,
+		seed:      maphash.MakeSeed(),
 	}
 }
 
@@ -84,11 +117,11 @@ func reversed(items []*model.DataItem) []*model.DataItem {
 // Needed by anti-entropy to enumerate what a bucket actually contains.
 // It returns the error if the persister read fails.
 //
-// It does not take ds.mu: listing every key can be long on a big store, and
-// the persister's Keys is safe to call concurrently with its other methods
-// (StorageEngine.Keys only reads a snapshot of its layers), so a scan must
-// not stall every Get and Put behind it. The result is not a point-in-time
-// snapshot: a key written meanwhile may or may not be in it.
+// Like every read it takes no lock: listing every key can be long on a big
+// store, and the persister's Keys is safe to call concurrently with its
+// other methods (StorageEngine.Keys only reads a snapshot of its layers),
+// so a scan must not stall writes behind it. The result is not a
+// point-in-time snapshot: a key written meanwhile may or may not be in it.
 func (ds *DataStore) Keys() ([]string, error) {
 	keys, err := ds.persister.Keys()
 	if err != nil {
@@ -102,15 +135,10 @@ func (ds *DataStore) Keys() ([]string, error) {
 // found is false when there are none. It returns the error if the
 // persister read fails — never a not-found in its place.
 func (ds *DataStore) Get(key string) ([]*model.DataItem, bool, error) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
 	return ds.load("Get", key)
 }
 
 func (ds *DataStore) GetLiveItems(key string) ([]*model.DataItem, bool) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
 	items, found, err := ds.load("GetLiveItems", key)
 	if err != nil || !found {
 		return nil, false
@@ -128,8 +156,9 @@ func (ds *DataStore) GetLiveItems(key string) ([]*model.DataItem, bool) {
 // Put writes value as a new version of key and returns it. It returns nil
 // if the write could not be persisted.
 func (ds *DataStore) Put(key string, value any, context map[string]uint32) *model.DataItem {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
+	mu := ds.keyLock(key)
+	mu.Lock()
+	defer mu.Unlock()
 
 	base := context
 	if base == nil {
@@ -158,8 +187,9 @@ func (ds *DataStore) Put(key string, value any, context map[string]uint32) *mode
 // with its own vector clock, run through the same resolve() path. A failed
 // read or write returns false with a "storage error: ..." message.
 func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
+	mu := ds.keyLock(key)
+	mu.Lock()
+	defer mu.Unlock()
 
 	existing, found, err := ds.load("Delete", key)
 	if err != nil {
@@ -200,8 +230,9 @@ func (ds *DataStore) Delete(key string, context map[string]uint32) (bool, string
 // failed write may still have been applied". Any other persister error is
 // logged too. Either one is returned.
 func (ds *DataStore) RestoreVersions(key string, items []*model.DataItem) error {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
+	mu := ds.keyLock(key)
+	mu.Lock()
+	defer mu.Unlock()
 
 	err := ds.persister.Restore(key, reversed(items))
 	switch {
@@ -219,8 +250,9 @@ func (ds *DataStore) RestoreVersions(key string, items []*model.DataItem) error 
 // internals directly — the encapsulation the old direct field access broke.
 // It returns an error when the write could not be persisted (also logged).
 func (ds *DataStore) MergeReplicated(key string, item *model.DataItem) error {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
+	mu := ds.keyLock(key)
+	mu.Lock()
+	defer mu.Unlock()
 
 	if err := ds.persister.Put(key, item); err != nil {
 		log.Printf("store: MergeReplicated %q: persister write failed: %v", key, err)
