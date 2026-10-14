@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/wal"
+	"distributed-kv-datastore/internal/store"
 )
 
 // writeModes are the two ways writes reach the WAL (WithGroupCommit). The
@@ -472,11 +472,25 @@ func TestCloseLeavesNoSerialWriteWaiting(t *testing.T) {
 	}
 }
 
+// keyState is what a crash test knows of one key: the last write to it
+// that was acknowledged, and the write in flight when its writer's
+// process crashed, if that write was to this key. A write that failed was
+// not acknowledged, but its record may still be durable.
+type keyState struct {
+	acked, failed bool
+	ackedValue    string // "" for a Restore that removed the key
+	failedValue   string // likewise
+	uncertain     bool   // a Restore could not hide a flushed version (store.ErrRestoreIncomplete)
+	written       map[string]bool
+}
+
 // TestCrashNeverLosesAnAcknowledgedWrite: writers Put and Restore
-// concurrently, with memtable swaps and flushes, until a crash at a
-// random fsync; the WAL then keeps only what was synced plus a random part
-// of the rest. After a reopen, every write acknowledged before the crash
-// is there, and nothing is there that wasn't written. Many seeds, both
+// concurrently, each on its own keys, with memtable swaps and flushes,
+// until a crash at a random fsync; the WAL then keeps only what was synced
+// plus a random part of the rest. Each writer's writes carry increasing
+// clocks, so each supersedes the one before. After a reopen, every key is
+// as its last acknowledged write left it, or as the one write that failed
+// would have, and holds nothing that wasn't written. Many seeds, both
 // modes.
 func TestCrashNeverLosesAnAcknowledgedWrite(t *testing.T) {
 	const seeds, writers, perWriter = 40, 8, 40
@@ -488,42 +502,48 @@ func TestCrashNeverLosesAnAcknowledgedWrite(t *testing.T) {
 			faults.crashAtSync = 1 + rng.IntN(30)
 			e := mustOpen(t, dir, 4096, mode, withWALOpenFile(faults.open)) // swaps every ~20 writes
 
-			// acked[key] is the value of the last acknowledged write to key
-			// ("" for a Restore that removed it); written[key] every value
-			// ever attempted.
 			var mu sync.Mutex
-			acked := map[string]string{}
-			written := map[string]map[string]bool{}
+			keys := map[string]*keyState{}
 			var wg sync.WaitGroup
 			for w := range writers {
 				wg.Go(func() {
+					writer := fmt.Sprintf("w%d", w)
 					for i := range perWriter {
-						key := fmt.Sprintf("w%d-k%d", w, i%10) // rewrite some keys
-						value := fmt.Sprintf("s%d-w%d-%d-%s", seed, w, i, strings.Repeat("x", 64))
-						mu.Lock()
-						if written[key] == nil {
-							written[key] = map[string]bool{}
+						key := fmt.Sprintf("%s-k%d", writer, i%10) // rewrite some keys
+						restore := i%7 == 6
+						value := ""
+						if !restore {
+							value = fmt.Sprintf("s%d-%s-%d-%s", seed, writer, i, strings.Repeat("x", 64))
 						}
-						written[key][value] = true
+						mu.Lock()
+						k := keys[key]
+						if k == nil {
+							k = &keyState{written: map[string]bool{}}
+							keys[key] = k
+						}
+						k.written[value] = true
 						mu.Unlock()
 
 						var err error
-						restore := i%7 == 6
 						if restore {
 							err = e.Restore(key, nil)
 						} else {
-							err = e.Put(key, sampleItem(value))
+							err = e.Put(key, itemWithClock(value, map[string]uint32{writer: uint32(i + 1)}))
 						}
-						if err != nil {
-							return // crashed: this writer's process is gone
-						}
+
 						mu.Lock()
-						if restore {
-							acked[key] = ""
-						} else {
-							acked[key] = value
+						switch {
+						case err == nil:
+							k.acked, k.ackedValue = true, value
+						case errors.Is(err, store.ErrRestoreIncomplete):
+							k.uncertain = true // applied, but an older flushed version may still show
+						default:
+							k.failed, k.failedValue = true, value
 						}
 						mu.Unlock()
+						if err != nil && !errors.Is(err, store.ErrRestoreIncomplete) {
+							return // crashed: this writer's process is gone
+						}
 					}
 				})
 			}
@@ -537,37 +557,44 @@ func TestCrashNeverLosesAnAcknowledgedWrite(t *testing.T) {
 			faults.dropUnsynced(t, rng)
 
 			reopened := mustOpen(t, dir, 4096)
-			for key, want := range acked {
+			for key, k := range keys {
 				items, found, err := reopened.GetAll(key)
 				if err != nil {
 					t.Fatalf("seed %d: GetAll %s: %v", seed, key, err)
 				}
-				// A later write to key, unacknowledged but durable, may
-				// have replaced the acknowledged one: every writer writes
-				// only its own keys, in order, so a surviving version is
-				// either the acknowledged one or one written after it.
-				if want == "" {
-					continue // a Restore that removed key may be followed by an unacknowledged Put
-				}
-				if !found {
-					t.Fatalf("seed %d (crash at fsync %d): acknowledged %s=%.20s... is gone", seed, faults.crashAtSync, key, want)
-				}
-				for _, item := range items {
-					if !written[key][item.Value.(string)] {
-						t.Fatalf("seed %d: %s holds %q, which was never written", seed, key, item.Value)
+				got := ""
+				if found {
+					if len(items) != 1 {
+						t.Fatalf("seed %d: %s holds %v, want one version: its writes supersede each other", seed, key, values(items))
 					}
+					got = items[0].Value.(string)
 				}
-				if !sameOrLater(want, items) {
-					t.Fatalf("seed %d (crash at fsync %d): acknowledged %s=%.20s... was replaced by older %v",
-						seed, faults.crashAtSync, key, want, values(items))
+				if !k.written[got] && found {
+					t.Fatalf("seed %d: %s holds %.30q..., which was never written", seed, key, got)
+				}
+				if k.uncertain {
+					continue
+				}
+				allowed := map[string]bool{}
+				if k.acked {
+					allowed[k.ackedValue] = true
+				} else {
+					allowed[""] = true // never acknowledged: it may not exist
+				}
+				if k.failed {
+					allowed[k.failedValue] = true
+				}
+				if !allowed[got] {
+					t.Fatalf("seed %d (crash at fsync %d): %s is %.30q..., want its acknowledged state %.30q... (or its failed write's %.30q...)",
+						seed, faults.crashAtSync, key, got, k.ackedValue, k.failedValue)
 				}
 			}
-			keys, err := reopened.Keys()
+			allKeys, err := reopened.Keys()
 			if err != nil {
 				t.Fatalf("seed %d: Keys: %v", seed, err)
 			}
-			for _, key := range keys {
-				if written[key] == nil {
+			for _, key := range allKeys {
+				if keys[key] == nil {
 					t.Fatalf("seed %d: key %s was never written", seed, key)
 				}
 			}
@@ -576,22 +603,6 @@ func TestCrashNeverLosesAnAcknowledgedWrite(t *testing.T) {
 			}
 		}
 	})
-}
-
-// sameOrLater reports whether items holds want or a value written after it
-// by the same writer: values are "s<seed>-w<writer>-<i>-...", i increasing.
-func sameOrLater(want string, items []*model.DataItem) bool {
-	var wantI int
-	fmt.Sscanf(want[strings.Index(want, "-w")+1:], "w%*d-%d", &wantI)
-	for _, item := range items {
-		v := item.Value.(string)
-		var i int
-		fmt.Sscanf(v[strings.Index(v, "-w")+1:], "w%*d-%d", &i)
-		if i >= wantI {
-			return true
-		}
-	}
-	return false
 }
 
 // TestGroupCommitBatchesWhatQueuedDuringAnFsync: every write queued while
