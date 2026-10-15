@@ -194,7 +194,7 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string, dataD
 	if err != nil {
 		return nil, fmt.Errorf("node %s: %w", id, err)
 	}
-	e, err := engine.Open(dataDir, maxMemtableBytes, engine.WithObserver(o.dataObserver))
+	e, err := engine.Open(dataDir, maxMemtableBytes, append([]engine.Option{engine.WithObserver(o.dataObserver)}, o.engineOpts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("node %s: open storage at %s: %w", id, dataDir, err)
 	}
@@ -221,7 +221,7 @@ func New(id, address string, n, w, r int, neighborAddrs map[string]string, dataD
 	} else if found {
 		base = handedOff
 	}
-	hs, err := hints.Open(filepath.Join(dataDir, "hints"), maxMemtableBytes, engine.WithObserver(o.hintsObserver))
+	hs, err := hints.Open(filepath.Join(dataDir, "hints"), maxMemtableBytes, append([]engine.Option{engine.WithObserver(o.hintsObserver)}, o.engineOpts...)...)
 	if err != nil {
 		e.Close()
 		return nil, fmt.Errorf("node %s: %w", id, err)

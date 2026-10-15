@@ -11,7 +11,9 @@ import (
 
 type countingObserver struct{ syncs atomic.Int64 }
 
-func (o *countingObserver) WALSynced(time.Duration) { o.syncs.Add(1) }
+func (o *countingObserver) WALSynced(time.Duration)     { o.syncs.Add(1) }
+func (o *countingObserver) WALBatch(int)                {}
+func (o *countingObserver) WALCommitWait(time.Duration) {}
 
 // TestStorageObserversReportEachEngineSeparately: the node's data engine
 // reports to the data observer and its hint store's engine to the hints

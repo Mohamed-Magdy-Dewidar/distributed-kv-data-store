@@ -23,8 +23,8 @@ import (
 type Metrics struct {
 	registry       *prometheus.Registry
 	clientRequests *clientRequests
-	dataStorage    *walSyncObserver
-	hintsStorage   *walSyncObserver
+	dataStorage    *storageObserver
+	hintsStorage   *storageObserver
 }
 
 // New returns the metrics for one node. stats is called once per scrape;

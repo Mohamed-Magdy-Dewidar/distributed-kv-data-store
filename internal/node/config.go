@@ -63,6 +63,7 @@ type Option func(*options)
 
 type options struct {
 	dataObserver, hintsObserver engine.Observer
+	engineOpts                  []engine.Option
 }
 
 // WithStorageObservers has the node's two storage engines report to data
@@ -70,4 +71,11 @@ type options struct {
 // reports nothing for that engine.
 func WithStorageObservers(data, hints engine.Observer) Option {
 	return func(o *options) { o.dataObserver, o.hintsObserver = data, hints }
+}
+
+// WithEngineOptions opens both of the node's storage engines, its data and
+// its hint store, with opts as well, after the observers: for settings that
+// apply to both, and for fault injection in tests.
+func WithEngineOptions(opts ...engine.Option) Option {
+	return func(o *options) { o.engineOpts = append(o.engineOpts, opts...) }
 }

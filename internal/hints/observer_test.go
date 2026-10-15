@@ -11,7 +11,9 @@ import (
 
 type countingObserver struct{ syncs atomic.Int64 }
 
-func (o *countingObserver) WALSynced(time.Duration) { o.syncs.Add(1) }
+func (o *countingObserver) WALSynced(time.Duration)     { o.syncs.Add(1) }
+func (o *countingObserver) WALBatch(int)                {}
+func (o *countingObserver) WALCommitWait(time.Duration) {}
 
 // TestOpenPassesEngineOptions: the hint store's engine reports to the
 // observer it was opened with, for adding a hint and for marking it

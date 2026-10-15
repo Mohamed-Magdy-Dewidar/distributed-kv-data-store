@@ -69,7 +69,9 @@ spec:
             - name: http
               containerPort: 8080
           # /livez answers as soon as the process is up, before storage is
-          # opened, so a long WAL replay doesn't fail it.
+          # opened, so a long WAL replay doesn't fail it. It fails once a
+          # storage engine has halted writes after a failed WAL write or
+          # fsync, so the container is restarted, which replays the WAL.
           livenessProbe:
             httpGet:
               path: /livez

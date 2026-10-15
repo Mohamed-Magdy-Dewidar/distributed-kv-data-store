@@ -22,8 +22,10 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8081/readyz
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8082/readyz
 ```
 
-`/livez` always returns 200 once the process is up; `/readyz` reflects
-whether the node has finished startup and isn't shutting down.
+`/livez` returns 200 once the process is up, and 503 once a storage engine
+has halted writes after a failed WAL write or fsync (only a restart
+recovers); `/readyz` reflects whether the node has finished startup and
+isn't shutting down.
 
 Stop a node with Ctrl+C: it marks itself not-ready, stops accepting new
 gRPC requests (bounded by `timeouts.shutdown`), stops its background

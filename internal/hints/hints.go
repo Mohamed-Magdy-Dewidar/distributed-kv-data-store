@@ -89,6 +89,12 @@ func (s *Store) Close() error {
 	return s.engine.Close()
 }
 
+// WritesHalted reports whether the store's engine has halted writes after
+// a failed WAL write or fsync (see engine.ErrWritesHalted).
+func (s *Store) WritesHalted() bool {
+	return s.engine.WritesHalted()
+}
+
 func storageKey(target, key string) string {
 	return target + sep + key
 }

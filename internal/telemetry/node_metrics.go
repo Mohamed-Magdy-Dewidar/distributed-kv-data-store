@@ -30,6 +30,8 @@ var (
 	sstables      = desc("kv_sstables", "Live SSTables of a storage engine.", "engine")
 	flushes       = desc("kv_flushes_total", "Memtable flushes of a storage engine, by result: ok (an SSTable was registered) or error (the data stays in memory and is retried).", "engine", "result")
 	compactions   = desc("kv_compactions_total", "Compaction steps of a storage engine that merged a run, by result.", "engine", "result")
+	storageWrites = desc("kv_storage_writes_total", "Writes (puts, and rollbacks or repairs that replace a key's versions) a storage engine made durable in its write-ahead log; with group commit, many per fsync.", "engine")
+	writesHalted  = desc("kv_storage_writes_halted", "1 once a storage engine's write-ahead log write or fsync has failed: every write to it fails, and /livez fails so the node is restarted.", "engine")
 
 	hintsCreated   = desc("kv_hints_created_total", "Hinted items stored for unreachable replicas.")
 	hintsDelivered = desc("kv_hints_delivered_total", "Hinted items delivered to their replica and retired.")
@@ -60,7 +62,7 @@ func (c *nodeCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		membershipEpoch, membershipMember, membershipConflicts, pingsReceived, peers, peersAlive, peersReachable,
 		quorumFailures,
-		memtableBytes, sstables, flushes, compactions,
+		memtableBytes, sstables, flushes, compactions, storageWrites, writesHalted,
 		hintsCreated, hintsDelivered, hintsPending,
 		handoffEpoch, handoffDone, handoffPushed, handoffHinted, handoffPending, handoffsCompleted, handoffLastDuration, handoffDuration,
 		aeRounds, aeLastRoundDuration, aeRoundDuration, aePeerFailures, aeKeysRepaired,
@@ -102,6 +104,8 @@ func (c *nodeCollector) Collect(ch chan<- prometheus.Metric) {
 		counter(flushes, e.stats.FlushFailures, e.name, "error")
 		counter(compactions, e.stats.Compactions, e.name, "ok")
 		counter(compactions, e.stats.CompactionFailures, e.name, "error")
+		counter(storageWrites, e.stats.Writes, e.name)
+		gauge(writesHalted, boolValue(e.stats.WritesHalted), e.name)
 	}
 
 	counter(hintsCreated, s.Hints.Created)

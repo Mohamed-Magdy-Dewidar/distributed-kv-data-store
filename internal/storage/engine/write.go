@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"distributed-kv-datastore/internal/model"
 	"distributed-kv-datastore/internal/storage/memtable"
@@ -58,6 +59,7 @@ var ErrClosed = errors.New("engine: closed")
 type writeReq struct {
 	entry  wal.Entry
 	record []byte
+	queued time.Time // when it was handed to the commit path; set only with an observer
 	err    error
 	done   chan struct{}
 }
@@ -84,6 +86,9 @@ func (e *StorageEngine) write(entry wal.Entry) error {
 		reqPool.Put(req)
 	}()
 
+	if e.obs != nil {
+		req.queued = time.Now()
+	}
 	if e.groupCommit {
 		if !e.enqueue(req) {
 			return fmt.Errorf("engine: write of key %q: %w", entry.Key, ErrClosed)
@@ -181,6 +186,13 @@ func (e *StorageEngine) commit(batch []*writeReq) {
 	for _, req := range batch {
 		records = append(records, req.record)
 	}
+	if e.obs != nil {
+		start := time.Now()
+		e.obs.WALBatch(len(batch))
+		for _, req := range batch {
+			e.obs.WALCommitWait(start.Sub(req.queued))
+		}
+	}
 	err := e.wal.WriteBatch(records)
 	clear(records)
 	e.records = records[:0]
@@ -191,6 +203,7 @@ func (e *StorageEngine) commit(batch []*writeReq) {
 		}
 		return
 	}
+	e.writes.Add(uint64(len(batch)))
 
 	if testHookAfterWALAppend != nil {
 		for _, req := range batch {

@@ -61,6 +61,14 @@ type Stats struct {
 	AntiEntropyKeysPulled, AntiEntropyKeysPushed uint64
 }
 
+// WritesHalted reports whether either of the node's storage engines, its
+// data or its hint store, has halted writes after a failed WAL write or
+// fsync (see engine.ErrWritesHalted). Only a restart recovers: /livez
+// fails while it is true. It takes no lock.
+func (n *Node) WritesHalted() bool {
+	return n.engine.WritesHalted() || n.hints.WritesHalted()
+}
+
 // Stats returns the node's current Stats. It takes the heartbeat and
 // handoff locks for reading only long enough to copy what it needs, and
 // each storage engine's lock likewise (see engine.StorageEngine.Stats).

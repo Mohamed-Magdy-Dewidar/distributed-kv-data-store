@@ -306,12 +306,15 @@ CTX=gke_kvstore-gke_${R}_kvstore
    kubectl --context $CTX apply -f deploy/loadgen/writer.yaml
    sleep 120
    q 'sum by (instance, method) (rate(kv_client_request_duration_seconds_count{job="kvstore"}[1m]))'
-   q 'sum by (instance) (rate(kv_wal_fsync_duration_seconds_count{engine="data"}[1m]))'
+   q 'sum by (instance) (rate(kv_storage_writes_total{engine="data"}[1m]))'
    ```
 
    The first is the requests each pod coordinated (the writer sends only
    Puts); the second, the writes each pod stored, as coordinator or replica
-   (one data-engine fsync per write; three per Put across the cluster).
+   (three per Put across the cluster). It counts writes, not fsyncs: with
+   group commit one fsync covers many. On a build from before group commit,
+   which has no `kv_storage_writes_total`, use
+   `kv_wal_fsync_duration_seconds_count` instead: one fsync per write there.
    **All six pods must be above zero on both.** A pod at zero on the first
    gets no client traffic (check `kubectl --context $CTX -n kvstore get
    endpoints kv-client`); at zero on the second, it stores nothing. Grafana

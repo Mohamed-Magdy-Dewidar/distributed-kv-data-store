@@ -243,7 +243,7 @@ func result(t *testing.T, what string, done <-chan error) error {
 func TestWriteIsVisibleOnlyAfterItsSync(t *testing.T) {
 	forEachWriteMode(t, func(t *testing.T, mode Option) {
 		faults := newWALFaults()
-		e := mustOpen(t, t.TempDir(), 1<<20, mode, withWALOpenFile(faults.open))
+		e := mustOpen(t, t.TempDir(), 1<<20, mode, WithWALOpenFile(faults.open))
 		defer e.Close()
 
 		release := faults.holdSyncs()
@@ -267,7 +267,7 @@ func TestWriteIsVisibleOnlyAfterItsSync(t *testing.T) {
 func TestFailedSyncFailsItsWholeBatchAndHaltsWrites(t *testing.T) {
 	const n = 8
 	faults := newWALFaults()
-	e := mustOpen(t, t.TempDir(), 1<<20, WithGroupCommit(true), withWALOpenFile(faults.open))
+	e := mustOpen(t, t.TempDir(), 1<<20, WithGroupCommit(true), WithWALOpenFile(faults.open))
 	defer e.Close()
 
 	release := faults.holdSyncs()
@@ -323,7 +323,7 @@ func TestNoRecordIsWrittenAfterAFailedWrite(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				dir := t.TempDir()
 				faults := newWALFaults()
-				e := mustOpen(t, dir, 1<<20, mode, withWALOpenFile(faults.open))
+				e := mustOpen(t, dir, 1<<20, mode, WithWALOpenFile(faults.open))
 				for _, k := range []string{"a", "b"} {
 					if err := e.Put(k, sampleItem(k)); err != nil {
 						t.Fatalf("Put %s: %v", k, err)
@@ -381,7 +381,7 @@ func TestCloseCommitsQueuedWrites(t *testing.T) {
 	const n = 8
 	dir := t.TempDir()
 	faults := newWALFaults()
-	e := mustOpen(t, dir, 1<<20, WithGroupCommit(true), withWALOpenFile(faults.open))
+	e := mustOpen(t, dir, 1<<20, WithGroupCommit(true), WithWALOpenFile(faults.open))
 
 	release := faults.holdSyncs()
 	writes := []<-chan error{putAsync(e, "first", "v")}
@@ -429,7 +429,7 @@ func TestCloseLeavesNoSerialWriteWaiting(t *testing.T) {
 	const n = 8
 	dir := t.TempDir()
 	faults := newWALFaults()
-	e := mustOpen(t, dir, 1<<20, WithGroupCommit(false), withWALOpenFile(faults.open))
+	e := mustOpen(t, dir, 1<<20, WithGroupCommit(false), WithWALOpenFile(faults.open))
 
 	release := faults.holdSyncs()
 	first := putAsync(e, "first", "v")
@@ -500,7 +500,7 @@ func TestCrashNeverLosesAnAcknowledgedWrite(t *testing.T) {
 			dir := t.TempDir()
 			faults := newWALFaults()
 			faults.crashAtSync = 1 + rng.IntN(30)
-			e := mustOpen(t, dir, 4096, mode, withWALOpenFile(faults.open)) // swaps every ~20 writes
+			e := mustOpen(t, dir, 4096, mode, WithWALOpenFile(faults.open)) // swaps every ~20 writes
 
 			var mu sync.Mutex
 			keys := map[string]*keyState{}
@@ -611,7 +611,7 @@ func TestCrashNeverLosesAnAcknowledgedWrite(t *testing.T) {
 func TestGroupCommitBatchesWhatQueuedDuringAnFsync(t *testing.T) {
 	const n = maxBatchRecords + 500 // the queue holds maxBatchRecords; the rest wait to send
 	faults := newWALFaults()
-	e := mustOpen(t, t.TempDir(), 64<<20, WithGroupCommit(true), withWALOpenFile(faults.open))
+	e := mustOpen(t, t.TempDir(), 64<<20, WithGroupCommit(true), WithWALOpenFile(faults.open))
 	defer e.Close()
 
 	release := faults.holdSyncs()
@@ -658,7 +658,7 @@ func TestGroupCommitBatchesWhatQueuedDuringAnFsync(t *testing.T) {
 // larger than maxBatchBytes is a batch of its own.
 func TestGroupCommitCapsABatchsBytes(t *testing.T) {
 	faults := newWALFaults()
-	e := mustOpen(t, t.TempDir(), 64<<20, WithGroupCommit(true), withWALOpenFile(faults.open))
+	e := mustOpen(t, t.TempDir(), 64<<20, WithGroupCommit(true), WithWALOpenFile(faults.open))
 	defer e.Close()
 
 	third := strings.Repeat("x", maxBatchBytes/3) // three of these, with headers, overflow a batch

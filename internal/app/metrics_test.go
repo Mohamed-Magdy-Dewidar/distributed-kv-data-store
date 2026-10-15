@@ -138,24 +138,41 @@ func TestRunTimesClientRequests(t *testing.T) {
 	}
 }
 
-// TestRunTimesWALSyncs: Run opens the node with the telemetry storage
-// observers, so a write's WAL fsync shows up on /metrics under the data
-// engine, and nothing under the hint store's.
-func TestRunTimesWALSyncs(t *testing.T) {
+// TestRunReportsWALWrites: Run opens the node with the telemetry storage
+// observers, so a write shows up on /metrics under the data engine, and
+// nothing under the hint store's: its fsync, its batch of one, its commit
+// wait, and the writes counter.
+func TestRunReportsWALWrites(t *testing.T) {
 	cfg := runReady(t)
 	if _, err := kvClient(t, cfg).Put(context.Background(), &pb.PutRequest{Key: "k", Value: "v"}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	f, ok := scrapeMetrics(t, cfg.Listen.HTTP)["kv_wal_fsync_duration_seconds"]
-	if !ok {
-		t.Fatal("kv_wal_fsync_duration_seconds missing from /metrics")
+	families := scrapeMetrics(t, cfg.Listen.HTTP)
+	for _, name := range []string{"kv_wal_fsync_duration_seconds", "kv_wal_batch_writes", "kv_wal_commit_wait_seconds"} {
+		f, ok := families[name]
+		if !ok {
+			t.Fatalf("%s missing from /metrics", name)
+		}
+		counts := make(map[string]uint64)
+		for _, m := range f.Metric {
+			counts[m.Label[0].GetValue()] = m.GetHistogram().GetSampleCount()
+		}
+		if counts["data"] != 1 || counts["hints"] != 0 {
+			t.Fatalf("%s by engine %v, want data 1 and hints 0 after one Put", name, counts)
+		}
 	}
-	counts := make(map[string]uint64)
-	for _, m := range f.Metric {
-		counts[m.Label[0].GetValue()] = m.GetHistogram().GetSampleCount()
+
+	writes := make(map[string]float64)
+	for _, m := range families["kv_storage_writes_total"].GetMetric() {
+		writes[m.Label[0].GetValue()] = m.GetCounter().GetValue()
 	}
-	if counts["data"] != 1 || counts["hints"] != 0 {
-		t.Fatalf("fsyncs by engine %v, want data 1 and hints 0 after one Put", counts)
+	if writes["data"] != 1 || writes["hints"] != 0 {
+		t.Fatalf("kv_storage_writes_total by engine %v, want data 1 and hints 0 after one Put", writes)
+	}
+	for _, m := range families["kv_storage_writes_halted"].GetMetric() {
+		if v := m.GetGauge().GetValue(); v != 0 {
+			t.Fatalf("kv_storage_writes_halted{engine=%q} = %v, want 0", m.Label[0].GetValue(), v)
+		}
 	}
 }

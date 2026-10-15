@@ -235,8 +235,8 @@ to change it):
 | `summary-<i>.env` | The same, flat: per op count, rate, p50/p95/p99/max (ms), errors; `dropped_iterations`, `vus_max`, `connects` |
 | `steps.csv` | Ramps only: one row per k6 pod, step and op ([Reading the knee](#the-workload)) |
 | `top.txt` | `kubectl top pod --containers` every 15s through the run: k6's CPU next to every kv pod's |
-| `prometheus/*.csv` | `deploy/bench/export.sh`: one CSV per query, 15s steps, from 60s before the window to 30s after, in the shape of [results/gke-session1/](results/gke-session1/): Put and Get rates by code and p50/p99, data-engine fsync p50/p99, requests coordinated by pod, storage writes by pod, CPU and memory by pod, anti-entropy rounds by pod, quorum failures, hints |
-| `prometheus/window.env` | The whole window at once: request and fsync counts, quantiles over the window (`histogram_quantile` of the buckets' `increase`, interpolated inside a bucket), anti-entropy rounds, quorum failures, hints, CPU by pod, the spread |
+| `prometheus/*.csv` | `deploy/bench/export.sh`: one CSV per query, 15s steps, from 60s before the window to 30s after, in the shape of [results/gke-session1/](results/gke-session1/): Put and Get rates by code and p50/p99, data-engine fsync p50/p99, WAL batch size p50/p99/mean and commit wait p50/p99 (data engine), requests coordinated by pod, storage writes by pod (`kv_storage_writes_total`), CPU and memory by pod, anti-entropy rounds by pod, quorum failures, hints |
+| `prometheus/window.env` | The whole window at once: request, fsync and storage-write counts, writes per fsync, batch size and commit wait p50/p99, whether any engine halted writes, quantiles over the window (`histogram_quantile` of the buckets' `increase`, interpolated inside a bucket), anti-entropy rounds, quorum failures, hints, CPU by pod, the spread |
 | `prometheus/queries.txt` | Every query, as sent |
 
 `export.sh` runs at the end of every run (`BENCH_EXPORT=0` skips it), and

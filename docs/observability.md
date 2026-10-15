@@ -18,7 +18,9 @@ scraped.
 | Metric | Type | Labels | What it measures |
 |---|---|---|---|
 | `kv_client_request_duration_seconds` | histogram | `method` (`Get`, `Put`), `code` (gRPC status code) | Time to serve a client request on the node that received it, including forwarding to a replica and waiting for the quorum. Only `KVClient` calls; node-to-node calls are not timed. |
-| `kv_wal_fsync_duration_seconds` | histogram | `engine` (`data`, `hints`) | Time to fsync one write to a storage engine's write-ahead log: the node's data, or its hint store. Replaying the WAL at startup is not included. |
+| `kv_wal_fsync_duration_seconds` | histogram | `engine` (`data`, `hints`) | Time to fsync one batch of writes to a storage engine's write-ahead log, the node's data or its hint store: one write without group commit, every write in the batch with it. Replaying the WAL at startup is not included. Its count is fsyncs, not writes: `kv_storage_writes_total` counts writes. |
+| `kv_wal_batch_writes` | histogram | `engine` | Writes in each batch written to the write-ahead log with one write and one fsync: the writes that queued while the previous fsync ran. Always 1 without group commit. Buckets are powers of two up to the cap of 1,000. |
+| `kv_wal_commit_wait_seconds` | histogram | `engine` | How long each write waited, once encoded, for its batch's WAL write to start: the wait for the batches ahead of it, and for the write lock without group commit. Its own write and fsync follow, and are what `kv_wal_fsync_duration_seconds` times. A Put's latency on a replica is about this wait plus one fsync. |
 | `kv_quorum_failures_total` | counter | `quorum` (`read`, `write`) | Reads this node coordinated that did not reach R responses, and writes that did not reach W acks (and were rolled back). A client sees both as `Unavailable`, like other failures. |
 
 **Membership and peers**
@@ -42,6 +44,8 @@ its hint store)
 | `kv_sstables` | gauge | `engine` | Live SSTables. Read at scrape. |
 | `kv_flushes_total` | counter | `engine`, `result` (`ok`, `error`) | Memtable flushes. On `error` the data stays in memory and the next flush retries it. |
 | `kv_compactions_total` | counter | `engine`, `result` (`ok`, `error`) | Compaction steps that merged a run. A step with nothing to compact is not counted. |
+| `kv_storage_writes_total` | counter | `engine` | Writes the engine made durable in its write-ahead log: Puts, and the rollbacks and repairs that replace a key's versions. With group commit one fsync covers many, so this, not the fsync count, is the write rate. |
+| `kv_storage_writes_halted` | gauge | `engine` | 1 once a write-ahead log write or fsync has failed: every write to the engine fails until the node restarts, and `/livez` fails so that Kubernetes restarts it ([known-limitations.md](known-limitations.md#durability)). Read at scrape. |
 
 **Hinted handoff**
 
@@ -161,7 +165,7 @@ area. Each panel's description names the metric it reads.
 |---|---|
 | Requests | Put rate by status code; Put latency p50 / p99; quorum failures over the last 5 minutes, by `read` and `write`; requests coordinated by pod, by method |
 | Membership and peers | epoch by pod; member of its own view, by pod; peers alive by pod; peers reachable by pod |
-| Storage | WAL fsync latency p50 / p99 (data engine); memtable size by pod; SSTables by pod; flushes and compactions over the last 5 minutes, by engine and result; storage writes by pod (data-engine fsyncs per second) |
+| Storage | WAL fsync latency p50 / p99 (data engine); memtable size by pod; SSTables by pod; flushes and compactions over the last 5 minutes, by engine and result; storage writes by pod (data engine, from `kv_storage_writes_total`); WAL batch size p50 / p99 / mean (data engine); WAL commit wait p50 / p99 (data engine); storage writes halted, by pod and engine |
 | Hinted handoff | hints created and delivered per second; hints pending by pod |
 | Membership handoff | keys pending by pod; pushes and hints in the current handoff; last handoff duration by pod |
 | Anti-entropy | rounds per pod over the last hour; last round duration by pod; keys repaired and peer failures over the last hour |

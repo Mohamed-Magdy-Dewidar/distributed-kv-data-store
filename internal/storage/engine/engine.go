@@ -98,6 +98,9 @@ type StorageEngine struct {
 	halted    atomic.Bool
 	haltCause error
 
+	obs    Observer      // WithObserver's; nil for none
+	writes atomic.Uint64 // writes made durable, for Stats
+
 	flushWG sync.WaitGroup // lets tests/Close wait for background flushes
 
 	// compactMu serializes Compact calls (and Close against them). Two
@@ -133,6 +136,12 @@ type Stats struct {
 	// that merged a run, and those that failed. A step with nothing to
 	// compact counts as neither.
 	Compactions, CompactionFailures uint64
+	// Writes counts writes (Puts and Restores) made durable in the WAL
+	// since Open: with group commit, many per fsync.
+	Writes uint64
+	// WritesHalted is true once a WAL write or fsync has failed: every
+	// write fails until the engine is reopened (see ErrWritesHalted).
+	WritesHalted bool
 }
 
 // Stats returns the engine's current Stats. It holds e.mu for reading only
@@ -152,16 +161,38 @@ func (e *StorageEngine) Stats() Stats {
 		FlushFailures:      e.flushFailures.Load(),
 		Compactions:        e.compactions.Load(),
 		CompactionFailures: e.compactionFailures.Load(),
+		Writes:             e.writes.Load(),
+		WritesHalted:       e.halted.Load(),
 	}
+}
+
+// WritesHalted reports whether a WAL write or fsync has failed, so that
+// every write fails until the engine is reopened (see ErrWritesHalted). It
+// takes no lock.
+func (e *StorageEngine) WritesHalted() bool {
+	return e.halted.Load()
 }
 
 // Observer is told what the engine does that only it can see, as plain
 // values. Its methods are called in the write path, with locks held, so they
 // must return at once: no blocking, no I/O. internal/telemetry implements it.
 type Observer interface {
-	// WALSynced reports how long a successful fsync of a write to the WAL
-	// took. Replaying the WAL in Open is not reported.
+	// WALSynced reports how long a successful fsync of a batch of writes to
+	// the WAL took. Replaying the WAL in Open is not reported.
 	wal.SyncObserver
+
+	// WALBatch reports a batch of writes about to be written to the WAL
+	// with one Write and one fsync: how many writes it holds (always 1
+	// without group commit). Called once per batch that reaches the WAL,
+	// whether its write then succeeds or not.
+	WALBatch(writes int)
+
+	// WALCommitWait reports, once for each write in a batch, how long the
+	// write waited between being handed to the commit path (after it was
+	// encoded) and its batch's WAL write starting: the wait for the batches
+	// ahead of it, and for the write lock without group commit. Its own
+	// write and fsync follow, and are what WALSynced times.
+	WALCommitWait(d time.Duration)
 }
 
 // Option configures a StorageEngine in Open.
@@ -170,7 +201,7 @@ type Option func(*options)
 type options struct {
 	observer    Observer
 	groupCommit bool
-	walOpenFile wal.OpenFileFunc // tests only: see withWALOpenFile
+	walOpenFile wal.OpenFileFunc // fault injection: see WithWALOpenFile
 }
 
 // WithObserver has the engine report to o. Without it, or with a nil o,
@@ -188,10 +219,10 @@ func WithGroupCommit(on bool) Option {
 	return func(opts *options) { opts.groupCommit = on }
 }
 
-// withWALOpenFile has the WAL open its segment files with open (see
-// wal.WithOpenFile): for tests that fail a write or an fsync, or drop what
-// was never synced.
-func withWALOpenFile(open wal.OpenFileFunc) Option {
+// WithWALOpenFile has the WAL open its segment files with open (see
+// wal.WithOpenFile), for fault-injection tests: to fail a write or an
+// fsync, or to drop what was never synced. Never set in production.
+func WithWALOpenFile(open wal.OpenFileFunc) Option {
 	return func(opts *options) { opts.walOpenFile = open }
 }
 
@@ -260,6 +291,7 @@ func Open(dataDir string, maxMemtableBytes int, opts ...Option) (_ *StorageEngin
 		lock:     lock,
 
 		groupCommit: o.groupCommit,
+		obs:         o.observer,
 	}
 
 	// Replay in log order: a Restore's verbatim Replace only reproduces

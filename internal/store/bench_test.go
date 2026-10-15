@@ -25,7 +25,9 @@ var benchWriters = []int{1, 8, 64}
 // countingObserver counts the data engine's WAL fsyncs.
 type countingObserver struct{ syncs atomic.Int64 }
 
-func (o *countingObserver) WALSynced(time.Duration) { o.syncs.Add(1) }
+func (o *countingObserver) WALSynced(time.Duration)     { o.syncs.Add(1) }
+func (o *countingObserver) WALBatch(int)                {}
+func (o *countingObserver) WALCommitWait(time.Duration) {}
 
 func openBenchStore(b *testing.B) (*store.DataStore, *countingObserver) {
 	b.Helper()

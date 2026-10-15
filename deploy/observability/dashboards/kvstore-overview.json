@@ -424,7 +424,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Time to fsync one write to the data engine's write-ahead log, all pods together. From kv_wal_fsync_duration_seconds{engine=\"data\"}; replay at startup is not included.",
+      "description": "Time to fsync one batch of writes to the data engine's write-ahead log, all pods together: one write without group commit, every write in the batch with it (see WAL batch size). From kv_wal_fsync_duration_seconds{engine=\"data\"}; replay at startup is not included.",
       "fieldConfig": {
         "defaults": {
           "unit": "s"
@@ -623,7 +623,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Writes each pod stored per second: one data-engine WAL fsync per write it holds, as coordinator or replica (three per Put across the cluster). Every pod should be above zero under load. From kv_wal_fsync_duration_seconds_count.",
+      "description": "Writes each pod stored per second, as coordinator or replica (three per Put across the cluster), rollbacks and repairs included. Every pod should be above zero under load. From kv_storage_writes_total{engine=\"data\"}: with group commit, one fsync covers many writes, so fsyncs no longer count them.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -655,7 +655,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (instance) (rate(kv_wal_fsync_duration_seconds_count{job=\"kvstore\",engine=\"data\"}[1m]))",
+          "expr": "sum by (instance) (rate(kv_storage_writes_total{job=\"kvstore\",engine=\"data\"}[1m]))",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -664,12 +664,174 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Writes per data-engine WAL batch, written with one write and one fsync, all pods together: the writes that queued while the previous fsync ran. Always 1 without group commit. From kv_wal_batch_writes{engine=\"data\"}.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "id": 28,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(kv_wal_batch_writes_bucket{job=\"kvstore\",engine=\"data\"}[1m])))",
+          "legendFormat": "p99",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(kv_wal_batch_writes_bucket{job=\"kvstore\",engine=\"data\"}[1m])))",
+          "legendFormat": "p50",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(kv_wal_batch_writes_sum{job=\"kvstore\",engine=\"data\"}[1m])) / sum(rate(kv_wal_batch_writes_count{job=\"kvstore\",engine=\"data\"}[1m]))",
+          "legendFormat": "mean",
+          "refId": "C"
+        }
+      ],
+      "title": "WAL batch size (data engine)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "How long each data-engine write waited, once encoded, for its batch's WAL write to start, all pods together: the wait for the batches ahead of it (and for the write lock without group commit). Its own write and fsync follow (WAL fsync latency). From kv_wal_commit_wait_seconds{engine=\"data\"}.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "id": 29,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(kv_wal_commit_wait_seconds_bucket{job=\"kvstore\",engine=\"data\"}[1m])))",
+          "legendFormat": "p99",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(kv_wal_commit_wait_seconds_bucket{job=\"kvstore\",engine=\"data\"}[1m])))",
+          "legendFormat": "p50",
+          "refId": "B"
+        }
+      ],
+      "title": "WAL commit wait p50 / p99 (data engine)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "1 while a pod's storage engine (data or hints) has halted writes after a failed WAL write or fsync. Its /livez fails, so Kubernetes restarts it within about 30 seconds; the line should drop back to 0 when it does. From kv_storage_writes_halted.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "id": 30,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (instance, engine) (kv_storage_writes_halted{job=\"kvstore\"})",
+          "legendFormat": "{{instance}} {{engine}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Storage writes halted by pod",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 67
       },
       "id": 15,
       "panels": [],
@@ -692,7 +854,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 68
       },
       "id": 16,
       "options": {
@@ -749,7 +911,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 60
+        "y": 68
       },
       "id": 17,
       "options": {
@@ -783,7 +945,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 68
+        "y": 76
       },
       "id": 18,
       "panels": [],
@@ -810,7 +972,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 69
+        "y": 77
       },
       "id": 19,
       "options": {
@@ -858,7 +1020,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 69
+        "y": 77
       },
       "id": 20,
       "options": {
@@ -914,7 +1076,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 77
+        "y": 85
       },
       "id": 21,
       "options": {
@@ -948,7 +1110,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 85
+        "y": 93
       },
       "id": 22,
       "panels": [],
@@ -972,7 +1134,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 86
+        "y": 94
       },
       "id": 23,
       "options": {
@@ -1019,7 +1181,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 86
+        "y": 94
       },
       "id": 24,
       "options": {
@@ -1064,7 +1226,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 94
+        "y": 102
       },
       "id": 25,
       "options": {

@@ -39,8 +39,10 @@ func step(name string) {
 	}
 }
 
-// probeServer serves /livez (always 200) and /readyz (200 once ready and
-// while the node is in its membership, 503 otherwise) on one address —
+// probeServer serves /livez (200 unless the node's storage has halted
+// writes, which only a restart recovers from: 503 then) and /readyz (200
+// once ready and while the node is in its membership, 503 otherwise) on
+// one address —
 // cmd/node's Kubernetes liveness/readiness probes — the admin API (see
 // admin.go) once the node is set, and /metrics (see internal/telemetry),
 // which serves no kv metrics until then.
@@ -65,6 +67,14 @@ func newProbeServer(addr string) *probeServer {
 	p := &probeServer{done: make(chan struct{})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
+		// A storage engine whose WAL write or fsync failed has halted its
+		// writes until it is reopened: failing liveness has Kubernetes
+		// restart the container, which replays the WAL and accepts writes
+		// again.
+		if nd := p.node.Load(); nd != nil && nd.WritesHalted() {
+			http.Error(w, "storage writes halted after a failed WAL write or fsync; restart to recover", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
