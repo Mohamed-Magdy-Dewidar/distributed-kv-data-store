@@ -44,3 +44,16 @@ type Persister interface {
 // node. It's defined here rather than in the engine package so DataStore
 // can recognize it without importing the engine.
 var ErrRestoreIncomplete = errors.New("restore incomplete: versions outside the active memtable are still visible")
+
+// ErrWritesHalted reports that a Persister has stopped accepting writes
+// after its storage failed, and will again only once reopened (for
+// StorageEngine, after a failed WAL write or fsync; see
+// engine.ErrWritesHalted). Every write that fails because of the halt
+// wraps it: the writes made after it, which wrote nothing, and the ones
+// whose failure caused it, which may or may not be durable. Either way the
+// failure is the storage's, not the write's, and goes away with a restart:
+// a replica answers it as Unavailable, so the sender stores a hint
+// (internal/rpc, Server.Replicate). It's defined here rather than in the
+// engine package so DataStore's callers can recognize it without importing
+// the engine.
+var ErrWritesHalted = errors.New("writes halted until the store is reopened")

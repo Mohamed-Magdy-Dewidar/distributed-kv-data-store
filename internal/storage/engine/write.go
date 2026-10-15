@@ -46,9 +46,11 @@ const (
 )
 
 // ErrWritesHalted is what every write returns once a WAL write or fsync
-// has failed, wrapped with that failure. Reads still work. Reopening the
-// engine (restarting the node) replays the WAL and accepts writes again.
-var ErrWritesHalted = errors.New("engine: writes halted after a failed WAL write or fsync; reopen the engine")
+// has failed, wrapped with that failure: these writes wrote nothing. Reads
+// still work. Reopening the engine (restarting the node) replays the WAL
+// and accepts writes again. It wraps store.ErrWritesHalted, which the
+// failed batch's own errors wrap too (see walError).
+var ErrWritesHalted = fmt.Errorf("engine: writes halted after a failed WAL write or fsync; reopen the engine: %w", store.ErrWritesHalted)
 
 // ErrClosed is what a write returns once Close has begun.
 var ErrClosed = errors.New("engine: closed")
@@ -215,11 +217,15 @@ func (e *StorageEngine) commit(batch []*writeReq) {
 	}
 }
 
+// walError is the error of a write whose batch's WAL write or fsync
+// failed: the failure itself, and store.ErrWritesHalted, since it halted
+// the engine. Not ErrWritesHalted: unlike the writes after the halt, this
+// one may be durable.
 func walError(entry wal.Entry, err error) error {
 	if entry.Op == wal.OpRestore {
-		return fmt.Errorf("engine: wal append for restore of key %q: %w", entry.Key, err)
+		return fmt.Errorf("engine: wal append for restore of key %q: %w (%w)", entry.Key, err, store.ErrWritesHalted)
 	}
-	return fmt.Errorf("engine: wal append for key %q: %w", entry.Key, err)
+	return fmt.Errorf("engine: wal append for key %q: %w (%w)", entry.Key, err, store.ErrWritesHalted)
 }
 
 // apply applies batch to the active memtable in WAL order, setting each

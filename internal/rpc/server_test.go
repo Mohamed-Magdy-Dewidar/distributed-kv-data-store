@@ -66,6 +66,38 @@ func TestReplicateReturnsErrorWhenPersistFails(t *testing.T) {
 	}
 }
 
+// haltedPersister fails every write the way a storage engine does once a
+// WAL write or fsync has failed: wrapping store.ErrWritesHalted.
+type haltedPersister struct{ failingPersister }
+
+func (haltedPersister) Put(string, *model.DataItem) error {
+	return fmt.Errorf("engine: write of key: %w", store.ErrWritesHalted)
+}
+
+// TestReplicateAnswersUnavailableOnlyWhenWritesAreHalted: a store that has
+// halted writes is a failure of this node that its restart clears, so the
+// sender must see Unavailable and store a hint, as for a node that is down.
+// Any other persist failure stays Internal (see also
+// TestReplicateReturnsErrorWhenPersistFails).
+func TestReplicateAnswersUnavailableOnlyWhenWritesAreHalted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p    store.Persister
+		want codes.Code
+	}{
+		{"halted", haltedPersister{}, codes.Unavailable},
+		{"other failure", failingPersister{}, codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := store.NewDataStoreWithPersister("node-1", tc.p)
+			_, err := NewServer(ds, nil).Replicate(context.Background(), replicateRequest(t))
+			if code := status.Code(err); code != tc.want {
+				t.Fatalf("Replicate returned %v (%v), want %v", code, err, tc.want)
+			}
+		})
+	}
+}
+
 // TestFetchItemReportsMissingKeyAsNotFound: a key that genuinely doesn't
 // exist is Found=false with no error — only a failed read is an error.
 func TestFetchItemReportsMissingKeyAsNotFound(t *testing.T) {

@@ -333,19 +333,23 @@ func TestNoRecordIsWrittenAfterAFailedWrite(t *testing.T) {
 				faults.mu.Lock()
 				inject(faults)
 				faults.mu.Unlock()
-				if err := e.Put("failed", sampleItem("failed")); err == nil || errors.Is(err, ErrWritesHalted) {
-					t.Fatalf("Put during the fault returned %v, want the fault itself", err)
+				// The write whose failure halts the engine reports the fault,
+				// and store.ErrWritesHalted (a replica answers Unavailable for
+				// it), but not ErrWritesHalted: unlike the writes after it, it
+				// may be durable.
+				if err := e.Put("failed", sampleItem("failed")); err == nil || errors.Is(err, ErrWritesHalted) || !errors.Is(err, store.ErrWritesHalted) {
+					t.Fatalf("Put during the fault returned %v, want the fault itself, wrapping store.ErrWritesHalted only", err)
 				}
 				writes, _ := faults.counts()
 				sizes := faults.sizes()
 
 				for i := range 5 {
-					if err := e.Put(fmt.Sprintf("later-%d", i), sampleItem("later")); !errors.Is(err, ErrWritesHalted) {
-						t.Fatalf("later Put %d returned %v, want ErrWritesHalted", i, err)
+					if err := e.Put(fmt.Sprintf("later-%d", i), sampleItem("later")); !errors.Is(err, ErrWritesHalted) || !errors.Is(err, store.ErrWritesHalted) {
+						t.Fatalf("later Put %d returned %v, want ErrWritesHalted, wrapping store.ErrWritesHalted", i, err)
 					}
 				}
-				if err := e.Restore("a", nil); !errors.Is(err, ErrWritesHalted) {
-					t.Fatalf("later Restore returned %v, want ErrWritesHalted", err)
+				if err := e.Restore("a", nil); !errors.Is(err, ErrWritesHalted) || !errors.Is(err, store.ErrWritesHalted) {
+					t.Fatalf("later Restore returned %v, want ErrWritesHalted, wrapping store.ErrWritesHalted", err)
 				}
 				if w, _ := faults.counts(); w != writes {
 					t.Fatalf("%d WAL Writes after the failure, want none", w-writes)
