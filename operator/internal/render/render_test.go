@@ -44,7 +44,7 @@ func cluster(name, namespace string, replicas int32) *kvv1.KVCluster {
 			Replicas:    replicas,
 			Replication: kvv1.Replication{N: 3, W: 2, R: 2},
 			Image:       "kvnode:dev",
-			Storage:     kvv1.Storage{Size: resource.MustParse("1Gi")},
+			Storage:     kvv1.Storage{Size: resource.MustParse("1Gi"), GroupCommit: new(true)},
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
 				Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
@@ -286,7 +286,8 @@ type nodeConfig struct {
 		} `yaml:"members"`
 	} `yaml:"cluster"`
 	Storage struct {
-		MemtableBytes int `yaml:"memtableBytes"`
+		MemtableBytes int   `yaml:"memtableBytes"`
+		GroupCommit   *bool `yaml:"groupCommit"`
 	} `yaml:"storage"`
 	Intervals struct {
 		Compaction   time.Duration `yaml:"compaction"`
@@ -471,6 +472,34 @@ func TestConfigMapFollowsMembersNotReplicas(t *testing.T) {
 			}
 			if cfg.Cluster.N != 3 || cfg.Cluster.W != 2 || cfg.Cluster.R != 2 {
 				t.Errorf("n/w/r = %d/%d/%d, want 3/2/2", cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R)
+			}
+		})
+	}
+}
+
+// TestConfigMapGroupCommit: spec.storage.groupCommit reaches the node
+// config as storage.groupCommit, written out either way, and unset (an
+// object the API server has not defaulted) renders as on, the API's and
+// the node's default.
+func TestConfigMapGroupCommit(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		setting *bool
+		want    bool
+	}{
+		{"true", new(true), true},
+		{"false", new(false), false},
+		{"unset", nil, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := cluster("kv", "kvstore", 3)
+			c.Spec.Storage.GroupCommit = tt.setting
+			cfg := parseConfig(t, mustConfigMap(t, c, 0, Members(c, 3)))
+			if cfg.Storage.GroupCommit == nil {
+				t.Fatal("storage.groupCommit is not in the config, want it written out")
+			}
+			if *cfg.Storage.GroupCommit != tt.want {
+				t.Errorf("storage.groupCommit = %v, want %v", *cfg.Storage.GroupCommit, tt.want)
 			}
 		})
 	}

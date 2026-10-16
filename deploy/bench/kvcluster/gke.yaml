@@ -24,6 +24,7 @@ spec:
   storage:
     size: 10Gi
     storageClassName: standard-rwo
+    groupCommit: true # run.sh reset sets it from GROUP_COMMIT
   placement:
     onePodPerNode: true
     zoneSpread: true

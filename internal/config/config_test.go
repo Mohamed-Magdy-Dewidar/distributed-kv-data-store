@@ -347,3 +347,30 @@ func TestKV_NODE_IDOverlay(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadReadsStorageGroupCommit: storage.groupCommit is on when left out,
+// and false turns it off.
+func TestLoadReadsStorageGroupCommit(t *testing.T) {
+	for _, tc := range []struct {
+		name, line string
+		want       bool
+	}{
+		{"unset", "", true},
+		{"true", "  groupCommit: true\n", true},
+		{"false", "  groupCommit: false\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := strings.Replace(validYAML, "  memtableBytes: 4194304\n", "  memtableBytes: 4194304\n"+tc.line, 1)
+			cfg, err := Load(writeConfig(t, yaml))
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			if got := cfg.Storage.GroupCommitOn(); got != tc.want {
+				t.Errorf("GroupCommitOn() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if !(Storage{}).GroupCommitOn() {
+		t.Error("a Storage built without Load has group commit off, want on")
+	}
+}

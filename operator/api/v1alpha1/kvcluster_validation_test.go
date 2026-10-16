@@ -136,6 +136,9 @@ func TestDefaults(t *testing.T) {
 	if !s.Storage.Size.Equal(resource.MustParse("1Gi")) || s.Storage.StorageClassName != nil {
 		t.Errorf("storage = %+v, want size 1Gi and no class", s.Storage)
 	}
+	if s.Storage.GroupCommit == nil || !*s.Storage.GroupCommit {
+		t.Errorf("storage.groupCommit = %v, want true", s.Storage.GroupCommit)
+	}
 	if s.Placement != nil {
 		t.Errorf("placement = %+v, want none: it is off unless set", s.Placement)
 	}
@@ -159,6 +162,21 @@ func TestDefaults(t *testing.T) {
 				t.Errorf("resources.%s[%s] = %v, want %v", l.name, k, g.String(), v.String())
 			}
 		}
+	}
+}
+
+// TestStorageWithOnlyGroupCommitKeepsTheSizeDefault: a storage that sets
+// only groupCommit (deploy/bench/run.sh reset with GROUP_COMMIT=false) still
+// gets the default size.
+func TestStorageWithOnlyGroupCommitKeepsTheSizeDefault(t *testing.T) {
+	c := newCluster()
+	c.Spec.Storage = kvv1.Storage{GroupCommit: new(false)}
+	if err := k8s.Create(ctx(t), c); err != nil {
+		t.Fatal(err)
+	}
+	s := c.Spec.Storage
+	if !s.Size.Equal(resource.MustParse("1Gi")) || s.GroupCommit == nil || *s.GroupCommit {
+		t.Errorf("storage = size %s, groupCommit %v; want 1Gi, false", s.Size.String(), s.GroupCommit)
 	}
 }
 
@@ -284,6 +302,7 @@ func TestUpdateValidation(t *testing.T) {
 		{"replication r", func(c *kvv1.KVCluster) { c.Spec.Replication.R = 1 }, errReplicationImmutable},
 		{"storage size", func(c *kvv1.KVCluster) { c.Spec.Storage.Size = resource.MustParse("2Gi") }, errStorageImmutable},
 		{"storage class", func(c *kvv1.KVCluster) { c.Spec.Storage.StorageClassName = new("fast") }, errStorageImmutable},
+		{"storage groupCommit", func(c *kvv1.KVCluster) { c.Spec.Storage.GroupCommit = new(false) }, errStorageImmutable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

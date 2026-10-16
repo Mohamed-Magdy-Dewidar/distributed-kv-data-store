@@ -18,6 +18,7 @@ import (
 	"distributed-kv-datastore/internal/config"
 	"distributed-kv-datastore/internal/node"
 	"distributed-kv-datastore/internal/rpc"
+	"distributed-kv-datastore/internal/storage/engine"
 	"distributed-kv-datastore/internal/telemetry"
 )
 
@@ -225,7 +226,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	probe.setReady(true)
 	step("ready")
-	log.Printf("app: node %s ready (grpc %s, http %s)", cfg.NodeID, cfg.Listen.GRPC, cfg.Listen.HTTP)
+	log.Printf("app: node %s ready (grpc %s, http %s, group commit %t)", cfg.NodeID, cfg.Listen.GRPC, cfg.Listen.HTTP, cfg.Storage.GroupCommitOn())
 
 	<-ctx.Done()
 	log.Printf("app: node %s shutting down", cfg.NodeID)
@@ -279,8 +280,9 @@ func applyConfiguredMembership(nd *node.Node, cfg *config.Config) error {
 	return nil
 }
 
-// openNode builds cfg's node on cfg.DataDir. node.New's error is returned
-// as-is (it already names the data dir and wraps engine.ErrLocked when
+// openNode builds cfg's node on cfg.DataDir, with both storage engines
+// writing as storage.groupCommit says; opts come after that, so a test's
+// engine options are added to it. node.New's error is returned as-is (it already names the data dir and wraps engine.ErrLocked when
 // that's the cause). An empty DataDir is refused rather than opened, which
 // would put the node's files in the working directory: config.Load already
 // rejects it, and this guards callers that build a Config without Load.
@@ -288,6 +290,7 @@ func openNode(cfg *config.Config, opts ...node.Option) (*node.Node, error) {
 	if cfg.DataDir == "" {
 		return nil, errors.New("dataDir is required")
 	}
+	opts = append([]node.Option{node.WithEngineOptions(engine.WithGroupCommit(cfg.Storage.GroupCommitOn()))}, opts...)
 	return node.New(cfg.NodeID, cfg.SelfAddress(), cfg.Cluster.N, cfg.Cluster.W, cfg.Cluster.R,
 		cfg.NeighborAddrs(), cfg.DataDir, cfg.Storage.MemtableBytes, opts...)
 }

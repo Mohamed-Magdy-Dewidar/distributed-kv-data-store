@@ -22,3 +22,5 @@ spec:
       memory: 64Mi
     limits:
       memory: 512Mi
+  storage:
+    groupCommit: true # run.sh reset sets it from GROUP_COMMIT

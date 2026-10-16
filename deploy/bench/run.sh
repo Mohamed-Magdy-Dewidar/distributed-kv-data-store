@@ -26,6 +26,9 @@
 #   K6_PODS        1 | 2: k6 pods sharing the load [1]
 #   BENCH_OUT      results directory [docs/results/bench/<run>]
 #   KV_IMAGE       reset on GKE: the node image's Artifact Registry path
+#   GROUP_COMMIT   reset: the new KVCluster's spec.storage.groupCommit,
+#                  true | false [true]. It cannot change on a KVCluster, so
+#                  an A/B is a reset per side (docs/benchmarks.md)
 #   BENCH_YES=1    reset without asking
 #   BENCH_EXPORT=0 skip the Prometheus export (deploy/bench/export.sh)
 #   BENCH_SMOKE=1  allow writes, reads and mix on a dirty tree (below); the
@@ -145,7 +148,9 @@ if [ "$CMD" = reset ]; then
 	if [ "$OVERLAY" = gke ]; then
 		[ -n "${KV_IMAGE:-}" ] || die "reset on GKE needs KV_IMAGE, the node image's Artifact Registry path (docs/gke.md)."
 	fi
-	echo "This deletes the KVCluster kv in $NS on $BENCH_CONTEXT, its pods and its volumes (every key), and creates $sample."
+	GROUP_COMMIT=${GROUP_COMMIT:-true}
+	case "$GROUP_COMMIT" in true | false) ;; *) die "GROUP_COMMIT=$GROUP_COMMIT: want true or false." ;; esac
+	echo "This deletes the KVCluster kv in $NS on $BENCH_CONTEXT, its pods and its volumes (every key), and creates $sample with groupCommit: $GROUP_COMMIT."
 	if [ "${BENCH_YES:-}" != 1 ]; then
 		read -r -p "Type the context name to go on: " answer
 		[ "$answer" = "$BENCH_CONTEXT" ] || die "not confirmed."
@@ -156,11 +161,8 @@ if [ "$CMD" = reset ]; then
 	# The volumes outlive the KVCluster (whenDeleted: Retain).
 	k delete pvc -l app.kubernetes.io/name=kvstore --wait=true --timeout=600s
 	k delete configmap k6-bench-ledger --ignore-not-found >/dev/null
-	if [ "$OVERLAY" = gke ]; then
-		sed "s|image: KV_IMAGE|image: $KV_IMAGE|" "$sample" | k apply -f -
-	else
-		k apply -f "$sample"
-	fi
+	# KV_IMAGE is in the GKE sample only; kind's names its image.
+	sed -e "s|image: KV_IMAGE|image: ${KV_IMAGE:-KV_IMAGE}|" -e "s|groupCommit: true|groupCommit: $GROUP_COMMIT|" "$sample" | k apply -f -
 	echo "Waiting for the KVCluster kv to be Ready with $REPLICAS replicas..."
 	sleep 5
 	wait_ready
@@ -364,6 +366,8 @@ kubectl kustomize "deploy/bench/overlays/$OVERLAY" |
 	echo "kvcluster_epoch=${epoch:-0}"
 	echo "kv_image=$(kvc '{.spec.image}')"
 	echo "kv_memory_limit=$memlimit"
+	# What the pods read at start, not only the spec.
+	echo "group_commit=$(k get configmap kv-config -o 'jsonpath={.data.config\.yaml}' | sed -n 's/^ *groupCommit: //p')"
 	echo "k6_image=$(kubectl kustomize "deploy/bench/overlays/$OVERLAY" | sed -n 's/^ *image: //p')"
 	echo "commit=$COMMIT"
 	echo "smoke=$SMOKE"

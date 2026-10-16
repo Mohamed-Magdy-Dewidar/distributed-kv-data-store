@@ -165,9 +165,8 @@ func ConfigMap(c *kvv1.KVCluster, epoch uint64, members map[string]string) (*cor
 	}
 	// Today's deploy/k8s/configmap.yaml values; see docs/kubernetes.md for
 	// the anti-entropy interval.
-	b.WriteString(`storage:
-  memtableBytes: 4194304
-intervals:
+	fmt.Fprintf(&b, "storage:\n  memtableBytes: 4194304\n  groupCommit: %t\n", groupCommit(&c.Spec.Storage))
+	b.WriteString(`intervals:
   compaction: 30s
   antiEntropy: 15m
   hintDelivery: 10s
@@ -186,6 +185,12 @@ health:
 		ObjectMeta: objectMeta(c, ConfigMapName(c), operatorLabels(c)),
 		Data:       map[string]string{ConfigKey: b.String()},
 	}, nil
+}
+
+// groupCommit is spec.storage.groupCommit, on when unset as the API
+// server's default and the node's both are.
+func groupCommit(s *kvv1.Storage) bool {
+	return s.GroupCommit == nil || *s.GroupCommit
 }
 
 func grpcServicePort() corev1.ServicePort {

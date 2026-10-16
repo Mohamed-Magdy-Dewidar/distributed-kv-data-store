@@ -44,6 +44,7 @@ data:
           address: kv-9.kv.kvstore.svc.cluster.local:7000
     storage:
       memtableBytes: 4194304
+      groupCommit: true
     intervals:
       compaction: 30s
       antiEntropy: 15m

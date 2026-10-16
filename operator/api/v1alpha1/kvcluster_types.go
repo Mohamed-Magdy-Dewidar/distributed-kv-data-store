@@ -52,8 +52,11 @@ type KVClusterSpec struct {
 	// +required
 	Image string `json:"image"`
 
-	// storage is each node's data volume. It cannot change after creation:
-	// a StatefulSet's volumeClaimTemplates are immutable.
+	// storage is each node's data volume, and how its storage engine
+	// writes. It cannot change after creation: a StatefulSet's
+	// volumeClaimTemplates are immutable, and a node reads groupCommit from
+	// the ConfigMap only when it starts, which the operator rewrites only
+	// for a membership change.
 	// +kubebuilder:default={size:"1Gi"}
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storage is immutable"
 	// +optional
@@ -152,6 +155,15 @@ type Storage struct {
 	// class when unset.
 	// +optional
 	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// groupCommit is the node config's storage.groupCommit: each storage
+	// engine writes every write that queued during a WAL fsync with the
+	// next one, one fsync for the batch. false writes and fsyncs each write
+	// on its own, as before group commit: for rollback, and for measuring
+	// one against the other (docs/benchmarks.md).
+	// +kubebuilder:default=true
+	// +optional
+	GroupCommit *bool `json:"groupCommit,omitempty"`
 }
 
 // Phase summarizes where a KVCluster is.

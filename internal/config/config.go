@@ -42,6 +42,19 @@ type Cluster struct {
 
 type Storage struct {
 	MemtableBytes int `yaml:"memtableBytes"`
+
+	// GroupCommit has both storage engines write every write that queued
+	// during a WAL fsync with the next one, one fsync for the batch
+	// (engine.WithGroupCommit). Unset means on; false writes and fsyncs
+	// each write on its own, as before group commit, for rollback and for
+	// measuring one against the other. Read with GroupCommitOn.
+	GroupCommit *bool `yaml:"groupCommit"`
+}
+
+// GroupCommitOn reports storage.groupCommit: true unless it is set to
+// false.
+func (s Storage) GroupCommitOn() bool {
+	return s.GroupCommit == nil || *s.GroupCommit
 }
 
 type Intervals struct {

@@ -82,7 +82,7 @@ else is defaulted. (That is the kind sample. The GKE one,
 | `spec.replicas` | (required, at least `replication.n`) | yes: the operator moves there one node at a time |
 | `spec.image` | (required) | yes: applied as a rolling update, only while the cluster is stable |
 | `spec.replication` (`n`, `w`, `r`) | 3, 2, 2 | no: N is part of every membership's fingerprint |
-| `spec.storage` (`size`, `storageClassName`) | 1Gi, the default class | no: a StatefulSet's volume templates are immutable |
+| `spec.storage` (`size`, `storageClassName`, `groupCommit`) | 1Gi, the default class, `true` | no: a StatefulSet's volume templates are immutable, and a node reads `groupCommit` (the node config's `storage.groupCommit`, [benchmarks.md](benchmarks.md)) only when it starts, from a ConfigMap the operator rewrites only for a membership change. The operator writes `groupCommit` into every node config, so the node image must be at least as new as the field (an older node rejects the config's unknown field) |
 | `spec.resources` | requests 50m / 64Mi, limit 256Mi memory (measured, see [kubernetes.md](kubernetes.md#resources)) | yes: rolling update while stable |
 | `spec.drainTimeout` | 30m | yes |
 | `spec.placement` (`onePodPerNode`, `zoneSpread`, `nodeSelector`, `tolerations`) | none: the scheduler places the pods freely | yes: rolling update while stable; see [Placement and GKE](#placement-and-gke) |
