@@ -40,7 +40,8 @@ the WAL's fsync:
 Each reports ns/op (the inverse of throughput), the p50 and p99 latency of
 one operation (`p50-ms`, `p99-ms`), and the Put benchmarks report
 `fsyncs/op`, the WAL fsyncs per write. Values are 256 bytes and the memtable
-4 MiB, as in the cluster, so flushes run during the benchmark.
+4 MiB, as in the cluster, so flushes run during the benchmark. Results, and
+how to compare commits within one run: [benchmarks.md](benchmarks.md#the-go-write-benchmarks).
 
 They measure fsync, so they run on Linux in a container's own filesystem: a
 Windows bind mount or `FlushFileBuffers` gives other numbers. Copy the source

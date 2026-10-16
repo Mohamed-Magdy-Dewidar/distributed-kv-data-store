@@ -1,0 +1,48 @@
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/writers=1-8         	    1000	   8085857 ns/op	         1.000 fsyncs/op	         6.967 p50-ms	        19.42 p99-ms
+BenchmarkPutParallel/writers=8-8         	    1000	   7565098 ns/op	         1.000 fsyncs/op	        59.59 p50-ms	        77.64 p99-ms
+BenchmarkPutParallel/writers=64-8        	    1000	   8239470 ns/op	         1.000 fsyncs/op	       497.2 p50-ms	       964.3 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/writers=1-8         	    1000	   7212716 ns/op	         1.000 fsyncs/op	         6.682 p50-ms	        14.48 p99-ms
+BenchmarkPutParallel/writers=8-8         	    1000	   7816781 ns/op	         1.000 fsyncs/op	        61.07 p50-ms	        82.71 p99-ms
+BenchmarkPutParallel/writers=64-8        	    1000	   7749250 ns/op	         1.000 fsyncs/op	       492.5 p50-ms	       559.4 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/writers=1-8         	    1000	   7054065 ns/op	         1.000 fsyncs/op	         6.627 p50-ms	        13.57 p99-ms
+BenchmarkPutParallel/writers=8-8         	    1000	   7120639 ns/op	         1.000 fsyncs/op	        54.05 p50-ms	        74.72 p99-ms
+BenchmarkPutParallel/writers=64-8        	    1000	   7152055 ns/op	         1.000 fsyncs/op	       457.0 p50-ms	       489.4 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/writers=1-8         	    1000	   7895060 ns/op	         1.000 fsyncs/op	         7.130 p50-ms	        15.08 p99-ms
+BenchmarkPutParallel/writers=8-8         	    1000	   7417197 ns/op	         1.000 fsyncs/op	        58.00 p50-ms	        75.31 p99-ms
+BenchmarkPutParallel/writers=64-8        	    1000	   7416743 ns/op	         1.000 fsyncs/op	       470.1 p50-ms	       531.0 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/writers=1-8         	    1000	   7953895 ns/op	         1.000 fsyncs/op	         7.486 p50-ms	        15.48 p99-ms
+BenchmarkPutParallel/writers=8-8         	    1000	   7875188 ns/op	         1.000 fsyncs/op	        61.69 p50-ms	        77.95 p99-ms
+BenchmarkPutParallel/writers=64-8        	    1000	   7690113 ns/op	         1.000 fsyncs/op	       489.9 p50-ms	       529.6 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/writers=1-8         	    1000	   7805386 ns/op	         1.000 fsyncs/op	         7.258 p50-ms	        15.44 p99-ms
+BenchmarkPutParallel/writers=8-8         	    1000	   7702654 ns/op	         1.000 fsyncs/op	        60.49 p50-ms	        80.02 p99-ms
+BenchmarkPutParallel/writers=64-8        	    1000	   7881336 ns/op	         1.000 fsyncs/op	       502.7 p50-ms	       533.5 p99-ms
+PASS

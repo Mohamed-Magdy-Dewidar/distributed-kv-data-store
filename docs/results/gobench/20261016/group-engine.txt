@@ -1,0 +1,66 @@
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/mode=serial/writers=1-8         	    1000	   7562658 ns/op	         1.000 fsyncs/op	         6.921 p50-ms	        15.52 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=8-8         	    1000	   7842714 ns/op	         1.000 fsyncs/op	        57.48 p50-ms	       192.0 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=64-8        	    1000	   7228364 ns/op	         1.000 fsyncs/op	       457.5 p50-ms	       510.7 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=1-8          	    1000	   7333789 ns/op	         1.000 fsyncs/op	         6.852 p50-ms	        13.80 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=8-8          	    1000	   1879168 ns/op	         0.2500 fsyncs/op	        14.09 p50-ms	        24.78 p99-ms	         4.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=64-8         	    1000	    225986 ns/op	         0.03100 fsyncs/op	        14.03 p50-ms	        17.87 p99-ms	        32.26 writes/fsync
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/mode=serial/writers=1-8         	    1000	   7758186 ns/op	         1.000 fsyncs/op	         6.805 p50-ms	        15.86 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=8-8         	    1000	   7227286 ns/op	         1.000 fsyncs/op	        56.51 p50-ms	        76.66 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=64-8        	    1000	   7204296 ns/op	         1.000 fsyncs/op	       459.2 p50-ms	       495.9 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=1-8          	    1000	   7542452 ns/op	         1.000 fsyncs/op	         7.002 p50-ms	        14.76 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=8-8          	    1000	   1798652 ns/op	         0.2500 fsyncs/op	        13.83 p50-ms	        24.13 p99-ms	         4.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=64-8         	    1000	    211944 ns/op	         0.03200 fsyncs/op	        12.40 p50-ms	        19.72 p99-ms	        31.25 writes/fsync
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/mode=serial/writers=1-8         	    1000	   7705435 ns/op	         1.000 fsyncs/op	         7.224 p50-ms	        14.91 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=8-8         	    1000	   7939251 ns/op	         1.000 fsyncs/op	        61.78 p50-ms	        86.69 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=64-8        	    1000	   7754217 ns/op	         1.000 fsyncs/op	       493.1 p50-ms	       550.7 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=1-8          	    1000	   8048057 ns/op	         1.000 fsyncs/op	         7.332 p50-ms	        16.23 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=8-8          	    1000	   1800586 ns/op	         0.2490 fsyncs/op	        13.90 p50-ms	        22.12 p99-ms	         4.016 writes/fsync
+BenchmarkPutParallel/mode=group/writers=64-8         	    1000	    242579 ns/op	         0.03200 fsyncs/op	        14.19 p50-ms	        21.15 p99-ms	        31.25 writes/fsync
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/mode=serial/writers=1-8         	    1000	   7638601 ns/op	         1.000 fsyncs/op	         7.079 p50-ms	        15.49 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=8-8         	    1000	   7481068 ns/op	         1.000 fsyncs/op	        57.87 p50-ms	        81.82 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=64-8        	    1000	   7346680 ns/op	         1.000 fsyncs/op	       465.1 p50-ms	       510.5 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=1-8          	    1000	   7232390 ns/op	         1.000 fsyncs/op	         6.778 p50-ms	        14.91 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=8-8          	    1000	   1772414 ns/op	         0.2500 fsyncs/op	        13.46 p50-ms	        23.23 p99-ms	         4.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=64-8         	    1000	    231775 ns/op	         0.03200 fsyncs/op	        13.67 p50-ms	        21.28 p99-ms	        31.25 writes/fsync
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/mode=serial/writers=1-8         	    1000	   7874369 ns/op	         1.000 fsyncs/op	         7.338 p50-ms	        15.40 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=8-8         	    1000	   7653435 ns/op	         1.000 fsyncs/op	        59.46 p50-ms	        78.39 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=64-8        	    1000	   7564530 ns/op	         1.000 fsyncs/op	       477.4 p50-ms	       537.9 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=1-8          	    1000	   7514037 ns/op	         1.000 fsyncs/op	         6.985 p50-ms	        14.85 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=8-8          	    1000	   1960806 ns/op	         0.2500 fsyncs/op	        14.75 p50-ms	        28.04 p99-ms	         4.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=64-8         	    1000	    250421 ns/op	         0.03200 fsyncs/op	        14.96 p50-ms	        22.82 p99-ms	        31.25 writes/fsync
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/storage/engine
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkPutParallel/mode=serial/writers=1-8         	    1000	   7136607 ns/op	         1.000 fsyncs/op	         6.571 p50-ms	        14.13 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=8-8         	    1000	   7255921 ns/op	         1.000 fsyncs/op	        57.22 p50-ms	        73.81 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=serial/writers=64-8        	    1000	   7773203 ns/op	         1.000 fsyncs/op	       496.2 p50-ms	       534.8 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=1-8          	    1000	   7614542 ns/op	         1.000 fsyncs/op	         7.112 p50-ms	        14.70 p99-ms	         1.000 writes/fsync
+BenchmarkPutParallel/mode=group/writers=8-8          	    1000	   1921778 ns/op	         0.2480 fsyncs/op	        14.54 p50-ms	        25.05 p99-ms	         4.032 writes/fsync
+BenchmarkPutParallel/mode=group/writers=64-8         	    1000	    268266 ns/op	         0.03200 fsyncs/op	        16.17 p50-ms	        25.35 p99-ms	        31.25 writes/fsync
+PASS

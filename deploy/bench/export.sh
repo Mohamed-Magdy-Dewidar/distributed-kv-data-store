@@ -13,7 +13,8 @@
 #               the series' labels, the value)
 #   window.env  the whole window at once: request counts, Put/Get and fsync
 #               quantiles over the window (histogram_quantile of the buckets'
-#               increase), anti-entropy rounds, quorum failures, hints,
+#               increase; ">=" marks one past the highest finite bucket, a
+#               lower bound), anti-entropy rounds, quorum failures, hints,
 #               per-pod CPU and how evenly the pods coordinated requests
 #   queries.txt every query, as sent
 #
@@ -91,7 +92,12 @@ def iso(t):
 def q_rate(method):
     return f'sum by (code) (rate(kv_client_request_duration_seconds_count{{{J},method="{method}"}}[1m]))'
 def q_quant(q, metric, sel):
-    return f'histogram_quantile({q}, sum by (le) (rate({metric}_bucket{{{J}{sel}}}[1m])))'
+    return floor(metric, f'histogram_quantile({q}, sum by (le) (rate({metric}_bucket{{{J}{sel}}}[1m])))')
+# A batch holds at least one write, but histogram_quantile interpolates
+# inside the lowest bucket (le="1") from 0: a run of single-write batches
+# would read as p50 0.5. Any batch quantile below 1 is exactly 1.
+def floor(metric, query):
+    return f"clamp_min({query}, 1)" if metric == "kv_wal_batch_writes" else query
 RANGE = {
     "put_rate_by_code": (q_rate("Put"), ["code"], "puts_per_second"),
     "get_rate_by_code": (q_rate("Get"), ["code"], "gets_per_second"),
@@ -138,8 +144,14 @@ def scalar(query, empty=0.0):
 def by(query, label):
     return {s["metric"].get(label, ""): float(s["value"][1]) for s in inst(query)}
 def wq(q, metric, sel, scale=1000):
-    v = scalar(f'histogram_quantile({q}, sum by (le) (increase({metric}_bucket{{{J}{sel}}}[{D}])))', float("nan"))
-    return "" if v != v else f"{v * scale:.2f}"  # NaN or no series: no samples
+    v = scalar(floor(metric, f'histogram_quantile({q}, sum by (le) (increase({metric}_bucket{{{J}{sel}}}[{D}])))'), float("nan"))
+    if v != v:
+        return ""  # NaN or no series: no samples
+    # A quantile in the +Inf bucket comes back as the highest finite bound:
+    # it says only that the value is at least that, so it is written ">=".
+    les = [float(s["metric"]["le"]) for s in inst(f'count by (le) ({metric}_bucket{{{J}{sel}}})')]
+    top = max((le for le in les if le != float("inf")), default=float("inf"))
+    return f"{'>=' if v >= top else ''}{v * scale:.2f}"
 
 summary = {"window_start": start_s, "window_end": end_s, "window_s": window}
 for m in ("Put", "Get"):

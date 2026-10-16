@@ -642,9 +642,8 @@ matter).
 ## Session 3: the failure tests (runbook)
 
 The four failure tests of [chaos.md](chaos.md) on this cluster, under load,
-each with its prediction written down before it runs (part A); then, once
-group commit is built, the write benchmarks again (part B, a placeholder
-until then). It follows [A session](#a-session) for the set-up and the
+each with its prediction written down before it runs (part A); then the
+write benchmarks again, with group commit off and on (part B). It follows [A session](#a-session) for the set-up and the
 teardown, with the loadgen pool (the recorders run there: neither a
 database VM's loss nor the system node's may take them down) and the
 workloads' logs on, and replaces its steps 7 to 9.
@@ -688,7 +687,7 @@ workloads' logs on, and replaces its steps 7 to 9.
    proxy to pods still work (they go through GKE's konnectivity agents)?
    kube-dns is down: does anything fail for want of it?
 
-**Estimate: about 3.5 hours, about $3.10** (the cluster with one loadgen
+**Estimate: about 3.75 hours, about $3.35** (the cluster with one loadgen
 node at $0.88/h; a node the autoscaler may add in tests 1 and 2, about
 $0.07/h each for a quarter of an hour; NAT data processing $0.05-0.10).
 Without part B, about 2.75 hours and $2.40. Budget 4.5 hours and $4.50.
@@ -705,16 +704,17 @@ before the session; this page has not recorded them).
 | Test 3, partition | ~15 min |
 | Test 4, system-node loss | ~15 min |
 | Anti-entropy interval, logs, convergence | ~20 min |
-| Part B, the write benchmarks (placeholder) | ~45 min |
+| Part B, the write benchmarks, group commit off and on | ~60 min |
 | Teardown | ~15 min |
 
 ### Before
 
 1. The tree is clean at the commit the images will be built from, and
    `make test` passes. The node image carries `/kvchaos` (`Dockerfile`).
-2. **Group commit**: if it is built and merged, the images have it, and
-   part B runs; record the commit. If not, skip part B: the failure tests
-   do not depend on it.
+2. **Group commit**: the images are from `e4627d6` or later, which have
+   group commit and `spec.storage.groupCommit` (and the CRD with it, from
+   the operator install). Part B needs both; the failure tests run with
+   group commit on, the default. Record the commit.
 3. Your address matches `my_ip_cidr` ([Before the first session](#before-the-first-session), item 6).
 4. In `infra/gke/terraform.tfvars` (not with `-var`: a later plain `apply`
    would drop them):
@@ -892,34 +892,99 @@ unexpected failure or success) is a finding: record it and go on.
     grep -E 'is dead|alive again' $CHAOS_OUT/logs/kvstore.log    # every pair's cut and heal
     ```
 
-### Part B: the write benchmarks with group commit (placeholder)
+### Part B: the write benchmarks with group commit
 
-Not runnable yet: this part is written when group commit exists. Session 2
-put the write knee at 300-400/s for p99 and 500/s for p50, with the kv pods
-under 0.4 cores and fsync p99 near 5 ms, most likely writes queueing for
-the engine's write lock ([benchmarks.md](benchmarks.md#open-questions));
-group commit is the fix to measure. When it is built, fill in:
+Session 2 put the write knee at 300-400/s for p99 and 500/s for p50, with
+the kv pods under 0.4 cores and fsync p99 near 5 ms: writes queueing for
+the engine's write lock, one fsync each
+([benchmarks.md](benchmarks.md#open-questions)). Group commit is the fix,
+and part B measures it as an A/B **in this session, on this cluster**:
+the same write series with `spec.storage.groupCommit` off, then on. The
+off side, not session 2, is the baseline: it has the same GKE version,
+VMs and disks as the on side, and checks that the session reproduces
+session 2. On kind the same A/B moved the write ceiling from about
+104/s to past 300/s, the end of its ramp
+([benchmarks.md](benchmarks.md#kind-2026-10-16-group-commit-off-and-on-ab)).
 
-- **After the convergence check only**: `run.sh reset` replaces the
-  failure tests' KVCluster and its data.
-- The runs: `reset`, `preload`, writes constant (`RATE=40`), the write
-  ramp of [Series A](#series-a-reads-and-writes), and the
-  [decision point](#decision-point-writes-above-500s) if it shows no knee;
-  their keys within the cap.
-- The prediction to write down first: where the knee should move, and what
-  shows that group commit is what moved it (fsyncs per Put, the write
-  lock's wait, if group commit adds a histogram of it).
-- The comparison with session 2, run by run.
+**After the convergence check only** (step 15): `run.sh reset` replaces
+the failure tests' KVCluster and its data. `groupCommit` cannot change on
+a KVCluster, so each side is its own `reset`.
+
+17. **Write the prediction down first** (in the session's results section,
+    before the first run):
+
+    | Side | Prediction |
+    |---|---|
+    | Off | Session 2's series A again: Put p99 turns up at 300-400/s, p50 at 500/s; 1.00 writes per fsync at every step; commit wait p99 rising with the rate while fsync p99 stays near 5 ms and the kv pods under 0.4 cores |
+    | On, to 500/s | No knee: Put p99 within about 2x its 100/s value at every step; writes per fsync above 1 and rising with the rate; commit wait p99 near one fsync (5-10 ms) rather than rising; constant 40/s no slower than off (a lone write waits only for its own fsync) |
+    | On, past 500/s | A knee between 500 and 900/s, set by something other than the write lock: the busiest kv pod's CPU (1.93 cores allocatable), the replication fan-out, or fsync time itself growing with batch size. Which one, from the same window |
+
+    What shows that group commit moved the knee, not something else: the
+    two sides differ only in the flag (`group_commit` in `run.env`), and
+    on the on side writes per fsync (`writes_per_fsync`,
+    `wal_batch_writes_mean_data.csv`) rises above 1 exactly as the commit
+    wait (`wal_commit_wait_p99_data.csv`) stops rising with the rate.
+
+18. **Off**, keys as session 2's series A without its reads (128,000 of
+    130,000):
+
+    ```sh
+    GROUP_COMMIT=false KV_IMAGE=$NODE_IMG deploy/bench/run.sh reset   # type the context name to confirm
+    deploy/bench/run.sh preload                                         # must be clean
+    RATE=40 deploy/bench/run.sh writes                                  # ~6.5 min
+    PROFILE=ramp RAMP_FROM=100 RAMP_TO=500 RAMP_STEP=100 STEP_SECONDS=60 deploy/bench/run.sh writes   # 5m20s
+    ```
+
+    `BENCH_CONTEXT=$CTX` is still exported from step 6. Check `run.env`:
+    `group_commit=false`.
+
+19. **On**, the same four commands with `GROUP_COMMIT=true` (or left out:
+    it is the default); `run.env` says `group_commit=true`.
+20. **On, past 500/s**, if the on ramp shows no knee at 500/s. Writes read
+    no preloaded keys, so there is no preload: the cap (130,000) leaves
+    room for 119,000 keys, 500 to 900/s in steps of 30s:
+
+    ```sh
+    KV_IMAGE=$NODE_IMG deploy/bench/run.sh reset      # type the context name to confirm
+    PROFILE=ramp RAMP_FROM=500 RAMP_TO=900 RAMP_STEP=100 STEP_SECONDS=30 deploy/bench/run.sh writes   # 2m50s
+    ```
+
+    This KVCluster starts empty where the 500/s step of step 19 had about
+    98,000 keys behind it (20,000 preloaded), so compare its 500/s step
+    with step 19's before reading the steps above it. k6's CPU must stay
+    under 1500m (session 2's write ramp peaked at 304m at 500/s). Above
+    900/s the cap and the memory limit have to be raised together
+    ([The key cap](benchmarks.md#the-key-cap)), before a session, not
+    during one.
+21. **Read each run's knee** as in [Series A](#series-a-reads-and-writes),
+    step by step from `steps.csv`, and confirmed in Prometheus over the
+    same minutes: Put p99, fsync p99, writes per fsync and commit wait
+    p99, and the kv pods' CPU. A quantile at the top bucket is a lower
+    bound (`>=` in `window.env`; `5` for Put p99 and `10` for commit wait
+    in the CSVs, [What each run saves](benchmarks.md#what-each-run-saves)).
+    Then compare, run by run:
+
+    | Compare | With | For |
+    |---|---|---|
+    | Off, constant 40/s | Session 2 `20261013-094331` (Put p50 6.68 / p99 9.96 ms, fsync p99 4.91 ms) | That the session reproduces session 2: within about 20%, or record the difference and compare on with off only |
+    | Off, ramp | Session 2 `20261013-094941`, its step table (p99 104 ms at 300/s, p50 14.4 ms at 500/s) | The same; the knee step should match |
+    | On, constant 40/s | Off, constant 40/s | No cost at a low rate: p50 within the noise, writes per fsync near 1 |
+    | On, ramp | Off, ramp, step by step | The A/B: p99, p50, writes per fsync and commit wait at each rate |
+    | On, past 500/s | Its own steps, and the busiest pod's CPU | Where the next knee is, and what sets it |
+
+    Record them in [benchmarks.md](benchmarks.md#runs) as a "GKE, session 3,
+    part B" section, in the shape of session 2's.
 
 ### Teardown
 
-17. `$c watch-stop`; check that no `kubectl port-forward` of yours is left.
-18. [A session](#a-session), step 10: check your address, delete the
+22. `$c watch-stop`; check that no `kubectl port-forward` of yours is left.
+23. [A session](#a-session), step 10: check your address, delete the
     KVCluster and its volumes, `terraform destroy`, and every list empty.
     Then set `loadgen_enabled = false` and `workload_logging = false` in
     `terraform.tfvars`.
-19. Record the session (a "Session 3 (results)" section here, the
-    predictions of step 8 first) and commit `$CHAOS_OUT`: the per-request
+24. Record the session (a "Session 3 (results)" section here, the
+    predictions of step 8 and step 17 first) and commit `$CHAOS_OUT` and
+    the part B runs' `docs/results/bench/` directories: the per-request
     records and read-backs stay out (`docs/results/chaos/.gitignore`).
 
 ## The gcloud configuration

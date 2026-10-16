@@ -1,0 +1,54 @@
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/store
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkDataStorePutParallel/writers=1-8         	    1000	   7202735 ns/op	         1.000 fsyncs/op	         6.703 p50-ms	        14.86 p99-ms
+BenchmarkDataStorePutParallel/writers=8-8         	    1000	   1734646 ns/op	         0.2500 fsyncs/op	        13.18 p50-ms	        22.06 p99-ms
+BenchmarkDataStorePutParallel/writers=64-8        	    1000	    233447 ns/op	         0.03200 fsyncs/op	        13.10 p50-ms	        22.01 p99-ms
+BenchmarkDataStoreGetWhileWriting-8               	    1000	       171.4 ns/op	         0.0003880 p50-ms	         0.001197 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/store
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkDataStorePutParallel/writers=1-8         	    1000	   7537701 ns/op	         1.000 fsyncs/op	         6.916 p50-ms	        18.68 p99-ms
+BenchmarkDataStorePutParallel/writers=8-8         	    1000	   1817759 ns/op	         0.2500 fsyncs/op	        13.84 p50-ms	        21.97 p99-ms
+BenchmarkDataStorePutParallel/writers=64-8        	    1000	    231089 ns/op	         0.03200 fsyncs/op	        14.02 p50-ms	        18.87 p99-ms
+BenchmarkDataStoreGetWhileWriting-8               	    1000	       249.0 ns/op	         0.0004040 p50-ms	         0.001880 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/store
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkDataStorePutParallel/writers=1-8         	    1000	   7467962 ns/op	         1.000 fsyncs/op	         7.015 p50-ms	        14.40 p99-ms
+BenchmarkDataStorePutParallel/writers=8-8         	    1000	   1918797 ns/op	         0.2490 fsyncs/op	        14.77 p50-ms	        24.10 p99-ms
+BenchmarkDataStorePutParallel/writers=64-8        	    1000	    249690 ns/op	         0.03200 fsyncs/op	        14.36 p50-ms	        22.20 p99-ms
+BenchmarkDataStoreGetWhileWriting-8               	    1000	       212.0 ns/op	         0.0004960 p50-ms	         0.002600 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/store
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkDataStorePutParallel/writers=1-8         	    1000	   7095529 ns/op	         1.000 fsyncs/op	         6.684 p50-ms	        13.45 p99-ms
+BenchmarkDataStorePutParallel/writers=8-8         	    1000	   1821815 ns/op	         0.2500 fsyncs/op	        13.65 p50-ms	        26.16 p99-ms
+BenchmarkDataStorePutParallel/writers=64-8        	    1000	    240509 ns/op	         0.03200 fsyncs/op	        13.95 p50-ms	        22.48 p99-ms
+BenchmarkDataStoreGetWhileWriting-8               	    1000	       154.2 ns/op	         0.0004140 p50-ms	         0.001874 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/store
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkDataStorePutParallel/writers=1-8         	    1000	   7981513 ns/op	         1.000 fsyncs/op	         7.366 p50-ms	        16.28 p99-ms
+BenchmarkDataStorePutParallel/writers=8-8         	    1000	   1913076 ns/op	         0.2480 fsyncs/op	        14.45 p50-ms	        24.93 p99-ms
+BenchmarkDataStorePutParallel/writers=64-8        	    1000	    259462 ns/op	         0.03200 fsyncs/op	        14.89 p50-ms	        27.13 p99-ms
+BenchmarkDataStoreGetWhileWriting-8               	    1000	       326.0 ns/op	         0.0007020 p50-ms	         0.002918 p99-ms
+PASS
+goos: linux
+goarch: amd64
+pkg: distributed-kv-datastore/internal/store
+cpu: Intel(R) Core(TM) i7-14650HX
+BenchmarkDataStorePutParallel/writers=1-8         	    1000	   8094977 ns/op	         1.000 fsyncs/op	         7.521 p50-ms	        16.39 p99-ms
+BenchmarkDataStorePutParallel/writers=8-8         	    1000	   2060627 ns/op	         0.2490 fsyncs/op	        15.40 p50-ms	        34.75 p99-ms
+BenchmarkDataStorePutParallel/writers=64-8        	    1000	    300513 ns/op	         0.03300 fsyncs/op	        16.46 p50-ms	        35.15 p99-ms
+BenchmarkDataStoreGetWhileWriting-8               	    1000	       425.5 ns/op	         0.0007210 p50-ms	         0.002393 p99-ms
+PASS

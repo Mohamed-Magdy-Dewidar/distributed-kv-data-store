@@ -65,6 +65,7 @@ stores up to ~100k keys per pod is not OOM killed. Otherwise the defaults:
 | Anti-entropy interval | 15m (`intervals.antiEntropy`, the default) |
 | Storage | kind: 1Gi `standard`; GKE: 10Gi `standard-rwo` |
 | Placement | kind: none (one node); GKE: one pod per node, spread over zones, the tainted `kvstore` pool |
+| Group commit | on (`spec.storage.groupCommit`, the default); `GROUP_COMMIT=false` at `reset` for an A/B, since it cannot change on a KVCluster. `run.env` records it as `group_commit`, from the ConfigMap the pods started with |
 
 `run.sh` refuses to run unless the KVCluster `kv` is Ready with 6 replicas
 and has the 512Mi limit.
@@ -180,6 +181,7 @@ is `BENCH_CONTEXT` (default `kind-kvstore`; on GKE,
 ```sh
 kubectl config use-context kind-kvstore
 deploy/bench/run.sh reset                       # deletes kv and its volumes; asks first
+GROUP_COMMIT=false deploy/bench/run.sh reset    # the same, with group commit off (an A/B's other side)
 deploy/bench/run.sh preload
 RATE=200 DURATION=300 deploy/bench/run.sh writes
 PROFILE=ramp deploy/bench/run.sh reads
@@ -229,15 +231,18 @@ to change it):
 
 | File | Contents |
 |---|---|
-| `run.env` | Every parameter, the KVCluster's uid, epoch, image and memory limit, the k6 image, the commit (`-dirty` if a tracked file outside `docs/` differed from HEAD), `smoke` (1 if run with `BENCH_SMOKE=1`), the script's sha256, k6's node and machine type, the measured window, and the totals: dropped iterations, errors, connections |
+| `run.env` | Every parameter, the KVCluster's uid, epoch, image, memory limit and `group_commit`, the k6 image, the commit (`-dirty` if a tracked file outside `docs/` differed from HEAD), `smoke` (1 if run with `BENCH_SMOKE=1`), the script's sha256, k6's node and machine type, the measured window, and the totals: dropped iterations, errors, connections |
 | `k6-<i>.log` | Each k6 pod's log |
 | `summary-<i>.json` | k6's whole end-of-test summary data |
 | `summary-<i>.env` | The same, flat: per op count, rate, p50/p95/p99/max (ms), errors; `dropped_iterations`, `vus_max`, `connects` |
 | `steps.csv` | Ramps only: one row per k6 pod, step and op ([Reading the knee](#the-workload)) |
 | `top.txt` | `kubectl top pod --containers` every 15s through the run: k6's CPU next to every kv pod's |
 | `prometheus/*.csv` | `deploy/bench/export.sh`: one CSV per query, 15s steps, from 60s before the window to 30s after, in the shape of [results/gke-session1/](results/gke-session1/): Put and Get rates by code and p50/p99, data-engine fsync p50/p99, WAL batch size p50/p99/mean and commit wait p50/p99 (data engine), requests coordinated by pod, storage writes by pod (`kv_storage_writes_total`), CPU and memory by pod, anti-entropy rounds by pod, quorum failures, hints |
-| `prometheus/window.env` | The whole window at once: request, fsync and storage-write counts, writes per fsync, batch size and commit wait p50/p99, whether any engine halted writes, quantiles over the window (`histogram_quantile` of the buckets' `increase`, interpolated inside a bucket), anti-entropy rounds, quorum failures, hints, CPU by pod, the spread |
+| `prometheus/window.env` | The whole window at once: request, fsync and storage-write counts, writes per fsync, batch size and commit wait p50/p99, whether any engine halted writes, quantiles over the window (`histogram_quantile` of the buckets' `increase`, interpolated inside a bucket), anti-entropy rounds, quorum failures, hints, CPU by pod, the spread. A quantile past the highest finite bucket is written `>=` that bound (5 s for requests, 10 s for commit wait, 1 s for fsync): `histogram_quantile` cannot say more. Batch quantiles are at least 1 write, not interpolated below it |
 | `prometheus/queries.txt` | Every query, as sent |
+
+In the CSVs a quantile at the highest finite bound (`5` for a Put's p99,
+`10` for commit wait) means at least that, as `>=` does in `window.env`.
 
 `export.sh` runs at the end of every run (`BENCH_EXPORT=0` skips it), and
 can be run again on a results directory. It reaches Prometheus through a
@@ -279,7 +284,8 @@ a run with any is flagged in the table below.
 ## What must match between kind and GKE
 
 Identical: the commit and images, the bench KVCluster (replicas, n/w/r,
-requests and limits, ConfigMap intervals), the k6 version and script,
+requests and limits, ConfigMap intervals, group commit unless it is what
+an A/B compares), the k6 version and script,
 value size, `PRELOAD_KEYS`, `PRELOAD_VUS`, `VUS`, profiles and rates, a fresh KVCluster
 (`reset`) before a series, the scrape interval and the export's queries.
 
@@ -319,6 +325,85 @@ On GKE k6 has a node of its own, and the read ramp is sized for it:
   below). Use `STEP_SECONDS=60` for the read ramps (9 rates, about 9.7
   minutes each), so each step has a point of its own.
 
+## The Go write benchmarks
+
+The k6 runs measure the cluster; three Go benchmarks measure one node's
+write path on its own: `StorageEngine.Put` and `DataStore.Put` from 1, 8
+and 64 goroutines, and `DataStore.Get` while 8 writers run
+([testing.md](testing.md#write-benchmarks) says what each measures and how
+to run them). Group commit was built against them, in three steps: the
+store's per-key locks, batched WAL writes, then the engine's committer.
+
+**Only same-run comparisons.** fsync time on the laptop's Docker Desktop VM
+moves from one hour to the next, so numbers from different runs, the
+commit messages' included, do not compare. One run, 2026-10-16: the
+benchmarks of three commits, each extracted with `git archive` into one
+`golang:1.26` container (Go 1.26.8, linux/amd64, kernel
+5.15.167.4-microsoft-standard-WSL2, 8 CPUs, i7-14650HX, the temporary
+directory on the container's own filesystem) and built there, then run in
+turn: six rounds of before, stripes only and group commit, each benchmark
+`-benchtime 1000x -count 1`, so each commit's six samples are spread over
+the same 12 minutes. The script and every sample are in
+[results/gobench/20261016/](results/gobench/20261016/) (`benchstat`
+reads the `.txt` files). From the repository root:
+
+```sh
+docker run --rm -v "${PWD}:/src:ro" -v "${PWD}/docs/results/gobench/new:/out" -v kv-gomod:/go/pkg/mod -v kv-gocache:/root/.cache golang:1.26 sh -c "cp /src/docs/results/gobench/20261016/run.sh /tmp/ && sh /tmp/run.sh"
+```
+
+| Commit | What it has |
+|---|---|
+| before, `442ccaa` | The benchmarks; the store's one lock; the engine's write lock held across each write's fsync |
+| stripes only, `494cd1f` | 65,536 key locks in the store, reads lock-free; the engine unchanged |
+| group commit, `8433b98` | The engine's committer; `BenchmarkPutParallel` runs it off (`mode=serial`, the old path) and on (`mode=group`) in the same binary |
+
+Medians of the six samples, the range in brackets; throughput is the
+inverse of ns/op. The DataStore runs on the engine's default, group
+commit on.
+
+| Benchmark | Writers | before | stripes only | group commit |
+|---|---|---|---|---|
+| Engine Put, writes/s | 1 | 137 [120-145] | 127 [124-142] | serial 130 [127-140]; group 133 [124-138] |
+| | 8 | 133 [126-142] | 131 [127-140] | serial 132 [126-138]; **group 544 [510-564]** |
+| | 64 | 130 [121-137] | 130 [121-140] | serial 134 [129-139]; **group 4,216 [3,728-4,718]** |
+| Engine Put, p50 / p99 (ms) | 1 | 6.8 / 13.9 | 7.1 / 15.3 | serial 7.0 / 15.4; group 7.0 / 14.8 |
+| | 8 | 58 / 79 | 60 / 78 | serial 58 / 80; **group 14.0 / 24.5** |
+| | 64 | 487 / 562 | 491 / 532 | serial 471 / 523; **group 14.1 / 21.2** |
+| Engine writes per fsync | 8 / 64 | 1 / 1 | 1 / 1 | serial 1 / 1; group 4.0 / 31.2 |
+| DataStore Put, writes/s | 1 | 131 [118-144] | 132 [126-136] | 133 [124-141] |
+| | 8 | 129 [110-134] | 127 [119-133] | **535 [485-576]** |
+| | 64 | 124 [117-138] | 127 [113-143] | **4,080 [3,328-4,327]** |
+| DataStore Put, p50 / p99 (ms) | 8 | 60 / 88 | 61 / 85 | **14.1 / 24.5** |
+| | 64 | 509 / 635 | 503 / 573 | **14.2 / 22.3** |
+| DataStore Get while 8 write: the read's p50 / p99 | 8 readers | 57.5 ms [0.0003-62.4] / 78 ms [67-1,500] | 0.6 / 3.0 µs | 0.5 / 2.1 µs |
+
+What it shows:
+
+- **The key locks did not move write throughput, and were not meant to.**
+  With them, writes to different keys stopped waiting for each other in
+  the store, only to wait at the engine's write lock across each fsync:
+  about 130 writes/s from any number of writers, one fsync each, with the
+  latency growing with the queue (p50 about 490 ms at 64). What they
+  removed is the reads' wait: a Get no longer queues behind writes, from a
+  median of 57.5 ms to under a microsecond.
+- **Group commit is what moved it**, and the same run shows it twice: its
+  own commit's serial mode gives the old path's numbers, and group mode,
+  one fsync for every write that queued behind the last one, gives 4.1x at
+  8 writers and 32-33x at 64, with p99 near 22 ms instead of over half a
+  second. 31.2 writes per fsync at 64 writers is half of them: the other
+  half wait on the fsync in flight.
+- **One writer is unchanged**, as designed: a lone write waits for its own
+  fsync and nothing else (there is no timer).
+- **The before column's Get is unstable**: 51 to 959 Gets/s over the six
+  samples, and one sample's median wait 0.3 µs against 57-62 ms for the
+  other five. A Get could take the store's one lock ahead of writers
+  already waiting for it ([testing.md](testing.md#write-benchmarks)), so
+  some samples ran mostly unblocked. Hence the median and range: a single
+  number would not stand.
+
+The serial path's throughput is the fsync rate: about 7 ms per fsync in
+the container, so about 140 a second, whatever the number of writers.
+
 ## Open questions
 
 **Can a client tell slow from down?** Under overload (the failed preload at
@@ -335,9 +420,14 @@ the coordinator should reach the client as `DeadlineExceeded` instead.
 GKE session 2, Put p99 went from 10 to 100-280 ms between 200 and 500
 writes/s while the kv pods stayed under 0.4 cores and the fsync p99 near
 5 ms. The likely cause is writes queueing for the engine's write lock
-before each fsync, which no histogram times
-([the record](#gke-2026-10-13-session-2-the-benchmarks)). To confirm with a
-histogram of the wait for `writeMu`; if confirmed, group commit is the fix.
+before each fsync, which no histogram timed then
+([the record](#gke-2026-10-13-session-2-the-benchmarks)). The wait is now
+measured (`kv_wal_commit_wait_seconds`), and group commit, the fix it
+pointed to, is built. On kind the A/B
+([below](#kind-2026-10-16-group-commit-off-and-on-ab)) shows the
+mechanism: with group commit off, commit wait p50 was 267 ms while fsync
+p50 was 13 ms; on, 3.7 ms. The GKE answer, where the knee is the capacity
+result, is [Session 3 part B](gke.md#part-b-the-write-benchmarks-with-group-commit).
 
 ## Runs
 
@@ -627,3 +717,62 @@ too short for GKE's metrics-server to sample k6's CPU; the measured runs
 were all sampled. The two-pod resize was made with `gcloud`, because
 `terraform apply` also wanted an unrelated in-place change to the
 cluster's `node_config`; see [gke.md](gke.md#session-2-the-benchmarks-runbook).
+
+### kind, 2026-10-16: group commit off and on (A/B)
+
+A short A/B: the same write ramp on two fresh bench KVClusters from commit
+`e4627d6`, clean tree, the first with `spec.storage.groupCommit: false`
+(`GROUP_COMMIT=false deploy/bench/run.sh reset`), the second with it on.
+`kvnode:dev` and `kvstore-operator:dev` built from `e4627d6` and loaded into
+kind (Docker image IDs `sha256:aea12c596593…` and `sha256:18e90829f35b…`),
+the operator and its CRD reinstalled. Each side's `run.env` says
+`group_commit=false` or `true`, from the ConfigMap, and each node logged it
+(`ready (… group commit false)`). No preload: writes need none. kind's
+numbers compare with each other only (see the note at the top).
+
+| Run | Group commit | Parameters | k6 summary | Prometheus (window) | k6 CPU | Flags |
+|---|---|---|---|---|---|---|
+| [20261016-203223](results/bench/20261016-203223-kind-writes-ramp/) | **off** | ramp 50 to 300/s, steps of 50, 30s held, 5s moves (3m30s), 120 VUs; 0 keys before, 35,875 planned | 18,333 Puts (87.3/s); p50 489.3, p95 1,894.1, p99 5,000.3 ms; **1,404 errors; 16,358 dropped** | Put p50 538.7 / p99 >=5,000 ms, 1,358 errors (mostly `Unavailable`, then `Canceled`, a few `DeadlineExceeded`, from the 1m rates); fsync p50 13.2 / p99 34.3 ms; 58,440 storage writes, 1.00 per fsync, batch p50 / p99 1 / 1; commit wait p50 267.3 / p99 >=10,000 ms; kv CPU 0.05-0.06 cores; spread 1.49 / 0.37 | max 130m | |
+| [20261016-203751](results/bench/20261016-203751-kind-writes-ramp/) | **on** | the same | 35,874 Puts (175.0/s); p50 24.1, p95 33.0, p99 43.9 ms; 0 errors; 0 dropped | Put p50 23.5 / p99 45.3 ms, 0 errors; fsync p50 8.5 / p99 16.6 ms; 104,865 storage writes, 1.52 per fsync, batch p50 / p99 1 / 3.96; commit wait p50 3.7 / p99 13.3 ms; kv CPU 0.05-0.08 cores; spread 1.08 / 0.81 | max 203m | AE (1: kv-3 in step 5) |
+
+| Step | Target/s | Off: achieved/s | Off: p50 / p95 / p99 (ms) | Off: errors, dropped | On: achieved/s | On: p50 / p95 / p99 (ms) | On: errors, dropped |
+|---|---|---|---|---|---|---|---|
+| 1 | 50 | 50.0 | 15.5 / 56.2 / 190.7 | 0, 1 | 50.0 | 14.7 / 22.5 / 27.2 | 0, 1 |
+| 2 | 100 | 99.5 | **399.6 / 1,822.3 / 2,479.5** | 0, 16 | 100.0 | 13.9 / 47.8 / 58.1 | 0, 0 |
+| 3 | 150 | **104.1** | 822.8 / 3,350.9 / 4,747.3 | **113, 1,376** | 150.0 | 21.6 / 29.8 / 33.4 | 0, 0 |
+| 4 | 200 | 101.4 | 504.0 / 1,380.9 / 5,000.6 | 398, 2,958 | 200.0 | 24.3 / 31.6 / 35.5 | 0, 0 |
+| 5 | 250 | 103.4 | 507.1 / 1,733.0 / 5,000.6 | 406, 4,399 | 250.0 | 25.0 / 31.5 / 35.0 | 0, 0 |
+| 6 | 300 | 104.3 | 626.9 / 1,734.9 / 5,000.5 | 323, 5,872 | 299.9 | 25.7 / 32.7 / 36.2 | 0, 2 |
+
+**Off, the knee is at 100 writes/s**, the ceiling about 104/s: the tail
+turns up at 100/s (p99 2.5 s), and from 150/s the achieved rate stays at
+101-104/s, requests time out at k6's 5s, and with the VUs held iterations
+drop. Every write waited its turn at its engine's write lock: 1.00 writes
+per fsync, commit wait p50 267 ms on top of a 13 ms fsync, the pods idle
+(0.06 cores). Each Put is 3 local writes over 6 pods that share the VM's
+one disk, so 104 Puts/s is about 52 fsyncs/s per pod at 13-34 ms each: the
+serial path's ceiling.
+
+**On, no knee up to 300 writes/s**: every step at its target, 0 errors,
+p99 27-58 ms, step 6 (three times the serial ceiling) at 36 ms. The batches
+are small at these rates (1.52 writes per fsync, p99 4): what group commit
+removes here is the queue, commit wait p50 3.7 ms against 267 ms, and with
+fewer fsyncs on the shared disk (69,035 for 104,865 writes, against 58,440
+for 58,440) fsync p50 fell from 13.2 to 8.5 ms. The anti-entropy round
+(kv-3, 20:40:23) fell in step 5, whose p99 (35.0 ms) is in line with its
+neighbours. Where the knee with group commit lies this ramp does not
+reach, and on kind k6 shares the node: it is measured on GKE
+([Session 3 part B](gke.md#part-b-the-write-benchmarks-with-group-commit)).
+
+**The new export queries, checked against this Prometheus.** Every range
+query returned series for the window (the Get ones are empty, as they must
+be for writes). Two quantiles did not say what they seemed to, so
+`export.sh` was fixed and both runs exported again. The batch quantiles
+read 0.50 and 0.99 writes with group commit off, where every batch was 1:
+`histogram_quantile` interpolates inside the lowest bucket (`le="1"`) from
+0; they are now `clamp_min(…, 1)`. And a quantile past the highest finite
+bucket came back as that bound, so commit wait p99 read 10,000 ms and Put
+p99 5,000 ms as if measured; they are now written `>=` (see
+[What each run saves](#what-each-run-saves)). The mean batch
+(`wal_batch_writes_mean_data.csv`, 1.00 off) and writes per fsync were
+right.
