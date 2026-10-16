@@ -58,3 +58,11 @@ Desktop.ini
 # ==========================================
 # Node data directories from local runs (examples/local/*.yaml use data/local)
 data/
+
+# ==========================================
+# 6. Local only
+# ==========================================
+# Planning notes
+/plan/
+# Claude Code's per-machine settings (the shared .claude/settings.json is not ignored)
+.claude/settings.local.json
