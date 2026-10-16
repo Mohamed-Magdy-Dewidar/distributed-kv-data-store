@@ -85,11 +85,11 @@ worker's pods could not reach the API server).
 From `feature/chaos` with these tools uncommitted; 6 pods, N=3 W=R=2;
 writes and reads at 50/s each, straight to the pods (64 in flight at most);
 5,000 preloaded keys, all acknowledged. Zones: a = {kv-2, kv-5}, b = {kv-0,
-kv-4}, c = {kv-1, kv-3}. Results in
-[results/chaos/20261013-kind/](results/chaos/20261013-kind/): the topology,
-predictions, fault timeline, hint counts per test, operator status changes
-and the check's report (the per-request records and read-backs, 66 MB, are
-not committed).
+kv-4}, c = {kv-1, kv-3}. The results, removed once written up here, are in
+git history at `ac62c36`, in `docs/results/chaos/20261013-kind/`: the
+topology, predictions, fault timeline, hint counts per test, operator
+status changes and the check's report (the per-request records and
+read-backs, 66 MB, were never committed).
 
 | Test | Fault on kind | Prediction | Measured | Verdict |
 |---|---|---|---|---|

@@ -434,6 +434,11 @@ result, is [Session 3 part B](gke.md#part-b-the-write-benchmarks-with-group-comm
 Flags: **AE** anti-entropy rounds in the window; **SPREAD** the busiest
 pod over 1.5× the median.
 
+The kind runs of 2026-10-10 are not linked: their directories were removed
+once their findings were written up here. The data is in git history at
+`ac62c36`: `git checkout ac62c36 -- 'docs/results/bench/<run>-*'`, with the run ID
+from the tables.
+
 ### kind, 2026-10-10: smoke run (pipeline check)
 
 Commit `6eccab2` with `export.sh` not yet committed (hence `-dirty`);
@@ -445,8 +450,8 @@ export.
 
 | Run | Scenario | Parameters | Data before | k6 summary | Prometheus (window) | k6 CPU | Flags |
 |---|---|---|---|---|---|---|---|
-| [20261010-144345](results/bench/20261010-144345-kind-preload-shared/) | preload | 20,000 keys, 60 VUs (closed) | 0 keys | 20,000 Puts in 133.8s (149.5/s); p50 238.6 ms, p95 1,602.8 ms, p99 2,460.9 ms; 0 errors; 60 connections | Put p50 240.6 / p99 2,493.9 ms; fsync p50 8.94 / p99 14.87 ms; kv CPU 0.07-0.12 cores; 0 AE rounds | max 125m | SPREAD (1.58) |
-| [20261010-144713](results/bench/20261010-144713-kind-writes-constant/) | writes, constant | 20/s, 60s, 60 VUs | 20,000 keys | 1,200 Puts (20.0/s); p50 13.67 ms, p95 16.39 ms, p99 19.20 ms; 0 errors; 0 dropped; 60 connections | Put p50 12.17 / p99 19.64 ms; fsync p50 5.87 / p99 13.10 ms; kv CPU 0.03-0.07 cores; 0 AE rounds | max 63m | |
+| `20261010-144345` | preload | 20,000 keys, 60 VUs (closed) | 0 keys | 20,000 Puts in 133.8s (149.5/s); p50 238.6 ms, p95 1,602.8 ms, p99 2,460.9 ms; 0 errors; 60 connections | Put p50 240.6 / p99 2,493.9 ms; fsync p50 8.94 / p99 14.87 ms; kv CPU 0.07-0.12 cores; 0 AE rounds | max 125m | SPREAD (1.58) |
+| `20261010-144713` | writes, constant | 20/s, 60s, 60 VUs | 20,000 keys | 1,200 Puts (20.0/s); p50 13.67 ms, p95 16.39 ms, p99 19.20 ms; 0 errors; 0 dropped; 60 connections | Put p50 12.17 / p99 19.64 ms; fsync p50 5.87 / p99 13.10 ms; kv CPU 0.03-0.07 cores; 0 AE rounds | max 63m | |
 
 What the smoke run showed besides "it works":
 
@@ -474,7 +479,7 @@ growing past the 5s client timeout. It is why the preload now runs with
 
 | Run | Scenario | Parameters | Data before | k6 summary | Prometheus (window) | k6 CPU | Flags |
 |---|---|---|---|---|---|---|---|
-| [20261010-213341](results/bench/20261010-213341-kind-preload-shared/) | preload | 20,000 keys, 120 VUs (closed) | 0 keys | 20,000 iterations in 132.2s; 19,311 Puts with a duration (146.0/s; k6 recorded none for the other 689); p50 276.7 ms, p95 4,162.6 ms, p99 5,000.3 ms (the 5s client timeout); **895 errors (4.5%)**; 0 dropped; 120 connections | 19,938 Puts, 931 not OK (`Unavailable` most, then `Canceled`, a few `DeadlineExceeded`, from 21:34:28, 45s in, to the end); Put p50 284 / p99 5,000 ms; fsync p50 8.91 / p99 14.85 ms; kv CPU 0.06-0.11 cores; 0 quorum failures, 0 hints; 0 AE rounds | max 181m | SPREAD (1.72) |
+| `20261010-213341` | preload | 20,000 keys, 120 VUs (closed) | 0 keys | 20,000 iterations in 132.2s; 19,311 Puts with a duration (146.0/s; k6 recorded none for the other 689); p50 276.7 ms, p95 4,162.6 ms, p99 5,000.3 ms (the 5s client timeout); **895 errors (4.5%)**; 0 dropped; 120 connections | 19,938 Puts, 931 not OK (`Unavailable` most, then `Canceled`, a few `DeadlineExceeded`, from 21:34:28, 45s in, to the end); Put p50 284 / p99 5,000 ms; fsync p50 8.91 / p99 14.85 ms; kv CPU 0.06-0.11 cores; 0 quorum failures, 0 hints; 0 AE rounds | max 181m | SPREAD (1.72) |
 
 With 60 VUs (the smoke run's preload) the same 20,000 Puts had no errors.
 With 120 in flight, throughput did not rise (146/s vs 149.5/s); only the
@@ -493,9 +498,9 @@ writes, mix) were not run.
 
 | Run | Scenario | Parameters | Data before | k6 summary | Prometheus (window) | k6 CPU | Flags |
 |---|---|---|---|---|---|---|---|
-| [20261010-221235](results/bench/20261010-221235-kind-preload-shared/) | preload | 20,000 keys, 40 VUs (closed) | 0 keys | 20,000 Puts in 139.5s (143.4/s); p50 187.1 ms, p95 915.4 ms, p99 1,563.6 ms; **0 errors, clean**; 40 connections | Put p50 196.1 / p99 2,190.5 ms; fsync p50 8.95 / p99 14.85 ms; kv CPU 0.06-0.11 cores; 0 AE rounds | max 130m | SPREAD (1.64) |
-| [20261010-221549](results/bench/20261010-221549-kind-reads-constant/) | 1. reads, constant | 200/s, 300s, 120 VUs | 20,000 keys | 60,001 Gets (200.0/s); p50 0.89 ms, p95 1.58 ms, p99 2.00 ms; 0 errors; 0 dropped; 120 connections | Get p50 0.40 / p99 1.33 ms; no fsyncs (reads write nothing); kv CPU 0.08-0.13 cores; spread 1.12 / 0.73 | max 281m | AE (2) |
-| [20261010-222146](results/bench/20261010-222146-kind-reads-ramp/) | 2. reads, ramp | 100 to 1000/s, steps of 100, 30s held, 5s moves (345s), 120 VUs | 20,000 keys | 189,746 Gets (550.0/s average); p50 0.58 ms, p95 1.26 ms, p99 1.76 ms, max 19.65 ms; 0 errors; 0 dropped; 120 connections | Get p50 0.29 / p99 0.99 ms over the window; no fsyncs; kv CPU 0.14-0.23 cores; spread 1.15 / 0.60 | max 578m | AE (2); **no knee** |
+| `20261010-221235` | preload | 20,000 keys, 40 VUs (closed) | 0 keys | 20,000 Puts in 139.5s (143.4/s); p50 187.1 ms, p95 915.4 ms, p99 1,563.6 ms; **0 errors, clean**; 40 connections | Put p50 196.1 / p99 2,190.5 ms; fsync p50 8.95 / p99 14.85 ms; kv CPU 0.06-0.11 cores; 0 AE rounds | max 130m | SPREAD (1.64) |
+| `20261010-221549` | 1. reads, constant | 200/s, 300s, 120 VUs | 20,000 keys | 60,001 Gets (200.0/s); p50 0.89 ms, p95 1.58 ms, p99 2.00 ms; 0 errors; 0 dropped; 120 connections | Get p50 0.40 / p99 1.33 ms; no fsyncs (reads write nothing); kv CPU 0.08-0.13 cores; spread 1.12 / 0.73 | max 281m | AE (2) |
+| `20261010-222146` | 2. reads, ramp | 100 to 1000/s, steps of 100, 30s held, 5s moves (345s), 120 VUs | 20,000 keys | 189,746 Gets (550.0/s average); p50 0.58 ms, p95 1.26 ms, p99 1.76 ms, max 19.65 ms; 0 errors; 0 dropped; 120 connections | Get p50 0.29 / p99 0.99 ms over the window; no fsyncs; kv CPU 0.14-0.23 cores; spread 1.15 / 0.60 | max 578m | AE (2); **no knee** |
 
 **No read knee up to 1000/s.** Get p99 in Prometheus, by 15s step, stayed
 at 0.95-0.99 ms from 237/s to 959/s (1.1-2.3 ms at the low rates at the
@@ -515,10 +520,10 @@ short runs; runs 3 to 7 of the approved series were replaced by these.
 
 | Run | What | Parameters | Data before | k6 summary | Prometheus (window) | k6 CPU | Checked |
 |---|---|---|---|---|---|---|---|
-| [20261010-223145](results/bench/20261010-223145-kind-reads-constant/) | V1. two k6 pods | reads, constant 200/s, 60s, `K6_PODS=2`, VUS 120 | 20,000 keys | pod 0: 6,001 Gets, p50 1.00 / p95 1.69 / p99 2.00 ms; pod 1: 6,000, p50 0.80 / p95 1.57 / p99 1.88 ms; 0 errors; 0 dropped; **30 + 30 connections** | 12,001 Gets; Get p50 0.42 / p99 1.49 ms; spread 1.89 / 0.67 | max 127m | Both pods logged `k6-bench-start 1791671565`; 6,001 + 6,000 = 200/s × 60s, so the segments did not overlap; the summaries combine. **Bug: 30 VUs per pod, not 60** |
-| [20261010-223456](results/bench/20261010-223456-kind-writes-ramp/) | V2. write ramp | 20 to 100/s, steps of 20, 15s held, 5s moves (95s) | 20,000 keys | 5,699 Puts (60.0/s average); p50 11.13 / p95 24.75 / p99 44.56 ms; 0 errors; 0 dropped; 120 connections | Put p50 11.67 / p99 43.04 ms; fsync p50 4.48 / p99 12.62 ms; spread 1.34 / 0.74 | max 85m | The ledger went from 20,000 to 25,700, the 5,700 planned (5,699 written). No knee is reported: see below |
-| [20261010-223739](results/bench/20261010-223739-kind-mix-constant/) | V3. mix | constant 60/s (30 writes + 30 reads), 60s | 25,700 keys | Put: 1,800, p50 11.87 / p95 15.26 / p99 17.10 ms; Get: 1,801, p50 1.25 / p95 2.23 / p99 6.84 ms; 0 errors; 0 dropped; 120 connections | Put p50 12.07 / p99 18.54 ms; Get p50 0.69 / p99 5.68 ms; fsync p99 12.23 ms; spread 1.46 / 0.73 | max 92m | Reads and writes reported separately, by k6 and Prometheus; ledger +1,800 (to 27,500) |
-| [20261010-223943](results/bench/20261010-223943-kind-reads-constant/) | V1 again, with the fix | as V1; `BENCH_SMOKE=1` (`commit=0ea9d60-dirty`, `smoke=1`: the fix uncommitted) | 27,500 keys | pod 0: 6,001 Gets, p99 2.32 ms; pod 1: 6,000, p99 2.25 ms; 0 errors; 0 dropped; **60 + 60 connections** | 12,001 Gets; Get p50 0.47 / p99 2.11 ms; spread 1.22 / 0.63 | max 127m | Same start second (`1791672043`); 120 connections of 120 VUs |
+| `20261010-223145` | V1. two k6 pods | reads, constant 200/s, 60s, `K6_PODS=2`, VUS 120 | 20,000 keys | pod 0: 6,001 Gets, p50 1.00 / p95 1.69 / p99 2.00 ms; pod 1: 6,000, p50 0.80 / p95 1.57 / p99 1.88 ms; 0 errors; 0 dropped; **30 + 30 connections** | 12,001 Gets; Get p50 0.42 / p99 1.49 ms; spread 1.89 / 0.67 | max 127m | Both pods logged `k6-bench-start 1791671565`; 6,001 + 6,000 = 200/s × 60s, so the segments did not overlap; the summaries combine. **Bug: 30 VUs per pod, not 60** |
+| `20261010-223456` | V2. write ramp | 20 to 100/s, steps of 20, 15s held, 5s moves (95s) | 20,000 keys | 5,699 Puts (60.0/s average); p50 11.13 / p95 24.75 / p99 44.56 ms; 0 errors; 0 dropped; 120 connections | Put p50 11.67 / p99 43.04 ms; fsync p50 4.48 / p99 12.62 ms; spread 1.34 / 0.74 | max 85m | The ledger went from 20,000 to 25,700, the 5,700 planned (5,699 written). No knee is reported: see below |
+| `20261010-223739` | V3. mix | constant 60/s (30 writes + 30 reads), 60s | 25,700 keys | Put: 1,800, p50 11.87 / p95 15.26 / p99 17.10 ms; Get: 1,801, p50 1.25 / p95 2.23 / p99 6.84 ms; 0 errors; 0 dropped; 120 connections | Put p50 12.07 / p99 18.54 ms; Get p50 0.69 / p99 5.68 ms; fsync p99 12.23 ms; spread 1.46 / 0.73 | max 92m | Reads and writes reported separately, by k6 and Prometheus; ledger +1,800 (to 27,500) |
+| `20261010-223943` | V1 again, with the fix | as V1; `BENCH_SMOKE=1` (`commit=0ea9d60-dirty`, `smoke=1`: the fix uncommitted) | 27,500 keys | pod 0: 6,001 Gets, p99 2.32 ms; pod 1: 6,000, p99 2.25 ms; 0 errors; 0 dropped; **60 + 60 connections** | 12,001 Gets; Get p50 0.47 / p99 2.11 ms; spread 1.22 / 0.63 | max 127m | Same start second (`1791672043`); 120 connections of 120 VUs |
 
 No anti-entropy rounds fell in these windows. k6's CPU median in the
 two-pod runs is 0m because it includes the 60s the pods wait for
@@ -550,7 +555,7 @@ What the validation found:
 
 | Run | Parameters | k6 summary | Prometheus (window) | k6 CPU |
 |---|---|---|---|---|
-| [20261010-230442](results/bench/20261010-230442-kind-mix-ramp/) | mix, ramp 100 to 300/s (50 to 150 per op), steps of 100, 20s held, 5s moves (70s), 120 VUs | Put: 6,916, p99 1,411.6 ms; Get: 6,999, p99 394.9 ms; 0 errors; 83 dropped | Put p50 19.68 / p99 1,650.5 ms; Get p99 368.7 ms; fsync p99 14.61 ms; spread 1.56 / 0.86 | max 171m |
+| `20261010-230442` | mix, ramp 100 to 300/s (50 to 150 per op), steps of 100, 20s held, 5s moves (70s), 120 VUs | Put: 6,916, p99 1,411.6 ms; Get: 6,999, p99 394.9 ms; 0 errors; 83 dropped | Put p50 19.68 / p99 1,650.5 ms; Get p99 368.7 ms; fsync p99 14.61 ms; spread 1.56 / 0.86 | max 171m |
 
 | Step | Op | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Errors | Dropped |
 |---|---|---|---|---|---|---|---|---|
