@@ -1,0 +1,30 @@
+topology: epoch 0, 6 pods, N=3 W=2 R=2
+  zone europe-west1-b: kv-0 kv-5
+  zone europe-west1-c: kv-1 kv-4
+  zone europe-west1-d: kv-2 kv-3
+keys: 5000 (chaos-pre-0000000 … chaos-pre-0004999)
+  kv-0 holds  66.4%
+  kv-1 holds  37.7%
+  kv-2 holds  50.4%
+  kv-3 holds  47.2%
+  kv-4 holds  51.6%
+  kv-5 holds  46.8%
+fault                                        puts fail        gets fail        from
+down:kv-0                                         0 (  0.0%)       0 (  0.0%)  live
+down:kv-1                                         0 (  0.0%)       0 (  0.0%)  live
+down:kv-2                                         0 (  0.0%)       0 (  0.0%)  live
+down:kv-3                                         0 (  0.0%)       0 (  0.0%)  live
+down:kv-4                                         0 (  0.0%)       0 (  0.0%)  live
+down:kv-5                                         0 (  0.0%)       0 (  0.0%)  live
+down:kv-0,kv-5                                 1134 ( 22.7%)    1134 ( 22.7%)  live
+down:kv-1,kv-4                                 1419 ( 28.4%)    1419 ( 28.4%)  live
+down:kv-2,kv-3                                  868 ( 17.4%)     868 ( 17.4%)  live
+partition:kv-0,kv-5                            3866 ( 77.3%)    3866 ( 77.3%)  group
+partition:kv-0,kv-5                            1134 ( 22.7%)    1134 ( 22.7%)  rest
+partition:kv-0,kv-5                               0 (  0.0%)       0 (  0.0%)  both sides
+partition:kv-1,kv-4                            3581 ( 71.6%)    3581 ( 71.6%)  group
+partition:kv-1,kv-4                            1419 ( 28.4%)    1419 ( 28.4%)  rest
+partition:kv-1,kv-4                               0 (  0.0%)       0 (  0.0%)  both sides
+partition:kv-2,kv-3                            4132 ( 82.6%)    4132 ( 82.6%)  group
+partition:kv-2,kv-3                             868 ( 17.4%)     868 ( 17.4%)  rest
+partition:kv-2,kv-3                               0 (  0.0%)       0 (  0.0%)  both sides

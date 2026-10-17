@@ -1,0 +1,411 @@
+2026-10-17T16:09:56.670805839Z	kv-3	2026/10/17 16:09:56 app: node kv-3 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:09:59.433030886Z	kv-3	2026/10/17 16:09:59 node kv-3: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T16:09:59.433091596Z	kv-3	2026/10/17 16:09:59 node kv-3: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:09:59.433097296Z	kv-3	2026/10/17 16:09:59 node kv-3: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:09:59.433101166Z	kv-3	2026/10/17 16:09:59 node kv-3: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T16:09:59.433246836Z	kv-3	2026/10/17 16:09:59 node kv-3: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T16:09:59.516209559Z	kv-2	2026/10/17 16:09:59 app: node kv-2 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:10:01.814337306Z	kv-2	2026/10/17 16:10:01 node kv-2: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:10:01.814631515Z	kv-2	2026/10/17 16:10:01 node kv-2: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T16:10:01.815180517Z	kv-2	2026/10/17 16:10:01 node kv-2: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:10:01.815355362Z	kv-2	2026/10/17 16:10:01 node kv-2: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T16:10:02.827465495Z	kv-3	2026/10/17 16:10:02 node kv-3: peer "kv-2" is alive again
+2026-10-17T16:10:03.760743742Z	kv-5	2026/10/17 16:10:03 app: node kv-5 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:10:04.758483851Z	kv-3	2026/10/17 16:10:04 node kv-3: peer "kv-5" is alive again
+2026-10-17T16:10:05.714170652Z	kv-2	2026/10/17 16:10:05 node kv-2: peer "kv-5" is alive again
+2026-10-17T16:10:06.699003706Z	kv-5	2026/10/17 16:10:06 node kv-5: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T16:10:06.699050174Z	kv-5	2026/10/17 16:10:06 node kv-5: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:10:06.699055955Z	kv-5	2026/10/17 16:10:06 node kv-5: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:10:10.014452718Z	kv-4	2026/10/17 16:10:10 app: node kv-4 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:10:11.352161702Z	kv-1	2026/10/17 16:10:11 app: node kv-1 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:10:11.473905372Z	kv-5	2026/10/17 16:10:11 node kv-5: peer "kv-1" is alive again
+2026-10-17T16:10:11.479350850Z	kv-4	2026/10/17 16:10:11 node kv-4: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:10:11.484808479Z	kv-3	2026/10/17 16:10:11 node kv-3: peer "kv-1" is alive again
+2026-10-17T16:10:12.066100626Z	kv-4	2026/10/17 16:10:12 node kv-4: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:10:12.072237988Z	kv-3	2026/10/17 16:10:12 node kv-3: peer "kv-4" is alive again
+2026-10-17T16:10:13.187101716Z	kv-0	2026/10/17 16:10:13 app: node kv-0 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:10:13.417379738Z	kv-1	2026/10/17 16:10:13 node kv-1: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:10:13.432377689Z	kv-2	2026/10/17 16:10:13 node kv-2: peer "kv-1" is alive again
+2026-10-17T16:10:13.961349005Z	kv-2	2026/10/17 16:10:13 node kv-2: peer "kv-0" is alive again
+2026-10-17T16:10:14.073529539Z	kv-2	2026/10/17 16:10:14 node kv-2: peer "kv-4" is alive again
+2026-10-17T16:10:15.425987171Z	kv-4	2026/10/17 16:10:15 node kv-4: peer "kv-1" is alive again
+2026-10-17T16:10:15.913128455Z	kv-4	2026/10/17 16:10:15 node kv-4: peer "kv-0" is alive again
+2026-10-17T16:10:16.073533227Z	kv-5	2026/10/17 16:10:16 node kv-5: peer "kv-4" is alive again
+2026-10-17T16:10:16.926884108Z	kv-1	2026/10/17 16:10:16 node kv-1: peer "kv-0" is alive again
+2026-10-17T16:10:17.911520945Z	kv-3	2026/10/17 16:10:17 node kv-3: peer "kv-0" is alive again
+2026-10-17T16:10:18.912082128Z	kv-5	2026/10/17 16:10:18 node kv-5: peer "kv-0" is alive again
+2026-10-17T16:12:05.224214063Z	chaos-pre	kvchaos record pre: connections ready: kv-0 kv-1 kv-2 kv-3 kv-4 kv-5
+2026-10-17T16:12:30.230886751Z	chaos-pre	kvchaos record pre: 25s, put ok=5000
+2026-10-17T16:13:00.480256861Z	chaos-t0	kvchaos record t0: connections ready: kv-0 kv-1 kv-2 kv-3 kv-4 kv-5
+2026-10-17T16:18:03.490308867Z	chaos-t0	kvchaos record t0: 5m3s, get ok=30301, put ok=12121
+2026-10-17T16:23:12.108146332Z	chaos-t1	kvchaos record t1: connections ready: kv-0 kv-1 kv-2 kv-3 kv-4 kv-5
+2026-10-17T16:25:43.120302964Z	chaos-t1	kvchaos record t1: 2m31s, get ok=15101, put ok=6041
+2026-10-17T16:28:40.686872900Z	chaos-t1b	kvchaos record t1b: connections ready: kv-0 kv-1 kv-2 kv-3 kv-4 kv-5
+2026-10-17T16:30:52.433427469Z	kv-3	2026/10/17 16:30:52 node kv-3: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:30:52.699412939Z	kv-5	2026/10/17 16:30:52 node kv-5: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:30:52.814336624Z	kv-2	2026/10/17 16:30:52 node kv-2: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:30:53.092690460Z	kv-4	2026/10/17 16:30:53 node kv-4: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:30:53.418366618Z	kv-1	2026/10/17 16:30:53 node kv-1: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T16:34:20.381818344Z	kv-0	2026/10/17 16:34:20 app: node kv-0 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:34:20.554937332Z	kv-5	2026/10/17 16:34:20 node kv-5: peer "kv-0" is alive again
+2026-10-17T16:34:20.565832925Z	kv-4	2026/10/17 16:34:20 node kv-4: peer "kv-0" is alive again
+2026-10-17T16:34:20.565952786Z	kv-1	2026/10/17 16:34:20 node kv-1: peer "kv-0" is alive again
+2026-10-17T16:34:20.578004602Z	kv-2	2026/10/17 16:34:20 node kv-2: peer "kv-0" is alive again
+2026-10-17T16:34:20.611418942Z	kv-3	2026/10/17 16:34:20 node kv-3: peer "kv-0" is alive again
+2026-10-17T16:36:23.695867375Z	chaos-t1b	kvchaos record t1b: 7m43s, get ok=46301, put ok=18521
+2026-10-17T16:51:56.153474344Z	chaos-t2	kvchaos record t2: connections ready: kv-0 kv-1 kv-2 kv-3 kv-4 kv-5
+2026-10-17T16:51:59.404375049Z	chaos-t2svc	kvchaos record t2: connections ready: svc-0 svc-1 svc-2 svc-3 svc-4 svc-5 svc-6 svc-7 svc-8 svc-9 svc-10 svc-11
+2026-10-17T16:54:11.707420761Z	kv-1	2026/10/17 16:54:11 app: node kv-1 shutting down
+2026-10-17T16:54:11.926381327Z	kv-1	2026/10/17 16:54:11 app: node kv-1 shutdown complete
+2026-10-17T16:54:13.862138806Z	kv-2	2026/10/17 16:54:13 node kv-2: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:54:14.432756242Z	kv-3	2026/10/17 16:54:14 node kv-3: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:54:14.503921555Z	kv-0	2026/10/17 16:54:14 node kv-0: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:54:14.699351946Z	kv-5	2026/10/17 16:54:14 node kv-5: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:54:15.433625309Z	kv-3	2026/10/17 16:54:15 node kv-3: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T16:54:15.503741066Z	kv-0	2026/10/17 16:54:15 node kv-0: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T16:54:15.698518642Z	kv-5	2026/10/17 16:54:15 node kv-5: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T16:54:15.814995372Z	kv-2	2026/10/17 16:54:15 node kv-2: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T16:57:47.830292937Z	kv-4	2026/10/17 16:57:47 app: node kv-4 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:57:48.155171302Z	kv-5	2026/10/17 16:57:48 node kv-5: peer "kv-4" is alive again
+2026-10-17T16:57:48.155295461Z	kv-3	2026/10/17 16:57:48 node kv-3: peer "kv-4" is alive again
+2026-10-17T16:57:48.156014885Z	kv-2	2026/10/17 16:57:48 node kv-2: peer "kv-4" is alive again
+2026-10-17T16:57:50.083476759Z	kv-4	2026/10/17 16:57:50 node kv-4: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T16:57:53.136446006Z	kv-0	2026/10/17 16:57:53 node kv-0: peer "kv-4" is alive again
+2026-10-17T16:58:00.098101623Z	kv-1	2026/10/17 16:58:00 app: node kv-1 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T16:58:01.104004934Z	kv-5	2026/10/17 16:58:01 node kv-5: peer "kv-1" is alive again
+2026-10-17T16:58:01.115297799Z	kv-3	2026/10/17 16:58:01 node kv-3: peer "kv-1" is alive again
+2026-10-17T16:58:01.121871613Z	kv-0	2026/10/17 16:58:01 node kv-0: peer "kv-1" is alive again
+2026-10-17T16:58:01.136449137Z	kv-2	2026/10/17 16:58:01 node kv-2: peer "kv-1" is alive again
+2026-10-17T16:58:02.057438200Z	kv-4	2026/10/17 16:58:02 node kv-4: peer "kv-1" is alive again
+2026-10-17T17:00:10.155846373Z	chaos-t2	kvchaos record t2: 8m14s, get failed=6094, get ok=43306, put failed=2320, put ok=17440
+2026-10-17T17:00:19.413970631Z	chaos-t2svc	kvchaos record t2: 8m20s, get failed=1236, get ok=8765, put failed=438, put ok=4563
+2026-10-17T17:06:28.917334514Z	chaos-t3	kvchaos record t3: connections ready: kv-0 kv-1 kv-2 kv-3 kv-4 kv-5
+2026-10-17T17:08:11.934056322Z	kv-3	2026/10/17 17:08:11 node kv-3: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T17:08:11.934114742Z	kv-3	2026/10/17 17:08:11 node kv-3: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T17:08:11.934121522Z	kv-3	2026/10/17 17:08:11 node kv-3: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T17:08:11.934126962Z	kv-3	2026/10/17 17:08:11 node kv-3: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T17:08:12.091034491Z	kv-2	2026/10/17 17:08:12 node kv-2: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T17:08:12.171001460Z	kv-2	2026/10/17 17:08:12 node kv-2: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T17:08:12.172958360Z	kv-2	2026/10/17 17:08:12 node kv-2: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T17:08:12.187127922Z	kv-2	2026/10/17 17:08:12 node kv-2: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T17:08:12.538865427Z	kv-1	2026/10/17 17:08:12 node kv-1: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T17:08:12.540137492Z	kv-1	2026/10/17 17:08:12 node kv-1: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T17:08:12.584717509Z	kv-4	2026/10/17 17:08:12 node kv-4: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T17:08:12.584765283Z	kv-4	2026/10/17 17:08:12 node kv-4: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T17:08:13.004684327Z	kv-0	2026/10/17 17:08:13 node kv-0: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T17:08:13.004730460Z	kv-0	2026/10/17 17:08:13 node kv-0: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T17:08:13.048539836Z	kv-5	2026/10/17 17:08:13 node kv-5: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T17:08:13.129680061Z	kv-5	2026/10/17 17:08:13 node kv-5: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T17:10:11.700316948Z	kv-5	2026/10/17 17:10:11 node kv-5: peer "kv-3" is alive again
+2026-10-17T17:10:11.731773226Z	kv-3	2026/10/17 17:10:11 node kv-3: peer "kv-5" is alive again
+2026-10-17T17:10:11.815173307Z	kv-2	2026/10/17 17:10:11 node kv-2: peer "kv-5" is alive again
+2026-10-17T17:10:11.815581408Z	kv-2	2026/10/17 17:10:11 node kv-2: peer "kv-0" is alive again
+2026-10-17T17:10:11.844283206Z	kv-5	2026/10/17 17:10:11 node kv-5: peer "kv-2" is alive again
+2026-10-17T17:10:11.867111032Z	kv-0	2026/10/17 17:10:11 node kv-0: peer "kv-2" is alive again
+2026-10-17T17:10:12.040609555Z	kv-1	2026/10/17 17:10:12 node kv-1: peer "kv-2" is alive again
+2026-10-17T17:10:12.078975504Z	kv-2	2026/10/17 17:10:12 node kv-2: peer "kv-1" is alive again
+2026-10-17T17:10:12.433751554Z	kv-3	2026/10/17 17:10:12 node kv-3: peer "kv-1" is alive again
+2026-10-17T17:10:12.433805234Z	kv-3	2026/10/17 17:10:12 node kv-3: peer "kv-0" is alive again
+2026-10-17T17:10:12.434354114Z	kv-3	2026/10/17 17:10:12 node kv-3: peer "kv-4" is alive again
+2026-10-17T17:10:12.471650279Z	kv-0	2026/10/17 17:10:12 node kv-0: peer "kv-3" is alive again
+2026-10-17T17:10:12.471775704Z	kv-1	2026/10/17 17:10:12 node kv-1: peer "kv-3" is alive again
+2026-10-17T17:10:12.471971843Z	kv-4	2026/10/17 17:10:12 node kv-4: peer "kv-3" is alive again
+2026-10-17T17:10:12.815505068Z	kv-2	2026/10/17 17:10:12 node kv-2: peer "kv-4" is alive again
+2026-10-17T17:10:12.845015756Z	kv-4	2026/10/17 17:10:12 node kv-4: peer "kv-2" is alive again
+2026-10-17T17:12:18.928969762Z	chaos-t3	kvchaos record t3: 5m50s, get failed=4843, get ok=30158, put failed=1926, put ok=12075
+2026-10-17T17:17:43.181574800Z	chaos-t4	kvchaos record t4: connections ready: kv-0 kv-1 kv-2 kv-3 kv-4 kv-5
+2026-10-17T17:25:20.192488582Z	chaos-t4	kvchaos record t4: 7m37s, get ok=45701, put ok=18281
+2026-10-17T18:00:11.906937618Z	kv-5	2026/10/17 18:00:11 app: node kv-5 shutting down
+2026-10-17T18:00:11.914279378Z	kv-5	2026/10/17 18:00:11 app: node kv-5 shutdown complete
+2026-10-17T18:00:11.940927998Z	kv-1	2026/10/17 18:00:11 app: node kv-1 shutting down
+2026-10-17T18:00:11.946872617Z	kv-1	2026/10/17 18:00:11 app: node kv-1 shutdown complete
+2026-10-17T18:00:11.978389310Z	kv-0	2026/10/17 18:00:11 app: node kv-0 shutting down
+2026-10-17T18:00:11.982415031Z	kv-3	2026/10/17 18:00:11 app: node kv-3 shutting down
+2026-10-17T18:00:11.987823737Z	kv-0	2026/10/17 18:00:11 app: node kv-0 shutdown complete
+2026-10-17T18:00:11.990490341Z	kv-3	2026/10/17 18:00:11 app: node kv-3 shutdown complete
+2026-10-17T18:00:12.045533783Z	kv-2	2026/10/17 18:00:12 app: node kv-2 shutting down
+2026-10-17T18:00:12.056442045Z	kv-2	2026/10/17 18:00:12 app: node kv-2 shutdown complete
+2026-10-17T18:00:12.057311992Z	kv-4	2026/10/17 18:00:12 app: node kv-4 shutting down
+2026-10-17T18:00:12.059959622Z	kv-4	2026/10/17 18:00:12 app: node kv-4 shutdown complete
+2026-10-17T18:00:27.185472325Z	kv-0	2026/10/17 18:00:27 app: node kv-0 ready (grpc :7000, http :8080, group commit false)
+2026-10-17T18:00:27.927336999Z	kv-2	2026/10/17 18:00:27 app: node kv-2 ready (grpc :7000, http :8080, group commit false)
+2026-10-17T18:00:28.873672963Z	kv-0	2026/10/17 18:00:28 node kv-0: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T18:00:29.154599036Z	kv-1	2026/10/17 18:00:29 app: node kv-1 ready (grpc :7000, http :8080, group commit false)
+2026-10-17T18:00:29.235667835Z	kv-5	2026/10/17 18:00:29 app: node kv-5 ready (grpc :7000, http :8080, group commit false)
+2026-10-17T18:00:29.650272884Z	kv-0	2026/10/17 18:00:29 node kv-0: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T18:00:29.650408494Z	kv-0	2026/10/17 18:00:29 node kv-0: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T18:00:29.650414644Z	kv-0	2026/10/17 18:00:29 node kv-0: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T18:00:29.650429624Z	kv-0	2026/10/17 18:00:29 node kv-0: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T18:00:29.899856435Z	kv-2	2026/10/17 18:00:29 node kv-2: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T18:00:30.018521592Z	kv-2	2026/10/17 18:00:30 node kv-2: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T18:00:30.624218276Z	kv-4	2026/10/17 18:00:30 app: node kv-4 ready (grpc :7000, http :8080, group commit false)
+2026-10-17T18:00:30.820143424Z	kv-2	2026/10/17 18:00:30 node kv-2: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T18:00:30.820193179Z	kv-2	2026/10/17 18:00:30 node kv-2: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T18:00:31.222979591Z	kv-5	2026/10/17 18:00:31 node kv-5: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T18:00:31.244048056Z	kv-1	2026/10/17 18:00:31 node kv-1: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T18:00:31.365983073Z	kv-3	2026/10/17 18:00:31 app: node kv-3 ready (grpc :7000, http :8080, group commit false)
+2026-10-17T18:00:31.851232576Z	kv-1	2026/10/17 18:00:31 node kv-1: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T18:00:31.966112965Z	kv-5	2026/10/17 18:00:31 node kv-5: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T18:00:32.411563497Z	kv-4	2026/10/17 18:00:32 node kv-4: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T18:00:32.829914148Z	kv-0	2026/10/17 18:00:32 node kv-0: peer "kv-2" is alive again
+2026-10-17T18:00:32.863201495Z	kv-0	2026/10/17 18:00:32 node kv-0: peer "kv-1" is alive again
+2026-10-17T18:00:32.969939406Z	kv-0	2026/10/17 18:00:32 node kv-0: peer "kv-5" is alive again
+2026-10-17T18:00:33.177581627Z	kv-0	2026/10/17 18:00:33 node kv-0: peer "kv-4" is alive again
+2026-10-17T18:00:33.349637171Z	kv-0	2026/10/17 18:00:33 node kv-0: peer "kv-3" is alive again
+2026-10-17T18:00:33.860032411Z	kv-2	2026/10/17 18:00:33 node kv-2: peer "kv-1" is alive again
+2026-10-17T18:00:33.974417845Z	kv-2	2026/10/17 18:00:33 node kv-2: peer "kv-5" is alive again
+2026-10-17T18:00:34.183177930Z	kv-2	2026/10/17 18:00:34 node kv-2: peer "kv-4" is alive again
+2026-10-17T18:00:34.346907426Z	kv-2	2026/10/17 18:00:34 node kv-2: peer "kv-3" is alive again
+2026-10-17T18:00:35.179531450Z	kv-1	2026/10/17 18:00:35 node kv-1: peer "kv-4" is alive again
+2026-10-17T18:00:35.179655789Z	kv-5	2026/10/17 18:00:35 node kv-5: peer "kv-4" is alive again
+2026-10-17T18:00:35.348287256Z	kv-1	2026/10/17 18:00:35 node kv-1: peer "kv-3" is alive again
+2026-10-17T18:00:35.351311919Z	kv-5	2026/10/17 18:00:35 node kv-5: peer "kv-3" is alive again
+2026-10-17T18:00:36.368097865Z	kv-4	2026/10/17 18:00:36 node kv-4: peer "kv-3" is alive again
+2026-10-17T18:00:49.416541126Z	k6-bench-0-8plwn	k6-bench-start 1792260049 index=0 of 1
+2026-10-17T18:01:18.664188255Z	k6-bench-0-8plwn	k6 bench: scenario=preload profile=shared run=20261017-180040 29.1s
+2026-10-17T18:01:18.664223290Z	k6-bench-0-8plwn	  put: 20000 requests (686.2/s), p50 40.17 ms, p95 172.24 ms, p99 294.16 ms, max 571.79 ms, errors 0
+2026-10-17T18:01:18.664229690Z	k6-bench-0-8plwn	  dropped_iterations 0, vus_max 40, connects 40
+2026-10-17T18:01:18.664233396Z	k6-bench-0-8plwn	===K6_BENCH_SUMMARY_BEGIN===
+2026-10-17T18:01:18.664239706Z	k6-bench-0-8plwn	
+2026-10-17T18:01:18.664245590Z	k6-bench-0-8plwn	===K6_BENCH_SUMMARY_END===
+2026-10-17T18:01:18.664248625Z	k6-bench-0-8plwn	K6_BENCH duration_s=29.1
+2026-10-17T18:01:18.664251144Z	k6-bench-0-8plwn	K6_BENCH dropped_iterations=0
+2026-10-17T18:01:18.664253942Z	k6-bench-0-8plwn	K6_BENCH vus_max=40
+2026-10-17T18:01:18.664256645Z	k6-bench-0-8plwn	K6_BENCH connects=40
+2026-10-17T18:01:18.664258846Z	k6-bench-0-8plwn	K6_BENCH put_count=20000
+2026-10-17T18:01:18.664261292Z	k6-bench-0-8plwn	K6_BENCH put_rate=686.2
+2026-10-17T18:01:18.664277759Z	k6-bench-0-8plwn	K6_BENCH put_p50_ms=40.17
+2026-10-17T18:01:18.664283247Z	k6-bench-0-8plwn	K6_BENCH put_p95_ms=172.24
+2026-10-17T18:01:18.664285681Z	k6-bench-0-8plwn	K6_BENCH put_p99_ms=294.16
+2026-10-17T18:01:18.664287874Z	k6-bench-0-8plwn	K6_BENCH put_max_ms=571.79
+2026-10-17T18:01:18.664290365Z	k6-bench-0-8plwn	K6_BENCH put_errors=0
+2026-10-17T18:02:26.951387772Z	k6-bench-0-dsk5b	k6-bench-start 1792260146 index=0 of 1
+2026-10-17T18:07:27.121423133Z	k6-bench-0-dsk5b	k6 bench: scenario=writes profile=constant run=20261017-180221 300.0s
+2026-10-17T18:07:27.121469533Z	k6-bench-0-dsk5b	  put: 12000 requests (40.0/s), p50 7.63 ms, p95 9.45 ms, p99 10.77 ms, max 29.53 ms, errors 0
+2026-10-17T18:07:27.121476450Z	k6-bench-0-dsk5b	  dropped_iterations 0, vus_max 120, connects 120
+2026-10-17T18:07:27.121480527Z	k6-bench-0-dsk5b	===K6_BENCH_SUMMARY_BEGIN===
+2026-10-17T18:07:27.121487885Z	k6-bench-0-dsk5b	
+2026-10-17T18:07:27.121494565Z	k6-bench-0-dsk5b	===K6_BENCH_SUMMARY_END===
+2026-10-17T18:07:27.121498017Z	k6-bench-0-dsk5b	K6_BENCH duration_s=300.0
+2026-10-17T18:07:27.121501415Z	k6-bench-0-dsk5b	K6_BENCH dropped_iterations=0
+2026-10-17T18:07:27.121505036Z	k6-bench-0-dsk5b	K6_BENCH vus_max=120
+2026-10-17T18:07:27.121508148Z	k6-bench-0-dsk5b	K6_BENCH connects=120
+2026-10-17T18:07:27.121511549Z	k6-bench-0-dsk5b	K6_BENCH put_count=12000
+2026-10-17T18:07:27.121515018Z	k6-bench-0-dsk5b	K6_BENCH put_rate=40.0
+2026-10-17T18:07:27.121518371Z	k6-bench-0-dsk5b	K6_BENCH put_p50_ms=7.63
+2026-10-17T18:07:27.121521630Z	k6-bench-0-dsk5b	K6_BENCH put_p95_ms=9.45
+2026-10-17T18:07:27.121524940Z	k6-bench-0-dsk5b	K6_BENCH put_p99_ms=10.77
+2026-10-17T18:07:27.121527870Z	k6-bench-0-dsk5b	K6_BENCH put_max_ms=29.53
+2026-10-17T18:07:27.121530908Z	k6-bench-0-dsk5b	K6_BENCH put_errors=0
+2026-10-17T18:08:32.887935696Z	k6-bench-0-mfwsp	k6-bench-start 1792260512 index=0 of 1
+2026-10-17T18:13:01.556933831Z	k6-bench-0-mfwsp	time="2026-10-17T18:13:01Z" level=warning msg="Insufficient VUs, reached 120 active VUs and cannot initialize more" executor=ramping-arrival-rate scenario=writes
+2026-10-17T18:13:53.101746089Z	k6-bench-0-mfwsp	k6 bench: scenario=writes profile=ramp run=20261017-180827 320.0s
+2026-10-17T18:13:53.101791676Z	k6-bench-0-mfwsp	  put: 88399 requests (276.2/s), p50 8.32 ms, p95 48.51 ms, p99 317.74 ms, max 5000.74 ms, errors 632
+2026-10-17T18:13:53.101802487Z	k6-bench-0-mfwsp	  dropped_iterations 6985, vus_max 120, connects 120
+2026-10-17T18:13:53.101807847Z	k6-bench-0-mfwsp	===K6_BENCH_SUMMARY_BEGIN===
+2026-10-17T18:13:53.101840225Z	k6-bench-0-mfwsp	
+2026-10-17T18:13:53.101875280Z	k6-bench-0-mfwsp	===K6_BENCH_SUMMARY_END===
+2026-10-17T18:13:53.101878426Z	k6-bench-0-mfwsp	K6_BENCH duration_s=320.0
+2026-10-17T18:13:53.101880855Z	k6-bench-0-mfwsp	K6_BENCH dropped_iterations=6985
+2026-10-17T18:13:53.101884Z	k6-bench-0-mfwsp	K6_BENCH vus_max=120
+2026-10-17T18:13:53.101886582Z	k6-bench-0-mfwsp	K6_BENCH connects=120
+2026-10-17T18:13:53.101889187Z	k6-bench-0-mfwsp	K6_BENCH put_count=88399
+2026-10-17T18:13:53.101891443Z	k6-bench-0-mfwsp	K6_BENCH put_rate=276.2
+2026-10-17T18:13:53.101894034Z	k6-bench-0-mfwsp	K6_BENCH put_p50_ms=8.32
+2026-10-17T18:13:53.101896718Z	k6-bench-0-mfwsp	K6_BENCH put_p95_ms=48.51
+2026-10-17T18:13:53.101899113Z	k6-bench-0-mfwsp	K6_BENCH put_p99_ms=317.74
+2026-10-17T18:13:53.101901511Z	k6-bench-0-mfwsp	K6_BENCH put_max_ms=5000.74
+2026-10-17T18:13:53.101904038Z	k6-bench-0-mfwsp	K6_BENCH put_errors=632
+2026-10-17T18:13:53.101906360Z	k6-bench-0-mfwsp	===K6_BENCH_STEPS_BEGIN===
+2026-10-17T18:13:53.101908846Z	k6-bench-0-mfwsp	step,op,target_rate,seconds,started,achieved_rate,count,p50_ms,p95_ms,p99_ms,max_ms,errors,dropped
+2026-10-17T18:13:53.101911308Z	k6-bench-0-mfwsp	1,put,100,60,5999,100.0,5999,7.74,11.04,13.84,39.81,0,1
+2026-10-17T18:13:53.101913780Z	k6-bench-0-mfwsp	2,put,200,60,12000,200.0,12000,7.07,9.66,11.88,28.05,0,0
+2026-10-17T18:13:53.101916302Z	k6-bench-0-mfwsp	3,put,300,60,18000,300.0,18000,7.46,18.97,86.03,417.94,0,0
+2026-10-17T18:13:53.101919037Z	k6-bench-0-mfwsp	4,put,400,60,24000,400.0,24000,9.09,37.28,65.96,181.16,0,0
+2026-10-17T18:13:53.101921525Z	k6-bench-0-mfwsp	5,put,500,60,23015,383.6,22401,13.38,143.05,3473.49,5000.74,632,6985
+2026-10-17T18:13:53.101924160Z	k6-bench-0-mfwsp	===K6_BENCH_STEPS_END===
+2026-10-17T18:22:44.135441423Z	kv-5	2026/10/17 18:22:44 app: node kv-5 shutting down
+2026-10-17T18:22:44.139969653Z	kv-5	2026/10/17 18:22:44 app: node kv-5 shutdown complete
+2026-10-17T18:22:44.154286494Z	kv-0	2026/10/17 18:22:44 app: node kv-0 shutting down
+2026-10-17T18:22:44.160939383Z	kv-0	2026/10/17 18:22:44 app: node kv-0 shutdown complete
+2026-10-17T18:22:44.171196713Z	kv-4	2026/10/17 18:22:44 app: node kv-4 shutting down
+2026-10-17T18:22:44.181595992Z	kv-4	2026/10/17 18:22:44 app: node kv-4 shutdown complete
+2026-10-17T18:22:44.211468247Z	kv-3	2026/10/17 18:22:44 app: node kv-3 shutting down
+2026-10-17T18:22:44.219812176Z	kv-3	2026/10/17 18:22:44 node kv-3: anti-entropy with "kv-2" failed: fetch merkle tree from "kv-2": rpc error: code = Canceled desc = context canceled
+2026-10-17T18:22:44.224704328Z	kv-3	2026/10/17 18:22:44 app: node kv-3 shutdown complete
+2026-10-17T18:22:44.253162163Z	kv-1	2026/10/17 18:22:44 app: node kv-1 shutting down
+2026-10-17T18:22:44.257131070Z	kv-1	2026/10/17 18:22:44 app: node kv-1 shutdown complete
+2026-10-17T18:22:44.491036315Z	kv-2	2026/10/17 18:22:44 app: node kv-2 shutting down
+2026-10-17T18:22:46.013681233Z	kv-2	2026/10/17 18:22:46 app: node kv-2 shutdown complete
+2026-10-17T18:23:01.486534529Z	kv-3	2026/10/17 18:23:01 app: node kv-3 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T18:23:03.870394317Z	kv-3	2026/10/17 18:23:03 node kv-3: peer "kv-0" is dead: 3 heartbeats missed
+2026-10-17T18:23:03.870445353Z	kv-3	2026/10/17 18:23:03 node kv-3: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T18:23:03.870465220Z	kv-3	2026/10/17 18:23:03 node kv-3: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T18:23:03.870470599Z	kv-3	2026/10/17 18:23:03 node kv-3: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T18:23:03.870474824Z	kv-3	2026/10/17 18:23:03 node kv-3: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T18:23:04.695139694Z	kv-0	2026/10/17 18:23:04 app: node kv-0 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T18:23:05.816124568Z	kv-1	2026/10/17 18:23:05 app: node kv-1 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T18:23:05.858612278Z	kv-4	2026/10/17 18:23:05 app: node kv-4 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T18:23:06.331240570Z	kv-0	2026/10/17 18:23:06 node kv-0: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T18:23:06.720691188Z	kv-0	2026/10/17 18:23:06 node kv-0: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T18:23:07.221068397Z	kv-1	2026/10/17 18:23:07 node kv-1: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T18:23:07.225757653Z	kv-3	2026/10/17 18:23:07 node kv-3: peer "kv-4" is alive again
+2026-10-17T18:23:07.330770917Z	kv-0	2026/10/17 18:23:07 node kv-0: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T18:23:07.330869837Z	kv-0	2026/10/17 18:23:07 node kv-0: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T18:23:07.350851656Z	kv-3	2026/10/17 18:23:07 node kv-3: peer "kv-0" is alive again
+2026-10-17T18:23:07.642564577Z	kv-2	2026/10/17 18:23:07 app: node kv-2 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T18:23:07.703157990Z	kv-3	2026/10/17 18:23:07 node kv-3: peer "kv-1" is alive again
+2026-10-17T18:23:07.970250991Z	kv-4	2026/10/17 18:23:07 node kv-4: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T18:23:07.985695840Z	kv-3	2026/10/17 18:23:07 node kv-3: peer "kv-2" is alive again
+2026-10-17T18:23:07.988877904Z	kv-1	2026/10/17 18:23:07 node kv-1: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T18:23:08.212161046Z	kv-4	2026/10/17 18:23:08 node kv-4: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T18:23:08.686777726Z	kv-1	2026/10/17 18:23:08 node kv-1: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T18:23:09.933818245Z	kv-2	2026/10/17 18:23:09 node kv-2: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T18:23:10.700001869Z	kv-0	2026/10/17 18:23:10 node kv-0: peer "kv-1" is alive again
+2026-10-17T18:23:10.940027768Z	kv-0	2026/10/17 18:23:10 node kv-0: peer "kv-2" is alive again
+2026-10-17T18:23:10.977516971Z	kv-5	2026/10/17 18:23:10 app: node kv-5 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T18:23:11.218748115Z	kv-0	2026/10/17 18:23:11 node kv-0: peer "kv-4" is alive again
+2026-10-17T18:23:11.923154247Z	kv-0	2026/10/17 18:23:11 node kv-0: peer "kv-5" is alive again
+2026-10-17T18:23:11.932012197Z	kv-1	2026/10/17 18:23:11 node kv-1: peer "kv-5" is alive again
+2026-10-17T18:23:11.946069849Z	kv-4	2026/10/17 18:23:11 node kv-4: peer "kv-5" is alive again
+2026-10-17T18:23:11.950459027Z	kv-1	2026/10/17 18:23:11 node kv-1: peer "kv-2" is alive again
+2026-10-17T18:23:11.965524572Z	kv-4	2026/10/17 18:23:11 node kv-4: peer "kv-2" is alive again
+2026-10-17T18:23:12.220634441Z	kv-1	2026/10/17 18:23:12 node kv-1: peer "kv-4" is alive again
+2026-10-17T18:23:13.877326332Z	kv-2	2026/10/17 18:23:13 node kv-2: peer "kv-5" is alive again
+2026-10-17T18:23:15.879237009Z	kv-3	2026/10/17 18:23:15 node kv-3: peer "kv-5" is alive again
+2026-10-17T18:23:34.395895632Z	k6-bench-0-gp47w	k6-bench-start 1792261414 index=0 of 1
+2026-10-17T18:23:40.633112863Z	k6-bench-0-gp47w	k6 bench: scenario=preload profile=shared run=20261017-182328 6.1s
+2026-10-17T18:23:40.633154796Z	k6-bench-0-gp47w	  put: 20000 requests (3258.5/s), p50 10.90 ms, p95 19.32 ms, p99 32.16 ms, max 135.97 ms, errors 0
+2026-10-17T18:23:40.633161108Z	k6-bench-0-gp47w	  dropped_iterations 0, vus_max 40, connects 40
+2026-10-17T18:23:40.633164823Z	k6-bench-0-gp47w	===K6_BENCH_SUMMARY_BEGIN===
+2026-10-17T18:23:40.633182763Z	k6-bench-0-gp47w	
+2026-10-17T18:23:40.633194450Z	k6-bench-0-gp47w	===K6_BENCH_SUMMARY_END===
+2026-10-17T18:23:40.633197803Z	k6-bench-0-gp47w	K6_BENCH duration_s=6.1
+2026-10-17T18:23:40.633200260Z	k6-bench-0-gp47w	K6_BENCH dropped_iterations=0
+2026-10-17T18:23:40.633202801Z	k6-bench-0-gp47w	K6_BENCH vus_max=40
+2026-10-17T18:23:40.633205309Z	k6-bench-0-gp47w	K6_BENCH connects=40
+2026-10-17T18:23:40.633207796Z	k6-bench-0-gp47w	K6_BENCH put_count=20000
+2026-10-17T18:23:40.633210253Z	k6-bench-0-gp47w	K6_BENCH put_rate=3258.5
+2026-10-17T18:23:40.633212596Z	k6-bench-0-gp47w	K6_BENCH put_p50_ms=10.90
+2026-10-17T18:23:40.633215139Z	k6-bench-0-gp47w	K6_BENCH put_p95_ms=19.32
+2026-10-17T18:23:40.633217613Z	k6-bench-0-gp47w	K6_BENCH put_p99_ms=32.16
+2026-10-17T18:23:40.633219942Z	k6-bench-0-gp47w	K6_BENCH put_max_ms=135.97
+2026-10-17T18:23:40.633222358Z	k6-bench-0-gp47w	K6_BENCH put_errors=0
+2026-10-17T18:24:47.727317796Z	k6-bench-0-ql6gh	k6-bench-start 1792261487 index=0 of 1
+2026-10-17T18:29:47.878233530Z	k6-bench-0-ql6gh	k6 bench: scenario=writes profile=constant run=20261017-182442 300.0s
+2026-10-17T18:29:47.878298870Z	k6-bench-0-ql6gh	  put: 12000 requests (40.0/s), p50 7.56 ms, p95 9.63 ms, p99 11.41 ms, max 28.92 ms, errors 0
+2026-10-17T18:29:47.878309102Z	k6-bench-0-ql6gh	  dropped_iterations 0, vus_max 120, connects 120
+2026-10-17T18:29:47.878313990Z	k6-bench-0-ql6gh	===K6_BENCH_SUMMARY_BEGIN===
+2026-10-17T18:29:47.878325448Z	k6-bench-0-ql6gh	
+2026-10-17T18:29:47.878332605Z	k6-bench-0-ql6gh	===K6_BENCH_SUMMARY_END===
+2026-10-17T18:29:47.878338443Z	k6-bench-0-ql6gh	K6_BENCH duration_s=300.0
+2026-10-17T18:29:47.878341702Z	k6-bench-0-ql6gh	K6_BENCH dropped_iterations=0
+2026-10-17T18:29:47.878345528Z	k6-bench-0-ql6gh	K6_BENCH vus_max=120
+2026-10-17T18:29:47.878348804Z	k6-bench-0-ql6gh	K6_BENCH connects=120
+2026-10-17T18:29:47.878352219Z	k6-bench-0-ql6gh	K6_BENCH put_count=12000
+2026-10-17T18:29:47.878355650Z	k6-bench-0-ql6gh	K6_BENCH put_rate=40.0
+2026-10-17T18:29:47.878358669Z	k6-bench-0-ql6gh	K6_BENCH put_p50_ms=7.56
+2026-10-17T18:29:47.878361670Z	k6-bench-0-ql6gh	K6_BENCH put_p95_ms=9.63
+2026-10-17T18:29:47.878364688Z	k6-bench-0-ql6gh	K6_BENCH put_p99_ms=11.41
+2026-10-17T18:29:47.878366765Z	k6-bench-0-ql6gh	K6_BENCH put_max_ms=28.92
+2026-10-17T18:29:47.878368733Z	k6-bench-0-ql6gh	K6_BENCH put_errors=0
+2026-10-17T18:30:57.675743462Z	k6-bench-0-mfszx	k6-bench-start 1792261857 index=0 of 1
+2026-10-17T18:36:17.880610316Z	k6-bench-0-mfszx	k6 bench: scenario=writes profile=ramp run=20261017-183051 320.0s
+2026-10-17T18:36:17.880646941Z	k6-bench-0-mfszx	  put: 95999 requests (300.0/s), p50 6.81 ms, p95 9.70 ms, p99 16.40 ms, max 127.36 ms, errors 0
+2026-10-17T18:36:17.880654261Z	k6-bench-0-mfszx	  dropped_iterations 0, vus_max 120, connects 120
+2026-10-17T18:36:17.880658153Z	k6-bench-0-mfszx	===K6_BENCH_SUMMARY_BEGIN===
+2026-10-17T18:36:17.880691862Z	k6-bench-0-mfszx	
+2026-10-17T18:36:17.880728003Z	k6-bench-0-mfszx	===K6_BENCH_SUMMARY_END===
+2026-10-17T18:36:17.880730634Z	k6-bench-0-mfszx	K6_BENCH duration_s=320.0
+2026-10-17T18:36:17.880732821Z	k6-bench-0-mfszx	K6_BENCH dropped_iterations=0
+2026-10-17T18:36:17.880735874Z	k6-bench-0-mfszx	K6_BENCH vus_max=120
+2026-10-17T18:36:17.880738068Z	k6-bench-0-mfszx	K6_BENCH connects=120
+2026-10-17T18:36:17.880740633Z	k6-bench-0-mfszx	K6_BENCH put_count=95999
+2026-10-17T18:36:17.880742736Z	k6-bench-0-mfszx	K6_BENCH put_rate=300.0
+2026-10-17T18:36:17.880744801Z	k6-bench-0-mfszx	K6_BENCH put_p50_ms=6.81
+2026-10-17T18:36:17.880746965Z	k6-bench-0-mfszx	K6_BENCH put_p95_ms=9.70
+2026-10-17T18:36:17.880748956Z	k6-bench-0-mfszx	K6_BENCH put_p99_ms=16.40
+2026-10-17T18:36:17.880751131Z	k6-bench-0-mfszx	K6_BENCH put_max_ms=127.36
+2026-10-17T18:36:17.880753301Z	k6-bench-0-mfszx	K6_BENCH put_errors=0
+2026-10-17T18:36:17.880755531Z	k6-bench-0-mfszx	===K6_BENCH_STEPS_BEGIN===
+2026-10-17T18:36:17.880758796Z	k6-bench-0-mfszx	step,op,target_rate,seconds,started,achieved_rate,count,p50_ms,p95_ms,p99_ms,max_ms,errors,dropped
+2026-10-17T18:36:17.880761084Z	k6-bench-0-mfszx	1,put,100,60,5999,100.0,5999,7.21,8.94,10.50,23.89,0,1
+2026-10-17T18:36:17.880763264Z	k6-bench-0-mfszx	2,put,200,60,12000,200.0,12000,6.75,8.82,10.83,35.27,0,0
+2026-10-17T18:36:17.880765668Z	k6-bench-0-mfszx	3,put,300,60,18000,300.0,18000,6.76,9.48,13.87,93.71,0,0
+2026-10-17T18:36:17.880767877Z	k6-bench-0-mfszx	4,put,400,60,24000,400.0,24000,6.73,9.65,15.12,67.97,0,0
+2026-10-17T18:36:17.880770296Z	k6-bench-0-mfszx	5,put,500,60,30000,500.0,30000,6.88,10.62,25.58,127.36,0,0
+2026-10-17T18:36:17.880772648Z	k6-bench-0-mfszx	===K6_BENCH_STEPS_END===
+2026-10-17T19:16:34.318416653Z	kv-0	2026/10/17 19:16:34 app: node kv-0 shutting down
+2026-10-17T19:16:34.321880233Z	kv-0	2026/10/17 19:16:34 app: node kv-0 shutdown complete
+2026-10-17T19:16:34.323971147Z	kv-2	2026/10/17 19:16:34 app: node kv-2 shutting down
+2026-10-17T19:16:34.329549274Z	kv-2	2026/10/17 19:16:34 app: node kv-2 shutdown complete
+2026-10-17T19:16:34.372476355Z	kv-3	2026/10/17 19:16:34 app: node kv-3 shutting down
+2026-10-17T19:16:34.375815863Z	kv-4	2026/10/17 19:16:34 app: node kv-4 shutting down
+2026-10-17T19:16:34.389935093Z	kv-3	2026/10/17 19:16:34 app: node kv-3 shutdown complete
+2026-10-17T19:16:34.394586266Z	kv-4	2026/10/17 19:16:34 app: node kv-4 shutdown complete
+2026-10-17T19:16:34.410136945Z	kv-1	2026/10/17 19:16:34 app: node kv-1 shutting down
+2026-10-17T19:16:34.417497666Z	kv-5	2026/10/17 19:16:34 node kv-5: anti-entropy with "kv-1" failed: reconcile bucket 8 with "kv-1": fetch "bench-20261017-182442-w-6978" from "kv-1": rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 10.20.7.5:7000: connect: connection refused"
+2026-10-17T19:16:34.434342821Z	kv-1	2026/10/17 19:16:34 app: node kv-1 shutdown complete
+2026-10-17T19:16:34.471104262Z	kv-5	2026/10/17 19:16:34 app: node kv-5 shutting down
+2026-10-17T19:16:36.881393701Z	kv-5	2026/10/17 19:16:36 node kv-5: anti-entropy with "kv-2" failed: fetch merkle tree from "kv-2": rpc error: code = Canceled desc = context canceled
+2026-10-17T19:16:36.882482319Z	kv-5	2026/10/17 19:16:36 app: node kv-5 shutdown complete
+2026-10-17T19:16:50.659326090Z	kv-0	2026/10/17 19:16:50 app: node kv-0 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T19:16:51.332080979Z	kv-3	2026/10/17 19:16:51 app: node kv-3 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T19:16:51.936549734Z	kv-0	2026/10/17 19:16:51 node kv-0: peer "kv-3" is dead: 3 heartbeats missed
+2026-10-17T19:16:52.550806156Z	kv-2	2026/10/17 19:16:52 app: node kv-2 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T19:16:52.759234708Z	kv-0	2026/10/17 19:16:52 node kv-0: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T19:16:52.759340958Z	kv-0	2026/10/17 19:16:52 node kv-0: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T19:16:52.759349588Z	kv-0	2026/10/17 19:16:52 node kv-0: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T19:16:52.759638038Z	kv-0	2026/10/17 19:16:52 node kv-0: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T19:16:52.975433115Z	kv-1	2026/10/17 19:16:52 app: node kv-1 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T19:16:53.281040600Z	kv-3	2026/10/17 19:16:53 node kv-3: peer "kv-1" is dead: 3 heartbeats missed
+2026-10-17T19:16:53.439757220Z	kv-3	2026/10/17 19:16:53 node kv-3: peer "kv-2" is dead: 3 heartbeats missed
+2026-10-17T19:16:53.790439212Z	kv-4	2026/10/17 19:16:53 app: node kv-4 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T19:16:53.894958770Z	kv-3	2026/10/17 19:16:53 node kv-3: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T19:16:53.895026722Z	kv-3	2026/10/17 19:16:53 node kv-3: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T19:16:54.505447628Z	kv-2	2026/10/17 19:16:54 node kv-2: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T19:16:54.510400862Z	kv-1	2026/10/17 19:16:54 node kv-1: peer "kv-4" is dead: 3 heartbeats missed
+2026-10-17T19:16:54.515615982Z	kv-5	2026/10/17 19:16:54 app: node kv-5 ready (grpc :7000, http :8080, group commit true)
+2026-10-17T19:16:55.159694083Z	kv-1	2026/10/17 19:16:55 node kv-1: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T19:16:55.305838802Z	kv-2	2026/10/17 19:16:55 node kv-2: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T19:16:55.471874426Z	kv-4	2026/10/17 19:16:55 node kv-4: peer "kv-5" is dead: 3 heartbeats missed
+2026-10-17T19:16:55.907379749Z	kv-0	2026/10/17 19:16:55 node kv-0: peer "kv-3" is alive again
+2026-10-17T19:16:56.174644135Z	kv-0	2026/10/17 19:16:56 node kv-0: peer "kv-1" is alive again
+2026-10-17T19:16:56.267019306Z	kv-0	2026/10/17 19:16:56 node kv-0: peer "kv-5" is alive again
+2026-10-17T19:16:56.408609583Z	kv-0	2026/10/17 19:16:56 node kv-0: peer "kv-2" is alive again
+2026-10-17T19:16:56.482614986Z	kv-0	2026/10/17 19:16:56 node kv-0: peer "kv-4" is alive again
+2026-10-17T19:16:57.167331664Z	kv-3	2026/10/17 19:16:57 node kv-3: peer "kv-1" is alive again
+2026-10-17T19:16:57.260478844Z	kv-3	2026/10/17 19:16:57 node kv-3: peer "kv-5" is alive again
+2026-10-17T19:16:57.404156643Z	kv-3	2026/10/17 19:16:57 node kv-3: peer "kv-2" is alive again
+2026-10-17T19:16:57.483890891Z	kv-3	2026/10/17 19:16:57 node kv-3: peer "kv-4" is alive again
+2026-10-17T19:16:58.257966652Z	kv-1	2026/10/17 19:16:58 node kv-1: peer "kv-5" is alive again
+2026-10-17T19:16:58.480267422Z	kv-1	2026/10/17 19:16:58 node kv-1: peer "kv-4" is alive again
+2026-10-17T19:16:58.483376025Z	kv-2	2026/10/17 19:16:58 node kv-2: peer "kv-4" is alive again
+2026-10-17T19:16:59.255600905Z	kv-2	2026/10/17 19:16:59 node kv-2: peer "kv-5" is alive again
+2026-10-17T19:17:00.258370545Z	kv-4	2026/10/17 19:17:00 node kv-4: peer "kv-5" is alive again
+2026-10-17T19:17:11.304061537Z	k6-bench-0-zth4w	k6-bench-start 1792264631 index=0 of 1
+2026-10-17T19:20:01.540542875Z	k6-bench-0-zth4w	k6 bench: scenario=writes profile=ramp run=20261017-191704 170.0s
+2026-10-17T19:20:01.540584561Z	k6-bench-0-zth4w	  put: 118998 requests (699.9/s), p50 8.19 ms, p95 17.00 ms, p99 37.31 ms, max 162.31 ms, errors 0
+2026-10-17T19:20:01.540592376Z	k6-bench-0-zth4w	  dropped_iterations 0, vus_max 120, connects 120
+2026-10-17T19:20:01.540596032Z	k6-bench-0-zth4w	===K6_BENCH_SUMMARY_BEGIN===
+2026-10-17T19:20:01.540624532Z	k6-bench-0-zth4w	
+2026-10-17T19:20:01.540663727Z	k6-bench-0-zth4w	===K6_BENCH_SUMMARY_END===
+2026-10-17T19:20:01.540666463Z	k6-bench-0-zth4w	K6_BENCH duration_s=170.0
+2026-10-17T19:20:01.540668770Z	k6-bench-0-zth4w	K6_BENCH dropped_iterations=0
+2026-10-17T19:20:01.540671727Z	k6-bench-0-zth4w	K6_BENCH vus_max=120
+2026-10-17T19:20:01.540674262Z	k6-bench-0-zth4w	K6_BENCH connects=120
+2026-10-17T19:20:01.540676835Z	k6-bench-0-zth4w	K6_BENCH put_count=118998
+2026-10-17T19:20:01.540679315Z	k6-bench-0-zth4w	K6_BENCH put_rate=699.9
+2026-10-17T19:20:01.540681525Z	k6-bench-0-zth4w	K6_BENCH put_p50_ms=8.19
+2026-10-17T19:20:01.540683787Z	k6-bench-0-zth4w	K6_BENCH put_p95_ms=17.00
+2026-10-17T19:20:01.540686152Z	k6-bench-0-zth4w	K6_BENCH put_p99_ms=37.31
+2026-10-17T19:20:01.540688544Z	k6-bench-0-zth4w	K6_BENCH put_max_ms=162.31
+2026-10-17T19:20:01.540691182Z	k6-bench-0-zth4w	K6_BENCH put_errors=0
+2026-10-17T19:20:01.540693824Z	k6-bench-0-zth4w	===K6_BENCH_STEPS_BEGIN===
+2026-10-17T19:20:01.540696312Z	k6-bench-0-zth4w	step,op,target_rate,seconds,started,achieved_rate,count,p50_ms,p95_ms,p99_ms,max_ms,errors,dropped
+2026-10-17T19:20:01.540699019Z	k6-bench-0-zth4w	1,put,500,30,14998,499.9,14998,8.47,12.68,16.16,33.82,0,2
+2026-10-17T19:20:01.540701367Z	k6-bench-0-zth4w	2,put,600,30,18000,600.0,18000,8.23,18.19,32.36,71.58,0,0
+2026-10-17T19:20:01.540704544Z	k6-bench-0-zth4w	3,put,700,30,21000,700.0,21000,7.90,12.79,20.22,81.59,0,0
+2026-10-17T19:20:01.540707215Z	k6-bench-0-zth4w	4,put,800,30,24000,800.0,24000,8.06,15.04,37.49,162.31,0,0
+2026-10-17T19:20:01.540709541Z	k6-bench-0-zth4w	5,put,900,30,27000,900.0,27000,8.38,27.07,60.61,156.43,0,0
+2026-10-17T19:20:01.540712162Z	k6-bench-0-zth4w	===K6_BENCH_STEPS_END===

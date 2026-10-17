@@ -1,0 +1,18 @@
+k6-bench-start 1792261487 index=0 of 1
+k6 bench: scenario=writes profile=constant run=20261017-182442 300.0s
+  put: 12000 requests (40.0/s), p50 7.56 ms, p95 9.63 ms, p99 11.41 ms, max 28.92 ms, errors 0
+  dropped_iterations 0, vus_max 120, connects 120
+===K6_BENCH_SUMMARY_BEGIN===
+{"root_group":{"groups":[],"checks":[],"name":"","path":"","id":"d41d8cd98f00b204e9800998ecf8427e"},"options":{"summaryTrendStats":["min","med","avg","p(90)","p(95)","p(99)","max","count"],"summaryTimeUnit":"","noColor":false},"state":{"isStdErrTTY":false,"testRunDurationMs":300001.308431,"isStdOutTTY":false},"metrics":{"kv_errors{op:put}":{"type":"rate","contains":"default","values":{"rate":0,"passes":0,"fails":12000},"thresholds":{"rate>=0":{"ok":true}}},"kv_started":{"type":"counter","contains":"default","values":{"count":12000,"rate":39.999825543294214}},"data_sent":{"contains":"data","values":{"count":4464533,"rate":14881.71176102333},"type":"counter"},"grpc_req_duration":{"type":"trend","contains":"time","values":{"avg":7.705785721416634,"p(90)":9.09133,"p(95)":9.634096399999997,"p(99)":11.408438790000002,"max":28.915384,"count":12000,"min":5.225008,"med":7.5601685}},"iteration_duration":{"type":"trend","contains":"time","values":{"min":5.584359,"med":7.967635,"avg":9.863873310333323,"p(90)":9.503371000000001,"p(95)":10.07188205,"p(99)":12.08190841,"max":1019.791216,"count":12000}},"vus":{"type":"gauge","contains":"default","values":{"max":36,"value":1,"min":0}},"iterations":{"contains":"default","values":{"count":12000,"rate":39.999825543294214},"type":"counter"},"kv_errors":{"contains":"default","values":{"rate":0,"passes":0,"fails":12000},"type":"rate"},"vus_max":{"type":"gauge","contains":"default","values":{"value":120,"min":120,"max":120}},"kv_connects":{"type":"counter","contains":"default","values":{"count":120,"rate":0.39999825543294215}},"data_received":{"type":"counter","contains":"data","values":{"rate":3336.3854485661705,"count":1000920}},"grpc_req_duration{op:put}":{"type":"trend","contains":"time","values":{"min":5.225008,"med":7.5601685,"avg":7.705785721416634,"p(90)":9.09133,"p(95)":9.634096399999997,"p(99)":11.408438790000002,"max":28.915384,"count":12000},"thresholds":{"max>=0":{"ok":true}}}}}
+===K6_BENCH_SUMMARY_END===
+K6_BENCH duration_s=300.0
+K6_BENCH dropped_iterations=0
+K6_BENCH vus_max=120
+K6_BENCH connects=120
+K6_BENCH put_count=12000
+K6_BENCH put_rate=40.0
+K6_BENCH put_p50_ms=7.56
+K6_BENCH put_p95_ms=9.63
+K6_BENCH put_p99_ms=11.41
+K6_BENCH put_max_ms=28.92
+K6_BENCH put_errors=0

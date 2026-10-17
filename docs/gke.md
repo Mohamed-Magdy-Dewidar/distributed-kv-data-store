@@ -901,6 +901,469 @@ a KVCluster, so each side is its own `reset`.
     the part B runs' `docs/results/bench/` directories: the per-request
     records and read-backs stay out (`docs/results/chaos/.gitignore`).
 
+## Session 3 (results), 2026-10-17
+
+Written during the session, 15:47-19:47Z: about 4 hours and $3.40 to the
+last run (budget 4.5 hours, $4.50), plus the teardown. Part A, the four
+failure tests and the convergence: **no acknowledged write lost, no stale
+read**; part B, group commit off and on: the write ceiling from about
+400/s to above 1,500/s. Torn down afterwards (step 23): every list empty,
+`loadgen_enabled` and `workload_logging` back to `false`.
+
+**Set-up.** Commit `e406077` (group commit included); europe-west1, GKE
+1.36.4-gke.1391002. Images, tag `e406077-20261017154739`:
+
+- `kvnode@sha256:9d93ce554652a7cb3dc3b2897d494901b3e569b5d9837abba3ba22ff612f21aa`
+- `kvstore-operator@sha256:b00919a7b936e62f3d73ad0af5dcf0eb93a15efd87c3ee41d00d4e9d367b3d88`
+
+`SESSION_START` 2026-10-17T16:07:36Z.
+
+**The first apply failed, and was recovered without recreating the
+cluster.** `terraform apply` (16 to add) started at 15:47:39Z; 1m10s into
+the cluster's creation, Terraform lost its connection while polling the
+operation (`error while retrieving operation: ... http2: client connection
+lost`) and exited, leaving the cluster in its state **tainted**, with the
+node pools not yet created. GKE's operation went on regardless and finished
+`DONE`, without error, at about 15:54Z. A plain `apply` would then have
+destroyed and recreated the cluster. Instead:
+
+1. Waited for the operation (`gcloud container operations describe`) to be
+   `DONE` and the cluster `RUNNING`.
+2. `terraform -chdir=infra/gke untaint google_container_cluster.kvstore`;
+   the new plan was `3 to add, 0 to change, 0 to destroy` (the three pools),
+   nothing for the cluster.
+3. Deleted `default-pool` by hand (16:00-16:04Z), the step the provider
+   takes at the end of a successful create (`remove_default_node_pool`)
+   and never reached: Terraform does not track that pool, and its three
+   e2-small nodes (6 E2 vCPUs) would have taken the autoscaler's maximum
+   past the `E2_CPUS` quota (26 of 24):
+   `gcloud container node-pools delete default-pool --cluster kvstore --region europe-west1 --project kvstore-gke`.
+4. Applied the saved plan: 3 added (16:04:40-16:06:57Z). A plan afterwards
+   reported `No changes. Your infrastructure matches the configuration.`
+   (`-detailed-exitcode` 0). 8 nodes Ready: 6 `kvstore` (two each in b, c,
+   d), `system` and `loadgen` in b.
+
+**The cluster.** The bench KVCluster (`run.sh reset`, `groupCommit: true`),
+Ready 36s after its creation. 6 pods on 6 distinct nodes, each zone twice:
+europe-west1-b = {kv-0, kv-5}, c = {kv-1, kv-4}, d = {kv-2, kv-3}; every
+pod `epoch=0 members=6 alive=5 reachable=5`; Prometheus 6 of 6 targets up.
+`topology` accepted it (N=3, W=R=2). Share of the 5,000 preload keys each
+pod holds: kv-0 66.4%, kv-1 37.7%, kv-2 50.4%, kv-3 47.2%, kv-4 51.6%,
+kv-5 46.8%.
+
+**Targets and predictions** (from `predictions.txt`, written before any
+fault):
+
+| Test | Target | Prediction |
+|---|---|---|
+| 1. VM loss | kv-0 (holds the most keys, 66.4%), its VM `gke-kvstore-kvstore-a68c1bad-tx51` in b | No key fails (`down:kv-0`: 0 Puts, 0 Gets); requests to kv-0 fail or time out (target-down); `Degraded` if kv-0 is unready for more than 2 minutes; epoch unchanged |
+| 2. Zone loss | Zone c, kv-1 and kv-4 (its `down:` row fails the most keys) | `down:kv-1,kv-4`: 1,419 of the 5,000 preload keys (28.4%) fail, for Puts and Gets alike; `Degraded`; epoch unchanged. Through kv-client: failures beyond the key prediction (kind's finding), recorded, not a loss |
+| 3. Partition | Zone d, kv-2 and kv-3 (a third zone: each of tests 1-3 hits a different one) | From the group 4,132 keys (82.6%) fail, from the rest 868 (17.4%), on both sides 0: every key works on exactly one side; no pod restarts; the operator stays `Ready`; every pair alive again within about 15s of the heal |
+| 4. System-node loss | `gke-kvstore-system-f675d0ba-g9d7` (operator, Prometheus, Grafana, kube-dns) | Zero errors; the operator back `Ready`, epoch unchanged |
+
+For all four: no acknowledged write lost, no stale read.
+
+**Preload and baseline.** Preload 5,000 of 5,000 acknowledged, read back
+`ok` (16:12Z). Baseline t0, 16:12:57-16:18:20Z: 12,121 Puts and 30,301
+Gets, all ok and as predicted; 17,121 acknowledged writes (with the
+preload) read back, none lost, every copy on all owners: **PASS**.
+
+**A runbook error, step 10.** `wait-hints t0` appends a `hints-delivered`
+mark for t0, and `kvchaos check` refuses a test that has marks but was
+never injected (`test t0: marked or healed but never injected`; on purpose:
+the "mark only" case of `TestCheckRefusesABadTimeline`). The PASS above is
+`kvchaos check` over the events without that line. The line was then moved
+out of `faults.jsonl`, kept in `t0/marks.jsonl`, so that every later
+`check` runs as `chaos.sh check`. The runbook is to be fixed after the
+session.
+
+**`vm-loss` could not run gcloud from Git Bash (first attempt of test 1,
+aborted before the inject).** `chaos.sh` exports `MSYS_NO_PATHCONV=1` (for
+kubectl's `/scripts/...` paths), and under it the Cloud SDK's `gcloud`
+launcher cannot start: the POSIX path it hands to Python is not converted
+(`python3.12.exe: can't open file 'D:/c/Users/pc/AppData/Local/Google/Cloud SDK/google-cloud-sdk/lib/gcloud.py'`).
+`mig_of` failed before `mark inject`, so nothing was injected
+(`faults.jsonl` stayed empty). The kind rehearsal never called gcloud. The
+recorder of that attempt was stopped and read back: 6,041 Puts and 15,101
+Gets, all ok, all 6,041 keys read back; kept as `t1-aborted/` (its records
+say test `t1`, which has no fault: all normal, as predicted), and test 1
+was run as **`t1b`**. For the rest of the session, a `gcloud` wrapper
+first on `PATH` runs the real one with `MSYS_NO_PATHCONV` unset (`exec env
+-u MSYS_NO_PATHCONV .../gcloud "$@"`), proven first with `mig_of`'s and
+`wait_vm`'s exact commands under `set -euo pipefail` and
+`MSYS_NO_PATHCONV=1`. The fix belongs in `chaos.sh` itself (after the
+session).
+
+### Test 1, VM loss of kv-0 (t1b): PASS
+
+`recreate-instances` of `gke-kvstore-kvstore-a68c1bad-tx51` (b), injected
+16:30:44.9Z, healed 16:34:21.4Z (3m37s). Requests 16:28:38-16:36:21Z:
+18,521 Puts and 46,301 Gets, **every one ok**; the check: 62,068 as
+predicted, 2,753 in transition (all ok), 1 target-down that succeeded.
+Read-back over the session so far: 41,683 acknowledged writes, **0 lost, 0
+stale**, every copy on all its owners. Hints: 5,790 created and delivered
+(kv-1 363, kv-2 1,793, kv-3 2,111, kv-4 781, kv-5 742), predicted 5,779 to
+6,389; all delivered 2m53s after the heal. Epoch 0 throughout.
+
+Timeline (`check`): +56.7s node not Ready, +103.2s VM recreated, +142.0s
+node Ready, +192.5s volume attached, +215.9s serving, +216.4s kv-0 Ready.
+From kv-0's events: the node was never deleted (same name, not Ready); at
+16:32:59Z (+135s) the old pod was deleted (`TaintManagerEviction`) and the
+StatefulSet's new kv-0 was unschedulable (its disk is in b, kv-5 holds the
+other b node), which **triggered a scale-up of b, 2 to 3 nodes**
+(`gke-kvstore-kvstore-a68c1bad-v67k`); kv-0 was scheduled back onto the
+recreated tx51 at 16:33:37Z (the new node was not used); one
+`FailedAttachVolume` (the CSINode not yet registered) then attached at
+16:33:56Z; the image pull on the fresh VM took 22s.
+
+- **Question 1: the VM shuts down, it does not vanish.** The recorder sent
+  one request to kv-0 after the inject (+5.5s, ok) and none after: kv-0's
+  connection closed at once, as in t1 on kind. No `failed`, no `unknown`.
+- **Question 2:** 3m37s from the deletion to Ready; the Node object stays
+  (not Ready); the autoscaler added a node in b that went unused.
+- **Finding: never `Degraded`, although kv-0 was out for 3m37s.**
+  `operator.log`: `Ready`, `ready=5` from 16:31:52Z to 16:34:22Z,
+  `WaitingForPods`. The planner measures `Grace` (2 min) from the pod's
+  creation or its Ready condition's last transition
+  (`operator/internal/controller/observe.go`), and the pod was recreated
+  at 16:32:59Z: by the new pod's clock it was unready 1m22s. A pod
+  recreated during an outage restarts the clock. Not a loss; to be decided
+  after the session whether Grace should follow the member (the ordinal),
+  not the pod object.
+
+### Test 2, zone loss of c (kv-1, kv-4): no loss; check FAIL on 451 early successes
+
+`recreate-instances` of both c VMs, injected 16:54:07.4Z, healed
+16:58:02.4Z (3m55s); both recorders under test name t2. Straight to the
+pods: 19,760 Puts (2,320 failed), 49,400 Gets (6,094 failed). Through
+kv-client (t2svc): 5,001 Puts (438 failed), 10,001 Gets (1,236 failed),
+every failure `Unavailable`. Records verified complete (69,160 and
+15,002). Read-back over the session so far: 63,686 acknowledged writes,
+**0 lost, 0 stale**, every copy on all its owners; the 2,758 unacknowledged
+Puts all absent. Epoch 0 throughout.
+
+`check`: 80,056 as predicted, 226 target-down that succeeded, 3,429 in
+transition (2 Gets failed), and **451 `unexpected-success`**: Gets in the
+fault phase, predicted to fail, that succeeded, all from 16:57:48Z on.
+**Cause: the `serving` mark is one mark for all of a fault's pods.** kv-4
+started at 16:57:47Z and was Ready at 16:57:48Z (`operator.log`: `ready=5`);
+kv-1 started only at 16:57:59Z. `wait_ready` marks `serving` once every pod
+answers, so the fault phase ran on to 16:58:01.3Z (less the 2s tolerance)
+while keys with kv-4 among their two down replicas were already back. Not
+a loss and not the database's: the tool's timeline. A per-pod serving mark
+(or the fault narrowing as each pod returns) would place them; to be fixed
+after the session.
+
+Timeline (`check`): +50.9s and +61.2s the nodes not Ready, +99.8s and
++102.1s the VMs recreated, +161.2s and +162.0s the nodes Ready, +228.2s and
++228.7s the volumes attached (as observed by the sequential waits: kv-4's
+attach event was at 16:57:42Z, +215s), +233.9s serving, +234.4s and
++235.0s the pods Ready. As in test 1 the old pods were deleted
+(`TaintManagerEviction`, kv-4 at 16:56:27Z, kv-1 at 16:56:38Z) and the new
+ones unschedulable until their nodes returned; kv-4's **triggered a
+scale-up of c, 2 to 3 nodes** (`gke-kvstore-kvstore-de746ad4-wxtj`,
+unused; the extra b node of test 1 had been removed by then). One
+`FailedAttachVolume` each (the CSINode not yet registered).
+
+- **kv-client: kind's finding did not reproduce.** Every t2svc failure was
+  one the key prediction expected; no unexpected failure through the
+  Service. On kind the frozen pods' connections hung (1,694 unpredicted
+  failures); here the VMs shut down, the connections closed at once (the
+  recorder sent kv-1 its last request at +4.3s, kv-4 at +5.4s), and
+  kv-client's connections moved to live pods.
+- **Not `Degraded`**, as test 1's finding led to expect (the written
+  prediction said `Degraded`): `ready=4` from 16:55:18Z to 16:57:48Z
+  (2m30s), but the pods were recreated at 16:56:27Z and 16:56:38Z, which
+  restarted `Grace`.
+- **Hints**: 3,681 created on the four live pods (kv-0 1,142, kv-2 1,037,
+  kv-3 821, kv-5 681) plus kv-4's 142 after its restart (kv-1 and kv-4
+  restarted, which reset their counters): about 3,823, predicted 4,071 to
+  4,979. Below the range, consistent with kv-4 back 13s before the heal
+  the prediction assumes; all delivered 2m28s after the heal.
+
+From here on `chaos.sh check` covers t2 too, so its overall verdict stays
+`FAIL` on those 451; each later test is read from its own section and the
+read-back line.
+
+### Test 3, partition of zone d (kv-2, kv-3): as predicted
+
+Egress-only policies on both sides, injected 17:08:09.3Z, healed
+17:10:10.9Z (2m2s). 14,001 Puts (1,926 failed) and 35,001 Gets (4,843
+failed); records verified complete (49,002). `check`'s t3 section: 46,342
+as predicted and 2,660 in transition, **no request against its
+prediction**. Read-back over the session so far: 75,761 acknowledged
+writes, **0 lost, 0 stale**, every copy on all its owners. No pod restarted
+(all six at 0 restarts); the operator stayed `Ready` (no line in
+`operator.log`); epoch 0. Hints 2,379 (kv-0 904, kv-1 270, kv-2 146, kv-3
+142, kv-4 394, kv-5 523), predicted 2,220 to 2,921; all delivered 2m17s
+after the heal. The partition labels were removed after the run.
+
+- **CiliumEndpoints exist on GKE** (contrary to `chaos.sh`'s comment that
+  Dataplane V2 does not expose them), with the pods' labels in their
+  identities and, as on kind, without
+  `statefulset.kubernetes.io/pod-name`. `partition` therefore waited for
+  the new identities rather than 60s.
+- **Question 3: Dataplane V2 enforces the egress-only partition at once.**
+  `peers` (every member's own view, `t3-peers.txt`), in its first round
+  (started 0.1s after the inject mark, which `partition` writes after
+  applying both policies): kv-1, kv-2, kv-4, kv-5 already reached only
+  their own side, kv-3 and kv-4/kv-5 already counted the other side dead;
+  by the second round (+9s) every member saw exactly its side (the group
+  `alive=1`, the rest `alive=3`), and so it stayed for the 2 minutes.
+- **The heal**: in the first round after it (started +0.1s) every member
+  but kv-0 saw all five peers (kv-0 four); from the second (started +3.4s)
+  every member saw all five. Within the expected 15s, and well inside
+  kind's 7s with the keepalive.
+- **Each pair, from the kv pods' logs** (`logs/kvstore.log`): the 16
+  directed pairs across the cut (2 group pods x 4 rest pods, both ways)
+  logged `is dead` from 17:08:11.9Z to 17:08:13.1Z, 2.6 to 3.8s after the
+  inject mark (3 missed heartbeats after the policies took effect, about a
+  second before the mark), and `is alive again` from 17:10:11.700Z to
+  17:10:12.845Z: **every pair within 2.0s of the heal**.
+
+**Prometheus before test 4.** Test 4 takes Prometheus's `emptyDir` with
+the system node, so the session's series so far were exported first, with
+`deploy/bench/export.sh` (the chaos runbook has no export step of its
+own) given a `run.env` of the context and the window SESSION_START
+(16:07:36Z) to 17:16:18Z, into `prometheus/` (20 CSVs, none empty, 15s
+steps, data from 16:10:21Z, when the kv pods came up, to 17:16:36Z;
+`window-source.env` is that window). Over the window: Put p50 / p99 6.50 /
+12.99 ms, Get 1.65 / 5.08 ms, fsync p99 5.62 ms, 1.01 writes per fsync
+(group commit on, at 40 writes/s: as expected, no batching), kv CPU 0.08
+to 0.14 cores per pod.
+
+### Test 4, system-node loss: zero errors
+
+`recreate-instances` of `gke-kvstore-system-f675d0ba-g9d7`, injected
+17:19:49.0Z, healed 17:23:13.0Z (3m24s). 18,281 Puts and 45,701 Gets,
+**every one ok** (records verified complete, 63,982); `check`'s t4
+section: 61,321 as predicted, 2,661 in transition, nothing against its
+prediction. Read-back over the session so far: 94,042 acknowledged writes,
+**0 lost, 0 stale**, every copy on all its owners. Hints 0, as predicted.
+No kv pod restarted; epoch 0. Prometheus and Grafana came back empty, with
+6 of 6 targets up again.
+
+Timeline: +64.6s node not Ready, +122.5s VM recreated, +155.4s node Ready,
++185.2s operator back, +201.9s kube-dns back. `operator.log` has nothing
+between 17:13 and 17:23:07Z: with the operator down nobody updated the
+KVCluster, whose status said `Ready` throughout (stale, not observed). On
+its return it reported `WaitingForPods` for 5s, then `Ready` at 17:23:12Z,
+epoch 0.
+
+- **Question 4: with the system node gone, neither `kubectl exec` nor the
+  API server's proxy to pods works** (`t4-question4.txt`, from 17:20:53Z,
+  the node not Ready): `chaos.sh peers` found all six pods `unreachable`,
+  and `kubectl exec` failed with `error dialing backend: No agent
+  available`. All six konnectivity agents ran on that node (as did both
+  kube-dns replicas, metrics-server and the operator). `kubectl get`
+  worked throughout. kube-dns's absence broke nothing: zero errors, and
+  the recorders' connections already existed (each node runs
+  `node-local-dns`).
+- **Two more broken fetches.** `stop`'s `kubectl exec ... cat` lost its
+  stream twice in the session (t1b: `websocket: close 1006`, the file cut
+  at 56,152 of 64,822 lines; t4: `wsarecv: An existing connection was
+  forcibly closed`, before `recorder.log`). Both were fetched again from
+  the held recorder and checked against its own totals. `fetch` should
+  check that itself (after the session).
+
+### Convergence: every acknowledged write on all its owners
+
+`converge` from 17:40:28Z, a full anti-entropy interval (15 minutes) after
+t4's last request (17:25:20Z): every run's 98,726 written keys read back
+with each owner's copy. **`check-final`: 94,042 acknowledged writes, 0
+lost, 0 stale, every one on all three of its owners** (`converged`: no
+under-replication allowed); the 4,684 unacknowledged writes all absent.
+Its verdict is `FAIL` only on t2's 451 early successes; nothing else in
+any test is against its prediction.
+
+The fetch of the read-back broke three times in four tries (84,911, 87,708
+and 89,132 of 98,726 lines; **one of them with exit status 0**), the fourth
+complete (98,726 lines, each parsed). A silent truncation means a count
+check is the only safe test: after it, every run's fetched records were
+checked against its recorder's own totals, and every read-back against its
+run's Puts, all complete. Long `kubectl exec` streams through the API
+server were reset five times in the session; `fetch` and `converge` need a
+count check and a retry, or a transfer in pieces (`kvchaos cat` has no
+offset) (after the session).
+
+## Session 3, part B (results), 2026-10-17
+
+After the convergence check, the 8 held recorder pods deleted (all fetched
+and verified; they requested 2,000m on the loadgen node, where k6 needs
+3,000m). Same cluster, GKE version, VMs and disks for both sides; the
+node image `kvnode@sha256:9d93ce55...`, commit `e406077`.
+
+**Predictions, written before the first run** (step 17):
+
+| Side | Prediction |
+|---|---|
+| Off | Session 2's series A again: Put p99 turns up at 300-400/s, p50 at 500/s; 1.00 writes per fsync at every step; commit wait p99 rising with the rate while fsync p99 stays near 5 ms and the kv pods under 0.4 cores. Constant 40/s within about 20% of session 2's (Put p50 6.68 / p99 9.96 ms, fsync p99 4.91 ms) |
+| On, to 500/s | No knee: Put p99 within about 2x its 100/s value at every step; writes per fsync above 1 and rising with the rate; commit wait p99 near one fsync (5-10 ms) rather than rising; constant 40/s no slower than off (a lone write waits only for its own fsync; part A's 40/s with group commit on already showed 1.01 writes per fsync) |
+| On, past 500/s | A knee between 500 and 900/s, set by something other than the write lock: the busiest kv pod's CPU (1.93 cores allocatable), the replication fan-out, or fsync time itself growing with batch size. Which one, from the same window |
+
+### Off (`groupCommit: false`)
+
+`run.sh reset` with `GROUP_COMMIT=false` (17:45-18:00Z: 15 minutes, the
+old volumes deleted and new ones created; the ConfigMap says
+`groupCommit: false`, and so does each run's `run.env`), a clean preload
+of 20,000 keys (`20261017-180040`), then:
+
+| Run | k6 | Prometheus (server side) | k6 CPU |
+|---|---|---|---|
+| [20261017-180221](results/bench/20261017-180221-gke-writes-constant/), constant 40/s, 300s | 12,000 Puts (40.0/s); p50 7.63, p95 9.45, p99 10.77 ms; 0 errors; 0 dropped | Put p50 6.46 / p99 9.92 ms; fsync p50 1.96 / p99 4.92 ms; 1.00 writes per fsync; commit wait p99 0.10 ms; kv CPU 0.06-0.14 cores | max 70m |
+| [20261017-180827](results/bench/20261017-180827-gke-writes-ramp/), ramp 100-500/s, steps of 100, 60s | 88,399 Puts (276.2/s); p99 317.74 ms; **632 errors, 6,985 dropped (step 5)** | Put p50 7.40 / p99 3,491 ms; fsync p99 7.19 ms; 1.00 writes per fsync; commit wait p99 7,493 ms; kv CPU 0.24-0.44 cores (window), up to 0.80 in a 15s sample | max 427m |
+
+| Step | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Errors | Dropped | Session 2: p50 / p99 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 100 | 100.0 | 7.74 | 11.04 | 13.84 | 0 | 1 | 7.36 / 10.35 |
+| 2 | 200 | 200.0 | 7.07 | 9.66 | 11.88 | 0 | 0 | 7.21 / 16.61 |
+| 3 | 300 | 300.0 | 7.46 | 18.97 | **86.03** | 0 | 0 | 7.97 / **104.24** |
+| 4 | 400 | 400.0 | 9.09 | 37.28 | 65.96 | 0 | 0 | 7.85 / 41.42 |
+| 5 | 500 | **383.6** | **13.38** | 143.05 | **3,473** | **632** | **6,985** | **14.44** / 241.49, 0 errors |
+
+- **Constant 40/s reproduces session 2** within 3% on the server side (Put
+  p50 6.46 against 6.68, p99 9.92 against 9.96, fsync p99 4.92 against
+  4.91 ms).
+- **The ramp's knees are session 2's**: p99 turns up at 300/s (86 against
+  104 ms), p50 at 500/s (13.4 against 14.4 ms). Writes per fsync 1.00 at
+  every step; commit wait p99 rising with the rate (0.1 ms at 40/s, about
+  1.6, 3.6, 86, 61 ms in the first four minutes of the ramp, 9.2-9.6 s in
+  the last).
+- **But step 5 collapsed where session 2's held**: 383.6 of 500/s
+  achieved, 632 errors (5s timeouts, max 5,000.74 ms) and 6,985 dropped,
+  Put p99 at the histogram's top bucket (`5` in the CSV, a lower bound).
+  fsync p99 also rose, to about 10 ms in the last two minutes (session 2:
+  4.8-4.9), and the kv pods reached 0.8 cores in 15s samples (the
+  prediction said under 0.4: true of the window averages only). Off is the
+  baseline the on side is compared with, on this cluster; why 500/s held
+  in session 2 and not here is open.
+
+### On (`groupCommit: true`)
+
+`run.sh reset` with `GROUP_COMMIT=true` (about 5 minutes; `groupCommit:
+true` in the ConfigMap and each `run.env`), a clean preload
+(`20261017-182328`), then:
+
+| Run | k6 | Prometheus (server side) | k6 CPU |
+|---|---|---|---|
+| [20261017-182442](results/bench/20261017-182442-gke-writes-constant/), constant 40/s, 300s | 12,000 Puts (40.0/s); p50 7.56, p95 9.63, p99 11.41 ms; 0 errors; 0 dropped | Put p50 6.46 / p99 9.97 ms; fsync p50 1.95 / p99 4.91 ms; 1.00 writes per fsync; commit wait p99 0.10 ms; kv CPU 0.05-0.14 cores | max 116m |
+| [20261017-183051](results/bench/20261017-183051-gke-writes-ramp/), ramp 100-500/s, steps of 100, 60s | 95,999 Puts (300.0/s); p99 16.40 ms, max 127.36 ms; **0 errors; 0 dropped** | Put p50 6.22 / p99 14.62 ms; fsync p99 4.77 ms; 1.08 writes per fsync (batch p99 1.95); commit wait p99 2.65 ms; kv CPU 0.24-0.37 cores (window) | max 480m |
+
+**The A/B, step by step** (k6's `steps.csv`; per minute from Prometheus,
+the minute that holds most of each step: Put p99, fsync p99, writes per
+fsync, commit wait p99, and the busiest pod's CPU in a 15s sample):
+
+| Step | Off: achieved/s, p50 / p99 (ms), errors | On: achieved/s, p50 / p99 (ms), errors | Off: fsync p99, writes/fsync, commit wait p99 | On: fsync p99, writes/fsync, commit wait p99 |
+|---|---|---|---|---|
+| 100/s | 100.0, 7.74 / 13.84, 0 | 100.0, 7.21 / 10.50, 0 | 7.4 ms, 1.000, 0.9 ms | 4.9 ms, 1.001, 0.2 ms |
+| 200/s | 200.0, 7.07 / 11.88, 0 | 200.0, 6.75 / 10.83, 0 | 5.0-7.5 ms, 1.000, 1.6-3.6 ms | 4.8 ms, 1.002, 2.2 ms |
+| 300/s | 300.0, 7.46 / **86.03**, 0 | 300.0, 6.76 / 13.87, 0 | 6.8 ms, 1.000, **86 ms** | 4.9 ms, 1.024, 2.5 ms |
+| 400/s | 400.0, 9.09 / 65.96, 0 | 400.0, 6.73 / 15.12, 0 | 5.0 ms, 1.000, 61 ms | 4.7 ms, 1.073, 2.5 ms |
+| 500/s | **383.6**, **13.38 / 3,473**, **632** | **500.0, 6.88 / 25.58, 0** | 9.8 ms, 1.000, **9.2-9.6 s** | 4.7-4.8 ms, 1.15-1.19, 3.4-3.9 ms |
+
+Against the predictions:
+
+- **Constant 40/s: no cost.** On and off alike (server Put p50 6.46 / p99
+  9.97 against 6.46 / 9.92 ms; 1.00 writes per fsync): as predicted.
+- **On, to 500/s: no knee.** Every step achieved, 0 errors, 0 dropped, p50
+  flat at 6.7-7.2 ms. Writes per fsync above 1 and rising with the rate
+  (1.001 to 1.19), the commit wait p99 at 0.2-3.9 ms, under one fsync
+  (fsync p99 4.7-4.9 ms, flat), where off's rose to seconds. As predicted,
+  except that **Put p99 rose 2.4x** from 100/s to 500/s (10.50 to 25.58 ms;
+  the server's 2.6x), a little past the predicted 2x: rising, not a knee.
+- **What moved the knee is the flag**: the two sides differ only in
+  `group_commit` (same commit, image, cluster, VMs and disks), and on the
+  on side writes per fsync rises above 1 exactly as off's commit wait
+  climbs (86 ms at 300/s, seconds at 500/s) and on's does not.
+- The batches are small: at 500/s an fsync carries 1.19 writes on
+  average. Even so, fsync stops being a queue: off's write lock serialised
+  each write behind the last one's fsync.
+
+### On, past 500/s
+
+No knee by 500/s, so step 20: `run.sh reset` (`groupCommit: true`), no
+preload, then [20261017-191704](results/bench/20261017-191704-gke-writes-ramp/),
+500 to 900/s in steps of 100 held 30s. **The reset took 37 minutes**
+(18:39-19:16Z), almost all of it **before** it deleted the old KVCluster:
+the operator reconciled that one as `None(Ready)` once a minute until
+19:16:20Z (`logs/kvstore-operator-system.log`), the new one was created at
+19:16:40Z and `Ready` at 19:16:56Z. Before its `delete kvc`, `run.sh
+reset` only reads the confirmation and runs `delete_job`, whose `kubectl
+delete job k6-bench --wait=true` has no timeout: most likely the wait on
+the finished k6 Job's deletion, not proven (the reset's output was not
+kept beyond its last lines). The earlier resets took 15 and 5 minutes.
+Open: time each step of `reset`, and give that delete a timeout.
+
+| Step | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Errors | Dropped |
+|---|---|---|---|---|---|---|---|
+| 1 | 500 | 499.9 | 8.47 | 12.68 | 16.16 | 0 | 2 |
+| 2 | 600 | 600.0 | 8.23 | 18.19 | 32.36 | 0 | 0 |
+| 3 | 700 | 700.0 | 7.90 | 12.79 | 20.22 | 0 | 0 |
+| 4 | 800 | 800.0 | 8.06 | 15.04 | 37.49 | 0 | 0 |
+| 5 | 900 | 900.0 | 8.38 | 27.07 | 60.61 | 0 | 0 |
+
+Over the window (Prometheus, 170s): 116,919 Puts, 0 errors, p50 7.37 / p99
+27.90 ms; fsync p50 1.94 / p99 6.98 ms; **1.56 writes per fsync** (batch
+p99 5.85); commit wait p50 0.71 / p99 6.28 ms; kv CPU 0.40-0.46 cores per
+pod (window averages); k6 at most 703m.
+
+- **No knee up to 900/s, against the prediction** of one between 500 and
+  900/s. Every step achieved with no error and no drop, p50 flat at
+  7.9-8.5 ms; p99 rises (16 to 61 ms) and the batches grow (1.56 writes per
+  fsync over the window), but nothing turns up sharply. The write ceiling
+  with group commit on is above 900/s, the end of this ramp; past it the
+  key cap and memory limit must be raised first (step 20).
+- Its 500/s step against the on ramp's (which had about 98,000 keys
+  behind it, this one none): p50 8.47 against 6.88 ms, p99 16.16 against
+  25.58 ms. The same order: the empty cluster is no faster.
+- Against the off side, the write ceiling moved from 400/s (off: p99 up at
+  300/s, collapse at 500/s with 632 errors) to past 900/s.
+
+### On, 900 to 1,500/s
+
+One more run before the teardown, on a fresh KVCluster (`groupCommit:
+true`). 900 to 1,500/s in steps of 100 held 15s would write 162,000 keys
+(13,500 + 19,750 + 21,750 + 23,750 + 25,750 + 27,750 + 29,750), past the
+130,000 cap and, at 0.75 x keys on the busiest pod (121,500), past what
+512Mi is sized for (about 100,000). So steps of 150 held 15s: 13,500 +
+20,625 + 23,625 + 26,625 + 29,625 = **114,000 keys** (busiest pod about
+85,500). `VUS=300`, so that k6's pool cannot limit the top steps (1,500/s x
+0.2s).
+
+The reset, traced with a timestamp per command, took **33s**: `delete_job`
+2s, the KVCluster and its pods 8s, the PVCs 2s, the new KVCluster Ready
+in 19s. The 37 minutes of the previous reset did not recur; its cause is
+unproven.
+
+[20261017-194306](results/bench/20261017-194306-gke-writes-ramp/):
+113,992 Puts, **0 errors, 7 dropped** (steps 1-2, k6's start), 300 of 300
+VUs connected, k6 CPU at most 1,054m (median 889m). Server-side Put p99
+per step: the export's quantiles use 1-minute rates, which span 3-4 of
+these 20s steps, so it was taken from the Put histogram's increase between
+consecutive 15s scrapes, each interval assigned to a step by its request
+rate (the 15s grid does not align with the 20s steps; step 1's is
+approximate).
+
+| Step | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Errors | Dropped | Server Put p99 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 900 | 899.6 | 8.55 | 14.18 | 19.80 | 0 | 6 | about 19 |
+| 2 | 1,050 | 1,049.9 | 8.48 | 13.54 | 21.95 | 0 | 1 | 18.9-19.3 |
+| 3 | 1,200 | 1,200.1 | 8.50 | 13.97 | 26.36 | 0 | 0 | 19.3-19.5 |
+| 4 | 1,350 | 1,350.0 | 8.48 | 14.79 | 31.31 | 0 | 0 | 25.9 |
+| 5 | 1,500 | 1,500.0 | 8.58 | 14.77 | 30.45 | 0 | 0 | 41.4, then 28.1 |
+
+Over the window (95s): fsync p99 4.97 ms, flat; **2.18 writes per fsync**
+(1.8 to 2.5 across the steps, batch p99 7.76); commit wait p99 4.7-5.1 ms,
+about one fsync; kv CPU 0.49-0.61 cores per pod (window averages), the
+busiest 0.74 in a 15s sample.
+
+**No knee up to 1,500/s.** p50 flat, p99 up 1.6x, no errors; fsync time
+does not grow with the batches, and the busiest pod uses under 40% of its
+1.93 allocatable cores. With group commit the write ceiling on this
+cluster is above 1,500/s; off's was about 400/s. The next limit (most
+likely CPU) needs the key cap and the memory limit raised together, before
+a session.
+
 ## The gcloud configuration
 
 `kvstore` is a separate gcloud configuration, so that commands here never

@@ -1,0 +1,28 @@
+{
+    "apiVersion": "v1",
+    "data": {
+        "config.yaml": "listen:\n  grpc: \":7000\"\n  http: \":8080\"\ndataDir: /data\ncluster:\n  n: 3\n  w: 2\n  r: 2\n  epoch: 0\n  members:\n    - id: kv-0\n      address: kv-0.kv.kvstore.svc.cluster.local:7000\n    - id: kv-1\n      address: kv-1.kv.kvstore.svc.cluster.local:7000\n    - id: kv-2\n      address: kv-2.kv.kvstore.svc.cluster.local:7000\n    - id: kv-3\n      address: kv-3.kv.kvstore.svc.cluster.local:7000\n    - id: kv-4\n      address: kv-4.kv.kvstore.svc.cluster.local:7000\n    - id: kv-5\n      address: kv-5.kv.kvstore.svc.cluster.local:7000\nstorage:\n  memtableBytes: 4194304\n  groupCommit: true\nintervals:\n  compaction: 30s\n  antiEntropy: 15m\n  hintDelivery: 10s\n  heartbeat: 1s\ntimeouts:\n  replication: 5s\n  maxReconnectBackoff: 5s\n  shutdown: 20s\n  heartbeat: 500ms\nhealth:\n  maxMissedHeartbeats: 3\n"
+    },
+    "kind": "ConfigMap",
+    "metadata": {
+        "creationTimestamp": "2026-10-17T16:09:46Z",
+        "labels": {
+            "app.kubernetes.io/instance": "kv",
+            "app.kubernetes.io/managed-by": "kvstore-operator"
+        },
+        "name": "kv-config",
+        "namespace": "kvstore",
+        "ownerReferences": [
+            {
+                "apiVersion": "kvstore.dewidar.dev/v1alpha1",
+                "blockOwnerDeletion": true,
+                "controller": true,
+                "kind": "KVCluster",
+                "name": "kv",
+                "uid": "e84a048b-d844-4945-b49d-a903387aac55"
+            }
+        ],
+        "resourceVersion": "1792253386773119014",
+        "uid": "ec395f57-a2bc-4be7-96ca-5f5303c52045"
+    }
+}

@@ -1,0 +1,12 @@
+== 17:20:53.884Z chaos.sh peers (API server proxy to pods)
+kv-0 unreachable
+kv-1 unreachable
+kv-2 unreachable
+kv-3 unreachable
+kv-4 unreachable
+kv-5 unreachable
+exit 0
+== 17:21:27.191Z kubectl exec chaos-pre -- /kvchaos
+Error from server: error dialing backend: No agent available
+exit 1
+== 17:21:28.203Z done

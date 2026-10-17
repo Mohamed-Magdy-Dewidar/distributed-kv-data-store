@@ -1,0 +1,34 @@
+2026-10-17T16:12:42.579Z Ready epoch= ready=6 Ready: 6 members at epoch 0, every handoff done
+2026-10-17T16:31:07.256Z Ready epoch= ready=6 WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T16:31:52.105Z Ready epoch= ready=5 WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T16:34:22.115Z Ready epoch= ready=6 Ready: 6 members at epoch 0, every handoff done
+2026-10-17T16:45:00.666Z Unable to connect to the server: net/http: TLS handshake timeout
+2026-10-17T16:45:05.356Z Ready epoch= ready=6 Ready: 6 members at epoch 0, every handoff done
+2026-10-17T16:54:32.314Z Ready epoch= ready=6 WaitingForPods: Waiting for kv-1 to be ready
+2026-10-17T16:55:07.749Z Ready epoch= ready=5 WaitingForPods: Waiting for kv-1 to be ready
+2026-10-17T16:55:18.241Z Ready epoch= ready=4 WaitingForPods: Waiting for kv-1 to be ready
+2026-10-17T16:57:48.029Z Ready epoch= ready=5 WaitingForPods: Waiting for kv-1 to be ready
+2026-10-17T16:58:00.401Z Ready epoch= ready=6 WaitingForPods: Waiting for kv-1 to be ready
+2026-10-17T16:58:02.891Z Ready epoch= ready=6 Ready: 6 members at epoch 0, every handoff done
+2026-10-17T17:23:07.915Z Ready epoch= ready=6 WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T17:23:12.859Z Ready epoch= ready=6 Ready: 6 members at epoch 0, every handoff done
+2026-10-17T18:00:06.621Z Error from server (NotFound): kvclusters.kvstore.dewidar.dev "kv" not found
+2026-10-17T18:00:16.393Z Pending epoch= ready= CreatingConfigMap: Creating the ConfigMap with 6 members at epoch 0
+2026-10-17T18:00:18.893Z Pending epoch= ready= WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T18:00:28.501Z Pending epoch= ready=2 WaitingForPods: Waiting for kv-1 to be ready
+2026-10-17T18:00:31.107Z Pending epoch= ready=5 WaitingForPods: Waiting for kv-2 to be ready
+2026-10-17T18:00:33.513Z Ready epoch= ready=6 Ready: 6 members at epoch 0, every handoff done
+2026-10-17T18:22:39.778Z Error from server (NotFound): kvclusters.kvstore.dewidar.dev "kv" not found
+2026-10-17T18:22:49.613Z  epoch= ready= : 
+2026-10-17T18:22:51.979Z Pending epoch= ready= WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T18:23:03.451Z Pending epoch= ready=1 WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T18:23:06.012Z Pending epoch= ready=3 WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T18:23:08.448Z Pending epoch= ready=5 WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T18:23:11.003Z Pending epoch= ready=5 WaitingForPods: Waiting for kv-5 to be ready
+2026-10-17T18:23:13.583Z Pending epoch= ready=6 WaitingForPods: Waiting for kv-5 to be ready
+2026-10-17T18:23:16.188Z Ready epoch= ready=6 Ready: 6 members at epoch 0, every handoff done
+2026-10-17T19:16:30.247Z Error from server (NotFound): kvclusters.kvstore.dewidar.dev "kv" not found
+2026-10-17T19:16:42.273Z Pending epoch= ready= WaitingForPods: Waiting for kv-0 to be ready
+2026-10-17T19:16:51.722Z Pending epoch= ready=2 WaitingForPods: Waiting for kv-1 to be ready
+2026-10-17T19:16:54.099Z Pending epoch= ready=4 WaitingForPods: Waiting for kv-1 to be ready
+2026-10-17T19:16:56.466Z Ready epoch= ready=6 Ready: 6 members at epoch 0, every handoff done

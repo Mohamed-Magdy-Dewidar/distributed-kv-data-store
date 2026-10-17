@@ -1,0 +1,54 @@
+{
+  "epoch": 0,
+  "n": 3,
+  "w": 2,
+  "r": 2,
+  "fingerprint": "163086ed37c3f78838b68b4d2a8cca84db11a1dafb396faf5c643cbe2a94e38a",
+  "timing": {
+    "heartbeatInterval": "1s",
+    "heartbeatTimeout": "500ms",
+    "maxMissedHeartbeats": 3,
+    "replicationTimeout": "5s",
+    "maxReconnectBackoff": "5s",
+    "hintDelivery": "10s",
+    "antiEntropy": "15m0s"
+  },
+  "pods": [
+    {
+      "id": "kv-0",
+      "address": "kv-0.kv.kvstore.svc.cluster.local:7000",
+      "node": "gke-kvstore-kvstore-a68c1bad-tx51",
+      "zone": "europe-west1-b"
+    },
+    {
+      "id": "kv-1",
+      "address": "kv-1.kv.kvstore.svc.cluster.local:7000",
+      "node": "gke-kvstore-kvstore-de746ad4-424k",
+      "zone": "europe-west1-c"
+    },
+    {
+      "id": "kv-2",
+      "address": "kv-2.kv.kvstore.svc.cluster.local:7000",
+      "node": "gke-kvstore-kvstore-e5b3ca3f-j45k",
+      "zone": "europe-west1-d"
+    },
+    {
+      "id": "kv-3",
+      "address": "kv-3.kv.kvstore.svc.cluster.local:7000",
+      "node": "gke-kvstore-kvstore-e5b3ca3f-dk2b",
+      "zone": "europe-west1-d"
+    },
+    {
+      "id": "kv-4",
+      "address": "kv-4.kv.kvstore.svc.cluster.local:7000",
+      "node": "gke-kvstore-kvstore-de746ad4-b0c0",
+      "zone": "europe-west1-c"
+    },
+    {
+      "id": "kv-5",
+      "address": "kv-5.kv.kvstore.svc.cluster.local:7000",
+      "node": "gke-kvstore-kvstore-a68c1bad-gcz0",
+      "zone": "europe-west1-b"
+    }
+  ]
+}
