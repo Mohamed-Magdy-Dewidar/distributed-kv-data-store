@@ -1,7 +1,8 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
-YEAR ?= $(shell date +%Y)
+# Pinned: the copyright year is the first publication's, not the year of the latest make generate.
+YEAR ?= 2026
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))

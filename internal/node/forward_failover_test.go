@@ -156,7 +156,7 @@ func TestForwardWithNoReachableReplicaIsUnavailable(t *testing.T) {
 		"all undialable": func(c *forwardCluster) {
 			members := maps2(c.addrs)
 			for i, id := range c.replicas {
-				members[id] = fmt.Sprintf("badaddr:%d", i+1)
+				members[id] = fmt.Sprintf("bad\x7faddr:%d", i+1)
 			}
 			if _, err := c.forward.SetMembership(1, members); err != nil {
 				t.Fatal(err)
