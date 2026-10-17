@@ -1043,8 +1043,9 @@ every failure `Unavailable`. Records verified complete (69,160 and
 Puts all absent. Epoch 0 throughout.
 
 `check`: 80,056 as predicted, 226 target-down that succeeded, 3,429 in
-transition (2 Gets failed), and **451 `unexpected-success`**: Gets in the
-fault phase, predicted to fail, that succeeded, all from 16:57:48Z on.
+transition (2 Gets failed), and **451 `unexpected-success`**: requests in
+the fault phase, predicted to fail, that succeeded (281 Gets and 170 Puts;
+84 of them through kv-client), all from 16:57:48Z on.
 **Cause: the `serving` mark is one mark for all of a fault's pods.** kv-4
 started at 16:57:47Z and was Ready at 16:57:48Z (`operator.log`: `ready=5`);
 kv-1 started only at 16:57:59Z. `wait_ready` marks `serving` once every pod
@@ -1053,6 +1054,33 @@ while keys with kv-4 among their two down replicas were already back. Not
 a loss and not the database's: the tool's timeline. A per-pod serving mark
 (or the fault narrowing as each pod returns) would place them; to be fixed
 after the session.
+
+**The explanation, proved request by request** (offline, after the
+session, from the records). `check -examples 100000` over t2's and t2svc's
+records lists all 451; `predict -fault down:kv-1,kv-4 -keys-file ...
+-per-key` gives each key's replicas; joined with the records for each
+request's exact start, they are in `t2-unexpected-success.txt`.
+
+- **Every one of the 451 started after kv-4 was Ready**: the earliest at
+  16:57:48.194Z, after both 16:57:48Z (`operator.log`'s `ready=5` was
+  seen at 16:57:48.029Z) and kv-4's own `node kv-4 ready` line
+  (16:57:47.830Z). None before either.
+- **Every one's key has kv-4 among its replicas**, and kv-1 too (a key
+  fails for this fault only with both): with kv-4 back and kv-1 still
+  down, 2 of its 3 replicas were up, which R=W=2 needs.
+- **None fits neither, and none is unmatched** (451 of 451 found in the
+  records). The latest started at 16:57:59.284Z, just inside the fault
+  phase's end (the `serving` mark at 16:58:01.291Z less the 2s
+  tolerance, 16:57:59.291Z).
+- **The rest of that window agrees.** From kv-4's ready line to that end,
+  1,947 requests started: 1,368 predicted to work, all ok; 579 predicted
+  to fail, of which 451 ok (these), 78 ok sent to kv-4 itself (bucketed
+  `target-down-ok`), and 50 `Unavailable`. The 50 are each coordinator's
+  last requests before it saw kv-4 again: kv-2, kv-3 and kv-5 logged `peer
+  "kv-4" is alive again` at 16:57:48.155Z and their last failures started
+  by 16:57:48.579Z (in flight); kv-0 logged it only at 16:57:53.136Z, and
+  its 24 failures run to 16:57:53.104Z. Why kv-0 saw kv-4 5s after the
+  others is open.
 
 Timeline (`check`): +50.9s and +61.2s the nodes not Ready, +99.8s and
 +102.1s the VMs recreated, +161.2s and +162.0s the nodes Ready, +228.2s and
