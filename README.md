@@ -71,7 +71,9 @@ flowchart LR
 | Package | Purpose |
 |---|---|
 | `cmd/node` | The node binary: loads a YAML config and runs one node until SIGINT/SIGTERM. |
+| `cmd/kvchaos` | The failure tests' command line: topology, predictions, the recording load, read-backs and the check ([docs/chaos.md](docs/chaos.md)). Ships in the node image. |
 | `internal/app` | Wires a config into a running node: probe server and admin API, node, gRPC listener, background loops, ordered shutdown. |
+| `internal/telemetry` | The only code that knows a metrics format: serves what the core packages expose as plain values on `/metrics`, in the Prometheus text format ([docs/observability.md](docs/observability.md)). |
 | `internal/config` | Loads and validates the YAML config (`KV_NODE_ID` overrides `nodeId`). |
 | `internal/node` | The node itself: coordination, forwarding, quorums, hints, anti-entropy, heartbeats, membership and handoff. |
 | `internal/rpc` | gRPC server and client for the client API (`KVClient`) and node-to-node API (`KVReplication`). |
@@ -91,7 +93,12 @@ flowchart LR
 | `internal/storage/compaction` | Picks a tier of SSTables to compact and merges them. |
 | `internal/storage/manifest` | Records which SSTables are live. |
 | `internal/storage/fsutil` | Atomic file writes and directory fsync. |
+| `internal/chaos` | Predicts which keys each fault should make fail, records a load request by request, and checks the two against each other. |
+| `internal/storetest`, `internal/benchtest` | Test helpers: a `DataStore` on a real engine in a temporary directory; running a benchmark from a fixed number of goroutines. |
 | `e2e` | End-to-end tests that run real `cmd/node` processes. |
+| `operator/` | The KVCluster operator, a Go module of its own ([docs/operator.md](docs/operator.md)). |
+| `deploy/` | Manifests and scripts: `k8s` (the manual path), `observability`, `loadgen`, `bench` (k6), `chaos` (the failure tests). |
+| `infra/gke` | Terraform for the GKE cluster ([docs/gke.md](docs/gke.md)). |
 
 ## Quick start
 
@@ -163,9 +170,14 @@ crash tests do not prove, are in [docs/testing.md](docs/testing.md).
 
 ## Roadmap
 
-- Run the cluster on Kubernetes as a StatefulSet.
-- A Kubernetes Operator to manage the cluster.
-- Load tests with k6.
+Done:
+
+- The cluster on Kubernetes as a StatefulSet ([docs/kubernetes.md](docs/kubernetes.md)).
+- A Kubernetes operator to manage it ([docs/operator.md](docs/operator.md)).
+- Load tests with k6, on kind and on GKE ([docs/benchmarks.md](docs/benchmarks.md)).
+
+Next: GKE session 3, the failure tests under load and the write benchmarks
+with group commit ([docs/gke.md](docs/gke.md#session-3-the-failure-tests-runbook)).
 
 ## Documentation
 

@@ -190,11 +190,13 @@ fails as a whole if either does not start.
 
 ## Future work
 
-- **Storage operation timings.** A decorator around `store.Persister`
-  (timing `Put`, `GetAll`, `Restore` and `Keys` by result), passed to the
-  node as an option, would time storage as the node sees it, lock waits
-  included. It must pass errors through untouched, so that
-  `errors.Is(err, store.ErrRestoreIncomplete)` still works.
+- **Storage operation timings.** The wait for the WAL is timed now
+  (`kv_wal_commit_wait_seconds`); the rest of a storage call is not. A
+  decorator around `store.Persister` (timing `Put`, `GetAll`, `Restore` and
+  `Keys` by result), passed to the node as an option, would time storage as
+  the node sees it, the store's key locks included. It must pass errors
+  through untouched, so that `errors.Is(err, store.ErrRestoreIncomplete)`
+  still works.
 - **Node-to-node requests.** Only client requests are timed. A client-side
   interceptor on the connections a node dials to its peers would time
   replication, forwarding and anti-entropy calls as the caller sees them.

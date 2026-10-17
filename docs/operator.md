@@ -10,8 +10,10 @@ handoff, and it picks up where it left off after a restart.
 It was written and measured on the kind cluster of
 [kubernetes.md](kubernetes.md) (Kubernetes 1.35, Docker Desktop on WSL2),
 at 6 replicas, the size of the GKE target. The settings for GKE
-([Placement and GKE](#placement-and-gke)) are rendered and tested, but have
-not been run on GKE yet.
+([Placement and GKE](#placement-and-gke)) have run there since: in
+[session 1](gke.md#session-1-2026-10-10) it created the cluster and scaled
+it 6 → 7 → 6 twice, once with its own pod deleted mid-drain, and in
+session 2 it ran the benchmarks' clusters.
 
 | Component | Version |
 |---|---|
@@ -593,21 +595,25 @@ The cause is not established:
   everywhere, even in the preload with no handoff running: its highest p99,
   347 ms, came at the very start of the preload.
 
-**A hypothesis, untested**, that fits these observations: client Puts queue
-behind handoff writes for each node's write lock. Each write to a node's
-storage engine (`StorageEngine.Put`; a handoff push arrives as an ordinary
-replicated write, one `Put` per version) holds the engine's write lock
-(`writeMu`) across its WAL append, and every append fsyncs on its own, with
-no group commit (`internal/storage/wal/wal.go`). So a node's fsyncs run one at a time, and a
-client write that arrives during a handoff waits for the pushes ahead of it.
-That would raise the Put p99 while the time of each fsync stays flat and the
-number of fsyncs rises several-fold, which is what run 2 showed. The fsync
-histogram cannot show it: it times the `fsync` call alone, after the locks are
-held, not the wait for them. Timing the lock wait would confirm or refute
-it: the storage timings decorator around `store.Persister` deferred in
-[observability.md](observability.md#future-work) (which would time storage
-as the node sees it, lock waits included), or a histogram of the time spent
-waiting for `writeMu`.
+**The likely cause, measured since outside handoffs**: client Puts queue
+behind handoff writes for each node's write lock. At the time of these runs
+each write to a node's storage engine (`StorageEngine.Put`; a handoff push
+arrives as an ordinary replicated write, one `Put` per version) held the
+engine's write lock (`writeMu`) across its WAL append, and every append
+fsynced on its own. So a node's fsyncs ran one at a time, and a client write
+that arrived during a handoff waited for the pushes ahead of it. That raises
+the Put p99 while the time of each fsync stays flat and the number of fsyncs
+rises several-fold, which is what run 2 showed; the fsync histogram times the
+`fsync` call alone, not the wait.
+
+The wait is now timed (`kv_wal_commit_wait_seconds`,
+[observability.md](observability.md#metrics)), and group commit, on by
+default, lets the writes that queue behind one fsync share the next. With
+group commit off, a kind write ramp showed the queue directly: commit wait
+p50 267 ms on top of a 13 ms fsync, and 3.7 ms with it on
+([benchmarks.md](benchmarks.md#kind-2026-10-16-group-commit-off-and-on-ab)).
+Neither has been measured during a handoff: these scaling runs again, with
+group commit on, would show whether the handoff tail is gone.
 
 ## Limits
 

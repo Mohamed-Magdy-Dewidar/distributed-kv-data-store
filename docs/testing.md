@@ -4,7 +4,8 @@ There are two layers of tests. Both run with `go test ./...`.
 
 ## Unit and in-process tests
 
-Every package under `internal/` has its own tests. Most run a single process
+Every package under `internal/` has its own tests, except the two test
+helpers, `internal/storetest` and `internal/benchtest`. Most run a single process
 and many run several nodes in one test binary, talking real gRPC over
 localhost: quorum reads and writes, forwarding, siblings, hinted handoff,
 anti-entropy, heartbeats, membership changes and handoff, the admin API, and
@@ -97,17 +98,19 @@ cache does not see changes to code the test package doesn't import (such as
 
 ### Running on Linux
 
-The full suite, e2e included, has been run three times in a row on Linux, all
-passing, in the `golang:1.26` container. `TestGracefulShutdown` runs there; on
-Windows, which cannot send SIGTERM, it is skipped. The source is copied
-onto a named volume and `TMPDIR` points into it, so the build, the test
+The full suite, e2e included, passes on Linux in the `golang:1.26` container
+with the command below (last run on 2026-10-17). `TestGracefulShutdown` runs
+there; on Windows, which cannot send SIGTERM, it is skipped. The source is
+copied onto a named volume and `TMPDIR` points into it, so the build, the test
 binaries and the nodes' data directories are on ext4 inside Docker Desktop's
 Linux VM: a virtualized Linux filesystem, not bare metal, and not a bind mount
 of the Windows drive. `df -T /work` prints the filesystem type at the start of
-the run.
+the run. `TMPDIR` is beside the source, not inside it:
+`TestCorePackagesDoNotImportPrometheus` lists every package of the module,
+and would find the build's temporary packages there.
 
 ```sh
-docker run --rm -v "${PWD}:/src:ro" -v kv-e2e-work:/work golang:1.26 sh -c "find /work -mindepth 1 -delete && cp -r /src/. /work/ && mkdir -p /work/tmp && cd /work && df -T /work && TMPDIR=/work/tmp go test -race -count=1 -v ./..."
+docker run --rm -v "${PWD}:/src:ro" -v kv-e2e-work:/work golang:1.26 sh -c "find /work -mindepth 1 -delete && mkdir -p /work/src /work/tmp && cp -r /src/. /work/src/ && cd /work/src && df -T /work && TMPDIR=/work/tmp go test -race -count=1 -v ./..."
 ```
 
 ### What the crash tests do not prove

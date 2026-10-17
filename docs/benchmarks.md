@@ -164,11 +164,11 @@ next `reset`. A constant run writes `RATE × DURATION` (the default, 30,000);
 the default write ramp, about 96,000.
 
 **The write ramp's ceiling is set by the cap, not by the store.** 50 to
-500/s is what fits in 130,000 keys with 30s steps. GKE's knee for writes
-may lie above 500/s; if session 2's first constant runs suggest it does,
-the ramp must be revisited before the knee is claimed: start it higher
-(`RAMP_FROM`), shorten the steps, or raise the memory limit and the cap
-together.
+500/s is what fits in 130,000 keys with 30s steps. Session 2's write knee
+lay inside it (300-500/s); with group commit it may lie above, so a ramp
+past 500/s starts higher (`RAMP_FROM`) on a fresh KVCluster with shorter
+steps ([Session 3, step 20](gke.md#part-b-the-write-benchmarks-with-group-commit)),
+and anything above 900/s needs the memory limit and the cap raised together.
 
 ## Running
 
@@ -297,33 +297,20 @@ compares is each cluster's knee and its behaviour past it.
 
 ## The read knee is measured on GKE
 
-Measured in session 2: about 4000/s, with two k6 pods
-([the record](#gke-2026-10-13-session-2-the-benchmarks)). The plan it
-followed:
+About 4000/s, measured in session 2 with two k6 pods
+([the record](#gke-2026-10-13-session-2-the-benchmarks)). Not on kind:
+kind found no knee up to 1000/s (Get p99 flat at about 1 ms), and above
+that k6 takes a growing share of the one node's CPUs (0.58 cores at
+1000/s), so a knee found there could be k6's. How the GKE read ramp is set,
+for a rerun ([the commands](gke.md#series-a-reads-and-writes)):
 
-The kind read ramp found no knee up to 1000/s (Get p99 flat at about 1 ms,
-[below](#kind-2026-10-10-baseline-series-second-attempt-stopped-at-run-2-no-read-knee)),
-and it is not extended on kind: above about 1000/s k6 takes a growing
-share of the one node's CPUs (0.58 cores at 1000/s, next to the database
-it is loading), so a knee found there could be k6's, not the database's.
-On GKE k6 has a node of its own, and the read ramp is sized for it:
-
-- **Range: 1000 to at least 5000/s** (`RAMP_FROM=1000 RAMP_TO=5000
-  RAMP_STEP=500`), after a constant run at 1000/s, the top of what kind
-  showed. Reads write nothing, so the key cap does not limit them.
-- **The two-pod check is part of the read result, not optional.** k6's CPU
-  on kind grew from about 0.28 to 0.58 cores between 200/s and 1000/s; at
-  that cost one pod passes GKE's 1500m validity limit (half its 3-CPU
-  request) somewhere around 3500/s, inside the range. So the read
-  ramp runs twice, once with one k6 pod and once with `K6_PODS=2` (two
-  loadgen nodes, `loadgen_nodes = 2`), and the knee counts only where both
-  agree within 10%. If k6's CPU passes the limit even with two pods before
-  the database's latency turns up, the result is a lower bound on the read
-  knee, and says so.
-- **Steps long enough to place the knee.** The export's series are rates
-  over 1m; a 30s step blends two steps into each point (see the validation
-  below). Use `STEP_SECONDS=60` for the read ramps (9 rates, about 9.7
-  minutes each), so each step has a point of its own.
+- **1000 to 5000/s in steps of 500**, after a constant run at 1000/s. Reads
+  write nothing, so the key cap does not limit them.
+- **Once with one k6 pod and once with two** (`K6_PODS=2`,
+  `loadgen_nodes = 2`); the knee counts only where both agree within 10%.
+  In session 2 they did not, and the two-pod run is the result.
+- **60s steps** (`STEP_SECONDS=60`): the export's series are 1m rates, so
+  a 30s step blends two steps into each point.
 
 ## The Go write benchmarks
 
@@ -426,7 +413,10 @@ measured (`kv_wal_commit_wait_seconds`), and group commit, the fix it
 pointed to, is built. On kind the A/B
 ([below](#kind-2026-10-16-group-commit-off-and-on-ab)) shows the
 mechanism: with group commit off, commit wait p50 was 267 ms while fsync
-p50 was 13 ms; on, 3.7 ms. The GKE answer, where the knee is the capacity
+p50 was 13 ms; on, 3.7 ms. On one node, the
+[Go write benchmarks](#the-go-write-benchmarks) show the serial path at
+about 130 writes/s from any number of writers, and group commit at 4.1x
+that with 8 writers and 32-33x with 64. The GKE answer, where the knee is the capacity
 result, is [Session 3 part B](gke.md#part-b-the-write-benchmarks-with-group-commit).
 
 ## Runs
@@ -700,21 +690,19 @@ and 14.4-15.6 ms in series B (128,000 keys, after the mix ramp). The data
 size, or the state the mix ramp left (compactions, memtable flushes), may
 explain it; this session does not separate the two.
 
-**Why the writes' latency rises while CPU and fsync do not (the likely
-explanation, to confirm).** Through the write ramp the kv pods stayed at
-0.21-0.37 cores and the data-engine fsync p99 at 4.7-6.1 ms, while Put p99
-went from 10 to 100-280 ms. That fits writes queueing for the engine's
-write lock before each fsync: `Engine.Put` holds `writeMu` across the WAL
-append (`internal/storage/engine/engine.go`), the append holds the WAL's
-lock across the write and the fsync (`internal/storage/wal/wal.go`), and
+**Why the writes' latency rises while CPU and fsync do not.** Through the
+write ramp the kv pods stayed at 0.21-0.37 cores and the data-engine fsync
+p99 at 4.7-6.1 ms, while Put p99 went from 10 to 100-280 ms. That fits
+writes queueing for the engine's write lock before each fsync: at `b7a905f`
+`Engine.Put` held `writeMu` across the WAL append, the append held the
+WAL's lock across the write and the fsync, and
 `kv_wal_fsync_duration_seconds` times only the `Sync` call, not the wait
 for the lock. Each Put is stored on 3 of the 6 nodes, so at 300 Puts/s
 each node does about 150 local writes/s; at an fsync of about 2-3 ms
 (p50 1.9 ms, p99 4.9 ms) that keeps one serialized fsync path busy 30-50%
 of the time, and at 500/s 60-75%, where queueing grows quickly and the
-tail first. To confirm with a histogram of the wait for `writeMu`; group
-commit (one fsync for the writes that queued behind it) is the fix it
-points to. See [Open questions](#open-questions).
+tail first. What has been measured since, and the fix, group commit:
+[Open questions](#open-questions).
 
 **Operational notes.** Prometheus found kv-0 and kv-4 about half a minute
 after the others (discovery lag, not a fault). A preload of about 30s is
