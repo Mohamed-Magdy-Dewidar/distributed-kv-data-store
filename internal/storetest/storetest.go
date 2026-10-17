@@ -1,6 +1,7 @@
 // Package storetest gives tests a store.DataStore backed by a real storage
 // engine in a temporary directory: the same persistence a node runs on,
-// rather than a test double.
+// rather than a test double. FailingSyncs makes that engine's WAL fsyncs
+// fail on demand.
 package storetest
 
 import (

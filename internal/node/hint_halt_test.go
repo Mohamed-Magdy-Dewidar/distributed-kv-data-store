@@ -2,46 +2,14 @@ package node
 
 import (
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"distributed-kv-datastore/internal/storage/engine"
-	"distributed-kv-datastore/internal/storage/wal"
+	"distributed-kv-datastore/internal/storetest"
 )
-
-// failingDataSyncs opens WAL segments whose fsync fails once armed, for
-// the data engine in dir only: the node's hint store, in dir/hints, keeps
-// working.
-type failingDataSyncs struct {
-	dir   string
-	armed atomic.Bool
-}
-
-func (f *failingDataSyncs) open(path string) (wal.File, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, err
-	}
-	return &failingDataSyncFile{File: file, inDir: filepath.Dir(path) == f.dir, f: f}, nil
-}
-
-type failingDataSyncFile struct {
-	*os.File
-	inDir bool
-	f     *failingDataSyncs
-}
-
-func (s *failingDataSyncFile) Sync() error {
-	if s.inDir && s.f.armed.Load() {
-		return errors.New("injected fsync failure")
-	}
-	return s.File.Sync()
-}
 
 // TestHaltedReplicaGetsHintsAndReceivesThemAfterReopening: a replica whose
 // data engine has halted writes answers Replicate with Unavailable, both
@@ -57,14 +25,15 @@ func TestHaltedReplicaGetsHintsAndReceivesThemAfterReopening(t *testing.T) {
 	serveNode(t, newTestNode(t, "node-2", addrs["node-2"], 3, 2, 1, peersOf("node-2")), addrs["node-2"])
 
 	dir3 := t.TempDir()
-	faults := &failingDataSyncs{dir: dir3}
+	// Armed for dir3 only: node-3's hint store, in dir3/hints, keeps working.
+	faults := &storetest.FailingSyncs{}
 	node3, err := New("node-3", addrs["node-3"], 3, 2, 1, peersOf("node-3"), dir3, 1<<20,
-		WithEngineOptions(engine.WithWALOpenFile(faults.open)))
+		WithEngineOptions(engine.WithWALOpenFile(faults.Open)))
 	if err != nil {
 		t.Fatalf("New(node-3): %v", err)
 	}
 	listener3 := serveAt(t, addrs["node-3"], node3.Store, node3)
-	faults.armed.Store(true)
+	faults.Arm(dir3)
 
 	// "first" is node-3's first write: its failed fsync halts the engine.
 	// "second" comes after the halt and fails fast.
