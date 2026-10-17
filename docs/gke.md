@@ -195,6 +195,18 @@ CTX=gke_kvstore-gke_${R}_kvstore
    cd ../..
    ```
 
+   If the apply fails while it creates the cluster because Terraform lost
+   its connection (`error while retrieving operation: ... http2: client
+   connection lost`, [Session 3](#session-3-results-2026-10-17)), GKE goes
+   on creating it and Terraform's state marks it tainted: a plain `apply`
+   would destroy it and create it again. Instead wait for the operation
+   (`gcloud container operations list --region $R`) to be `DONE`, then
+   `terraform -chdir=infra/gke untaint google_container_cluster.kvstore`;
+   delete `default-pool` (`gcloud container node-pools delete default-pool
+   --cluster kvstore --region $R`), which the provider removes only at the
+   end of a create that succeeds; then `apply` (the node pools), and a
+   `plan` must say `No changes`.
+
 2. **Point kubectl at it**, and check that it does:
 
    ```sh
@@ -696,11 +708,14 @@ before the session; this page has not recorded them).
 
     ```sh
     $c run t0; sleep 300; $c stop t0
-    $c wait-hints t0; $c readback t0; $c check
+    $c readback t0; $c check
     ```
 
-    **Stop point**: it must say `PASS` with no failure at all. If not,
-    something is wrong before any fault: stop and find it.
+    No `wait-hints` here: with no fault there are no hints, and its
+    `hints-delivered` mark would be a mark on a test never injected, which
+    `check` refuses (Session 3). **Stop point**: it must say `PASS` with no
+    failure at all. If not, something is wrong before any fault: stop and
+    find it.
 
 ### Part A: the failure tests
 
@@ -721,7 +736,7 @@ unexpected failure or success) is a finding: record it and go on.
     ```sh
     $c hints-snapshot t1 before
     $c run t1; sleep 120
-    $c vm-loss t1 kv-N     # node gone or not Ready, VM recreated, node Ready, volume attached, serving, Ready, heal
+    $c vm-loss t1 kv-N     # node gone or not Ready, VM recreated, node Ready, volume attached, serving-kv-N, serving, Ready, heal
     sleep 120
     $c stop t1; $c wait-hints t1; $c hints-snapshot t1 after; $c readback t1; $c check
     kubectl --context $CTX get events -A --field-selector reason=TriggeredScaleUp
@@ -749,7 +764,9 @@ unexpected failure or success) is a finding: record it and go on.
     ```
 
     The autoscaler may add a node in the zone while its pods are pending
-    (at most 3 per zone: 20 of the 24 `E2_CPUS` with the system node).
+    (at most 3 per zone: 20 of the 24 `E2_CPUS` with the system node). The
+    two pods come back one at a time: `vm-loss` marks each `serving-POD`,
+    and `check` narrows the fault as each returns.
 13. **Test 3, partition.** `kv-C kv-D` are the other zone's pods:
 
     ```sh
@@ -770,9 +787,18 @@ unexpected failure or success) is a finding: record it and go on.
     and the reconnect), and the hints within the predicted range; each
     pair's times are in the logs (step 16).
 14. **Test 4, system-node loss.** Prometheus and Grafana keep their data on
-    `emptyDir` on that node: their history goes with it. Nothing below reads
-    it; the evidence is in the records, the hint counters, `operator.log`
-    and the workloads' logs.
+    `emptyDir` on that node: their history goes with it. The test's evidence
+    is in the records, the hint counters, `operator.log` and the workloads'
+    logs; export Prometheus's series of the session so far first, with
+    `deploy/bench/export.sh` given the window in a `run.env` of its own:
+
+    ```sh
+    E=$(mktemp -d)
+    printf 'context=%s\nwindow_start=%s\nwindow_end=%s\n' $CTX $SESSION_START $(date -u +%Y-%m-%dT%H:%M:%SZ) >$E/run.env
+    deploy/bench/export.sh $E && mv $E/prometheus $CHAOS_OUT/prometheus && cp $E/run.env $CHAOS_OUT/prometheus/window-source.env
+    ```
+
+    Then:
 
     ```sh
     $c hints-snapshot t4 before
@@ -782,10 +808,11 @@ unexpected failure or success) is a finding: record it and go on.
     $c stop t4; $c wait-hints t4; $c hints-snapshot t4 after; $c readback t4; $c check
     ```
 
-    `system-loss` uses only `kubectl get` and `gcloud`. While the node is
-    gone, try `$c peers` once (the API server's proxy to a pod) and record
-    whether it answers (question 4). Afterwards: Prometheus's 6 of 6 targets
-    up again (step 6).
+    `system-loss` uses only `kubectl get` and `gcloud`: with the system node
+    gone, `kubectl exec` and the API server's proxy to pods fail (`No agent
+    available`: every konnectivity agent runs there; Session 3), and so do
+    `peers`, `hints-snapshot` and `wait-hints` until it is back. Afterwards:
+    Prometheus's 6 of 6 targets up again (step 6).
 15. **Convergence**, a full anti-entropy interval (15 minutes) after test
     4's last write; collect the logs (step 16) meanwhile:
 
@@ -822,7 +849,12 @@ session 2. On kind the same A/B moved the write ceiling from about
 
 **After the convergence check only** (step 15): `run.sh reset` replaces
 the failure tests' KVCluster and its data. `groupCommit` cannot change on
-a KVCluster, so each side is its own `reset`.
+a KVCluster, so each side is its own `reset`. First delete the recorder
+pods, which hold their output after their runs and request 250m each on
+the loadgen node, where k6 needs 3,000m (`run.sh` refuses otherwise):
+`kubectl --context $CTX -n kvstore delete pod -l app.kubernetes.io/name=kvchaos`.
+Collect the logs again (step 16) at the end of the session, before the
+teardown, for part B's.
 
 17. **Write the prediction down first** (in the session's results section,
     before the first run):
@@ -974,8 +1006,8 @@ never injected (`test t0: marked or healed but never injected`; on purpose:
 the "mark only" case of `TestCheckRefusesABadTimeline`). The PASS above is
 `kvchaos check` over the events without that line. The line was then moved
 out of `faults.jsonl`, kept in `t0/marks.jsonl`, so that every later
-`check` runs as `chaos.sh check`. The runbook is to be fixed after the
-session.
+`check` runs as `chaos.sh check`. **Fixed since**: step 10 no longer runs
+`wait-hints` for the baseline.
 
 **`vm-loss` could not run gcloud from Git Bash (first attempt of test 1,
 aborted before the inject).** `chaos.sh` exports `MSYS_NO_PATHCONV=1` (for
@@ -991,8 +1023,8 @@ was run as **`t1b`**. For the rest of the session, a `gcloud` wrapper
 first on `PATH` runs the real one with `MSYS_NO_PATHCONV` unset (`exec env
 -u MSYS_NO_PATHCONV .../gcloud "$@"`), proven first with `mig_of`'s and
 `wait_vm`'s exact commands under `set -euo pipefail` and
-`MSYS_NO_PATHCONV=1`. The fix belongs in `chaos.sh` itself (after the
-session).
+`MSYS_NO_PATHCONV=1`. **Fixed since** in `chaos.sh` itself: its `gcloud`
+runs the real one with `MSYS_NO_PATHCONV` unset.
 
 ### Test 1, VM loss of kv-0 (t1b): PASS
 
@@ -1052,8 +1084,9 @@ kv-1 started only at 16:57:59Z. `wait_ready` marks `serving` once every pod
 answers, so the fault phase ran on to 16:58:01.3Z (less the 2s tolerance)
 while keys with kv-4 among their two down replicas were already back. Not
 a loss and not the database's: the tool's timeline. A per-pod serving mark
-(or the fault narrowing as each pod returns) would place them; to be fixed
-after the session.
+(or the fault narrowing as each pod returns) would place them. **Fixed
+since**: `wait-ready` marks each pod's `serving-POD`, and `check` narrows
+the fault as each pod returns (`MarkServingPod`, `internal/chaos`).
 
 **The explanation, proved request by request** (offline, after the
 session, from the records). `check -examples 100000` over t2's and t2svc's
@@ -1192,7 +1225,7 @@ epoch 0.
   at 56,152 of 64,822 lines; t4: `wsarecv: An existing connection was
   forcibly closed`, before `recorder.log`). Both were fetched again from
   the held recorder and checked against its own totals. `fetch` should
-  check that itself (after the session).
+  check that itself: **fixed since** (below).
 
 ### Convergence: every acknowledged write on all its owners
 
@@ -1212,7 +1245,9 @@ checked against its recorder's own totals, and every read-back against its
 run's Puts, all complete. Long `kubectl exec` streams through the API
 server were reset five times in the session; `fetch` and `converge` need a
 count check and a retry, or a transfer in pieces (`kvchaos cat` has no
-offset) (after the session).
+offset). **Fixed since**: `fetch`, `readback` and `converge` copy through
+`fetch_file`, which checks the count (each recorder's own total, each
+run's Puts) and tries three times.
 
 ## Session 3, part B (results), 2026-10-17
 
@@ -1320,7 +1355,8 @@ reset` only reads the confirmation and runs `delete_job`, whose `kubectl
 delete job k6-bench --wait=true` has no timeout: most likely the wait on
 the finished k6 Job's deletion, not proven (the reset's output was not
 kept beyond its last lines). The earlier resets took 15 and 5 minutes.
-Open: time each step of `reset`, and give that delete a timeout.
+**Fixed since**: that delete has a 2-minute timeout, and fails the reset
+with the Job's name rather than waiting.
 
 | Step | Target/s | Achieved/s | p50 | p95 | p99 (ms) | Errors | Dropped |
 |---|---|---|---|---|---|---|---|
