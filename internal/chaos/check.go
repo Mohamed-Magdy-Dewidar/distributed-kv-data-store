@@ -166,6 +166,10 @@ type testTimeline struct {
 	inject, heal time.Time
 	in, out      window
 	marks        []Event
+	// back is when each of a down fault's pods answered again
+	// (MarkServingPod); backs, the transitions that follow.
+	back  map[string]time.Time
+	backs []window
 }
 
 // Check compares cfg's records with the prediction, request by request,
@@ -212,6 +216,12 @@ const (
 	// MarkServing is the mark of the moment a down fault's pods answer
 	// again: from it to the heal is a transition, not the fault.
 	MarkServing = "serving"
+	// MarkServingPod prefixes the mark of the moment one of a down fault's
+	// pods answers again (serving-kv-4): from then the fault is the pods
+	// still down, after a transition while the others notice it is back.
+	// With one mark for all of them, a pod back before the last one turned
+	// requests that worked into unexpected successes (GKE session 3, t2).
+	MarkServingPod = MarkServing + "-"
 )
 
 // parseTimelines is each test's fault and windows, from cfg.Events.
@@ -268,8 +278,44 @@ func parseTimelines(cfg CheckConfig) (map[string]*testTimeline, error) {
 			}
 			tl.out = window{from.Add(-cfg.Tolerance), tl.heal.Add(cfg.Recovery + cfg.Tolerance)}
 		}
+		for _, m := range tl.marks {
+			pod, ok := strings.CutPrefix(m.Mark, MarkServingPod)
+			if !ok {
+				continue
+			}
+			if tl.fault.Kind != FaultDown || !slices.Contains(tl.fault.Pods, pod) {
+				return nil, fmt.Errorf("test %s: mark %s: %s is not down in %s", name, m.Mark, pod, tl.fault)
+			}
+			if _, seen := tl.back[pod]; seen {
+				continue // the marks are in time order: the first counts
+			}
+			if tl.back == nil {
+				tl.back = map[string]time.Time{}
+			}
+			tl.back[pod] = m.Time
+			tl.backs = append(tl.backs, window{m.Time.Add(-cfg.Tolerance), m.Time.Add(cfg.Recovery + cfg.Tolerance)})
+		}
 	}
 	return timelines, nil
+}
+
+// faultAt is tl's fault for a request that starts at start: a down fault
+// without its pods already serving again (MarkServingPod), none if no pod
+// is left down.
+func (tl *testTimeline) faultAt(start int64) Fault {
+	if len(tl.back) == 0 {
+		return *tl.fault
+	}
+	var down []string
+	for _, p := range tl.fault.Pods {
+		if at, ok := tl.back[p]; !ok || start < at.UnixNano() {
+			down = append(down, p)
+		}
+	}
+	if len(down) == 0 {
+		return Fault{Kind: FaultNone}
+	}
+	return Fault{Kind: FaultDown, Pods: down}
 }
 
 // compareRecords fills rep's test reports, and returns the acknowledged
@@ -305,13 +351,13 @@ func compareRecords(cfg CheckConfig, timelines map[string]*testTimeline, ackedAt
 		if r.Op == OpPut && r.Result == ResultOK && tl != nil {
 			switch phase {
 			case PhaseFault:
-				if n := t.Unreachable(*tl.fault, r.Key, target); n < 0 {
+				if n := t.Unreachable(tl.faultAt(r.Start), r.Key, target); n < 0 {
 					tr.HintsUnknown++
 				} else {
 					tr.Hints += n
 				}
 			case PhaseTransition:
-				n := t.Unreachable(*tl.fault, r.Key, target)
+				n := t.Unreachable(tl.faultAt(r.Start), r.Key, target)
 				if n != 0 && tl.in.overlaps(r) {
 					expectedUnder[r.Key] = true
 					tr.UnderReplicated++
@@ -393,7 +439,7 @@ func phaseOf(tl *testTimeline, r Request) Phase {
 	if tl == nil {
 		return PhaseNormal
 	}
-	if tl.in.overlaps(r) || tl.out.overlaps(r) {
+	if tl.in.overlaps(r) || tl.out.overlaps(r) || slices.ContainsFunc(tl.backs, func(w window) bool { return w.overlaps(r) }) {
 		return PhaseTransition
 	}
 	if r.Start > tl.inject.UnixNano() && (tl.heal.IsZero() || r.End < tl.heal.UnixNano()) {
@@ -419,7 +465,7 @@ func bucket(t *Topology, tl *testTimeline, phase Phase, r Request, target string
 	}
 	expect := Ok
 	if phase == PhaseFault {
-		expect = t.Expect(*tl.fault, r.Op, r.Key, target)
+		expect = t.Expect(tl.faultAt(r.Start), r.Op, r.Key, target)
 	}
 	answered := r.Result != ResultFailed && r.Result != ResultUnknown
 	switch expect {

@@ -40,8 +40,9 @@
 #   chaos.sh system-loss TEST    (GKE) test 4: recreate the system node's VM;
 #                                inject none, every recovery step, heal
 #   chaos.sh wait-ready TEST POD...
-#                                wait until the pods are Ready, mark each
-#                                pod-ready-POD, then heal
+#                                wait until the pods answer, marking each
+#                                serving-POD, then serving; until they are
+#                                Ready, marking each pod-ready-POD; heal
 #   chaos.sh wait-hints TEST     wait until every hint is delivered, mark
 #                                hints-delivered (before any read-back)
 #   chaos.sh hints-snapshot TEST WHEN
@@ -72,6 +73,11 @@
 #                   at 64 they took every worker on kind (t1s, t2: drops)
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
+
+# gcloud without MSYS_NO_PATHCONV: under it, the Cloud SDK's launcher hands
+# Python a POSIX path Git Bash no longer converts, and gcloud cannot start
+# ("can't open file 'D:/c/Users/.../gcloud.py'": GKE session 3).
+gcloud() { env -u MSYS_NO_PATHCONV gcloud "$@"; }
 
 NS=kvstore
 KIND_NAME=kvstore-chaos
@@ -266,11 +272,32 @@ run() {
 		-write-rate "$WRITE_RATE" -read-rate "$READ_RATE" -concurrency "$CONCURRENCY" -read-prefix chaos-pre -read-keys "$PRELOAD_KEYS" "$@"
 }
 
+# fetch_file POD FILE DEST LINES: copy FILE out of POD to DEST, which must
+# then have LINES lines; up to three tries. A long kubectl exec stream can
+# end early, sometimes with exit status 0 (GKE session 3: five times, once
+# silently), so the count is the only test of a complete copy.
+fetch_file() {
+	local pod=$1 file=$2 dest=$3 want=$4 got=0 try
+	for try in 1 2 3; do
+		k -n "$NS" exec "$pod" -- /kvchaos cat "$file" >"$dest" || true
+		got=$(wc -l <"$dest")
+		[ "$got" -eq "$want" ] && return 0
+		echo "chaos.sh: $pod:$file: $got of $want lines (try $try)" >&2
+	done
+	die "$pod:$file: $got of $want lines after 3 tries"
+}
+
+# puts FILE...: the Puts in these records, each a key a read-back reads.
+puts() { cat "$@" | grep -c '"op":"put"' || true; }
+
 fetch() {
-	local name=$1 pod=chaos-$1
+	local name=$1 pod=chaos-$1 want
 	mkdir -p "$OUT/$name"
-	k -n "$NS" exec "$pod" -- /kvchaos cat /out/records.jsonl >"$OUT/$name/records.jsonl"
 	k -n "$NS" logs "$pod" >"$OUT/$name/recorder.log"
+	# Every request the recorder made, from its last line ("kvchaos record
+	# t2: 8m14s, get failed=6094, get ok=43306, ...").
+	want=$(grep 'kvchaos record [^:]*: [0-9]' "$OUT/$name/recorder.log" | tail -1 | grep -oE '=[0-9]+' | tr -d = | awk '{s += $1} END {print s + 0}')
+	fetch_file "$pod" /out/records.jsonl "$OUT/$name/records.jsonl" "$want"
 }
 
 stop() {
@@ -294,13 +321,16 @@ preload() {
 readback() {
 	local name=$1 pod=chaos-$1
 	k -n "$NS" exec "$pod" -- /kvchaos readback -records /out/records.jsonl -copies -out /out/readback.jsonl
-	k -n "$NS" exec "$pod" -- /kvchaos cat /out/readback.jsonl >"$OUT/$name/readback.jsonl"
+	# One line per key the run wrote.
+	fetch_file "$pod" /out/readback.jsonl "$OUT/$name/readback.jsonl" "$(puts "$OUT/$name/records.jsonl")"
 }
 
 converge() {
 	k -n "$NS" get pod chaos-tools >/dev/null 2>&1 || start_tools
 	cat "$OUT"/*/records.jsonl | k -n "$NS" exec -i chaos-tools -- /kvchaos readback -records - -copies -out /out/readback.jsonl
-	k -n "$NS" exec chaos-tools -- /kvchaos cat /out/readback.jsonl >"$OUT/final-readback.jsonl"
+	# If the stream of records in was cut short, the read-back is too, and
+	# no retry of the copy out reaches the count: run converge again.
+	fetch_file chaos-tools /out/readback.jsonl "$OUT/final-readback.jsonl" "$(puts "$OUT"/*/records.jsonl)"
 }
 
 start_tools() {
@@ -523,9 +553,19 @@ wait_ready() {
 	shift
 	since=$(inject_time "$test")
 	# First every pod answering its admin API: the other nodes see it alive
-	# from then, well before the kubelet reports it Ready.
-	for p in "$@"; do
-		until membership "$p" >/dev/null 2>&1; do sleep 1; done
+	# from then, well before the kubelet reports it Ready. Each pod gets its
+	# own mark (serving-POD) as it answers, in whatever order they come back:
+	# from then check takes it as no longer down (in GKE session 3's t2 one
+	# pod answered 12s before the other). Then serving, for all of them.
+	local waiting=" $* "
+	while [ -n "${waiting// /}" ]; do
+		for p in $waiting; do
+			if membership "$p" >/dev/null 2>&1; then
+				mark "$test" "serving-$p"
+				waiting=${waiting/ $p / }
+			fi
+		done
+		sleep 1
 	done
 	mark "$test" serving
 	# Ready, and either seen not Ready here or changed since the inject. A
@@ -590,16 +630,17 @@ wait_hints() {
 #
 # The sides are selected by a label of their own (SIDE_LABEL), not by
 # statefulset.kubernetes.io/pod-name: Cilium (kind's, and GKE's Dataplane
-# V2) leaves that label out of its security identities, so a policy selecting
-# on it selects nothing and is not enforced at all (seen on kind: the pods
-# kept "Disabled" enforcement and the partition cut nothing).
+# V2: seen in its CiliumEndpoints in GKE session 3) leaves that label out of
+# its security identities, so a policy selecting on it selects nothing and
+# is not enforced at all (seen on kind: the pods kept "Disabled" enforcement
+# and the partition cut nothing).
 SIDE_LABEL=kvchaos/partition
 
 # label_sides POD...: label the pods group and every other member rest, and
 # wait until Cilium has taken the labels into their identities (5 to 30s on
-# kind; until then a policy on them selects nothing). Where there are no
-# CiliumEndpoints to watch (GKE's Dataplane V2 does not expose them), wait
-# 60s instead.
+# kind; until then a policy on them selects nothing). GKE's Dataplane V2 has
+# CiliumEndpoints too, with the pods' labels in their identities (GKE
+# session 3); where there are none to watch, wait 60s instead.
 label_sides() {
 	local id side
 	for id in $(members); do

@@ -48,7 +48,13 @@ the fault (heartbeats: 3 missed at 1s, plus a 500ms timeout) or its healing
 (from the `serving` mark, when the pods answer again, to the heal plus the
 reconnect backoff and two heartbeat rounds), widened by a 2s clock
 tolerance. A transition request may have any outcome but a lost or stale
-value.
+value. The pods of a down fault may come back one at a time: `wait-ready`
+marks each `serving-POD` as it answers, and from then (after a transition
+of the same length) the check predicts with the pods still down. With one
+mark for all of them, GKE session 3's t2 counted 451 requests that worked
+once one of its two pods was back as unexpected successes
+([gke.md](gke.md#session-3-results-2026-10-17)); its records, checked
+again with a `serving-kv-4` mark at kv-4's own ready line, pass.
 
 **The keepalive floor.** grpc-go raises a client keepalive time under 10s to
 10s, so the recorder closes a connection to a pod that vanished silently

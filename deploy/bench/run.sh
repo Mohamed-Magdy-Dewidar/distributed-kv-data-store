@@ -129,7 +129,11 @@ wait_ready() {
 }
 
 delete_job() {
-	k delete job "$JOB" --ignore-not-found --wait=true >/dev/null
+	# A bound on the wait: without one, a reset in GKE session 3 spent 37
+	# minutes before it deleted the KVCluster, most likely here (the next
+	# reset, traced, took 2s for this step).
+	k delete job "$JOB" --ignore-not-found --wait=true --timeout=120s >/dev/null ||
+		die "the $JOB Job was not deleted within 2 minutes; see kubectl --context $BENCH_CONTEXT -n $NS get job,pods -l job-name=$JOB."
 	k wait --for=delete pod -l "job-name=$JOB" --timeout=120s >/dev/null 2>&1 || true
 }
 

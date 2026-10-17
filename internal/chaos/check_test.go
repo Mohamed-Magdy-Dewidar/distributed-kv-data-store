@@ -2,6 +2,7 @@ package chaos
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -201,16 +202,53 @@ func TestCheckServingEndsTheFault(t *testing.T) {
 	}
 }
 
+// A down fault's pods may answer again one at a time: once one of them is
+// back (serving-kv-0), keys that had both down replicas work again. With
+// only the fault-wide serving mark, those requests were unexpected
+// successes (GKE session 3, t2: 451 of them).
+func TestCheckServingPodNarrowsTheFault(t *testing.T) {
+	topo := sixPods(t)
+	two := keysWith(t, topo, 3, func(r []string) bool { return countIn(r, "kv-0", "kv-2") == 2 })
+	records := []Request{
+		req(OpGet, two[0], "kv-1", 20*time.Second, ResultFailed),   // both replicas down: fails, as predicted
+		req(OpGet, two[1], "kv-1", 31*time.Second, ResultFailed),   // kv-0 just back: a transition
+		req(OpGet, two[2], "kv-1", 45*time.Second, ResultOK),       // kv-0 back, kv-2 still down: works
+		req(OpPut, "chaos-t1-a", "kv-0", 46*time.Second, ResultOK), // sent to kv-0, back
+	}
+	events := append(zoneAEvents(),
+		Event{Time: t0.Add(30 * time.Second), Test: "t1", Event: EventMark, Mark: MarkServingPod + "kv-0"},
+		Event{Time: t0.Add(50 * time.Second), Test: "t1", Event: EventMark, Mark: MarkServing})
+	rep, err := Check(CheckConfig{Topology: topo, Events: events, Records: records})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := rep.Tests[0].Buckets; b[AsPredicted] != 3 || b[Transition] != 1 {
+		t.Errorf("buckets %v: want 3 as predicted and 1 transition", b)
+	}
+
+	// Without the pod's own mark, the request that worked is against the
+	// prediction, and the one sent to kv-0 is a target-down success.
+	rep, err = Check(CheckConfig{Topology: topo, Events: slices.Delete(slices.Clone(events), 2, 3), Records: records})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := rep.Tests[0].Buckets; b[UnexpectedSuccess] != 1 || b[TargetDownOK] != 1 {
+		t.Errorf("buckets %v without serving-kv-0: want 1 unexpected success and 1 target-down success", b)
+	}
+}
+
 func TestCheckRefusesABadTimeline(t *testing.T) {
 	topo := sixPods(t)
 	for name, events := range map[string][]Event{
-		"injected twice": {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}},
-		"heal only":      {{Time: t0, Test: "t", Event: EventHeal}},
-		"heal first":     {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0.Add(-time.Second), Test: "t", Event: EventHeal}},
-		"bad fault":      {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-9"}},
-		"bad event":      {{Time: t0, Test: "t", Event: "crash"}},
-		"unnamed mark":   {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0, Test: "t", Event: EventMark}},
-		"mark only":      {{Time: t0, Test: "t", Event: EventMark, Mark: "node-ready"}},
+		"injected twice":         {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}},
+		"heal only":              {{Time: t0, Test: "t", Event: EventHeal}},
+		"heal first":             {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0.Add(-time.Second), Test: "t", Event: EventHeal}},
+		"bad fault":              {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-9"}},
+		"bad event":              {{Time: t0, Test: "t", Event: "crash"}},
+		"unnamed mark":           {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0, Test: "t", Event: EventMark}},
+		"mark only":              {{Time: t0, Test: "t", Event: EventMark, Mark: "node-ready"}},
+		"serving a pod not down": {{Time: t0, Test: "t", Event: EventInject, Fault: "down:kv-1"}, {Time: t0, Test: "t", Event: EventMark, Mark: MarkServingPod + "kv-3"}},
+		"serving in a partition": {{Time: t0, Test: "t", Event: EventInject, Fault: "partition:kv-1"}, {Time: t0, Test: "t", Event: EventMark, Mark: MarkServingPod + "kv-1"}},
 	} {
 		if _, err := Check(CheckConfig{Topology: topo, Events: events}); err == nil {
 			t.Errorf("%s: accepted", name)
