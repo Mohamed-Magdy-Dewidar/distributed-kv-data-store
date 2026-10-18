@@ -100,7 +100,10 @@ successes were requests to keys whose kv-4 replica had already returned
 ## Results
 
 **Group commit off and on**, GKE session 3: the same cluster, commit
-`e406077`, write ramps of 60s steps, client side (k6):
+`e406077`, write ramps of 60s steps (off
+[20261017-180827](docs/results/bench/20261017-180827-gke-writes-ramp/steps.csv),
+on [20261017-183051](docs/results/bench/20261017-183051-gke-writes-ramp/steps.csv)),
+client side (k6):
 
 | Target/s | Off: achieved/s | Off: p50 / p99 (ms) | Off: errors | On: achieved/s | On: p50 / p99 (ms) | On: errors |
 |---|---|---|---|---|---|---|
@@ -109,19 +112,41 @@ successes were requests to keys whose kv-4 replica had already returned
 | 300 | 300.0 | 7.46 / 86.03 | 0 | 300.0 | 6.76 / 13.87 | 0 |
 | 400 | 400.0 | 9.09 / 65.96 | 0 | 400.0 | 6.73 / 15.12 | 0 |
 | 500 | **383.6** | 13.38 / **3,473** | **632** | 500.0 | 6.88 / 25.58 | 0 |
-| 900 | | | | 899.6 | 8.55 / 19.80 | 0 |
-| 1,050 | | | | 1,049.9 | 8.48 / 21.95 | 0 |
-| 1,200 | | | | 1,200.1 | 8.50 / 26.36 | 0 |
-| 1,350 | | | | 1,350.0 | 8.48 / 31.31 | 0 |
-| 1,500 | | | | 1,500.0 | 8.58 / 30.45 | 0 |
 
-The 900 to 1,500/s rows are a later run on a fresh KVCluster, with 15s
-steps. Over that run fsync p99 stayed at 4.97 ms, a batch averaged 2.18
-writes, and the busiest pod used under 40% of its cores: there was no knee
-up to 1,500/s
-([gke.md](docs/gke.md#on-900-to-1500s)).
+Off was not run past 500/s: it had already collapsed there (383.6 of
+500/s achieved, 632 errors).
+
+**Group commit on, higher rates**, the same GKE cluster, each ramp after a
+reset (`keys_before=0` in its `run.env`), client side (k6):
+
+| Run | Target/s | Achieved/s | p50 / p95 / p99 (ms) | Errors | Dropped |
+|---|---|---|---|---|---|
+| [20261017-191704](docs/results/bench/20261017-191704-gke-writes-ramp/steps.csv): 500-900/s, 30s holds, VUS=120 | 500 | 499.9 | 8.47 / 12.68 / 16.16 | 0 | 2 |
+| | 600 | 600.0 | 8.23 / 18.19 / 32.36 | 0 | 0 |
+| | 700 | 700.0 | 7.90 / 12.79 / 20.22 | 0 | 0 |
+| | 800 | 800.0 | 8.06 / 15.04 / 37.49 | 0 | 0 |
+| | 900 | 900.0 | 8.38 / 27.07 / 60.61 | 0 | 0 |
+| [20261017-194306](docs/results/bench/20261017-194306-gke-writes-ramp/steps.csv): 900-1,500/s, 15s holds, VUS=300, fresh cluster | 900 | 899.6 | 8.55 / 14.18 / 19.80 | 0 | 6 |
+| | 1,050 | 1,049.9 | 8.48 / 13.54 / 21.95 | 0 | 1 |
+| | 1,200 | 1,200.1 | 8.50 / 13.97 / 26.36 | 0 | 0 |
+| | 1,350 | 1,350.0 | 8.48 / 14.79 / 31.31 | 0 | 0 |
+| | 1,500 | 1,500.0 | 8.58 / 14.77 / 30.45 | 0 | 0 |
+
+The two 900/s rows differ (p99 60.61 against 19.80 ms) in step length and
+in what came before them: in 20261017-191704 it was the fifth 30s step,
+after 77,998 writes earlier in that run; in 20261017-194306 the first 15s
+step, on an empty cluster. The records do not separate the two. Over
+20261017-194306, fsync p99 stayed at 4.97 ms, a batch averaged 2.18
+writes, and the busiest pod used under 40% of its cores: there was no
+knee up to 1,500/s ([gke.md](docs/gke.md#on-past-500s),
+[gke.md](docs/gke.md#on-900-to-1500s)).
 
 ![Client Put p99 by target rate, group commit off and on](docs/images/gke-session3/ab-p99-by-rate.svg)
+
+*Off stops at 500/s, where it collapsed. On is drawn from 20261017-183051
+and 20261017-194306; the 500-900/s ramp, 20261017-191704, is in the table
+above but not in the chart. Regenerate with
+`sh docs/results/bench/ab-p99-by-rate.sh`.*
 
 **The failure tests**, GKE session 3, each under a recording load of new
 writes and reads of existing keys:

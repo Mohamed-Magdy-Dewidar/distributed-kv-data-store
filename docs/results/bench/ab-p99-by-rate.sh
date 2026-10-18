@@ -70,8 +70,8 @@ END {
 	print "<text x=\"118\" y=\"430\" fill=\"#222\">Group commit off (ramp 20261017-180827, 60 s steps)</text>"
 	print "<rect x=\"96\" y=\"444\" width=\"8\" height=\"8\" fill=\"" color["on"] "\"/><line x1=\"90\" x2=\"110\" y1=\"448\" y2=\"448\" stroke=\"" color["on"] "\" stroke-width=\"2\"/>"
 	print "<text x=\"118\" y=\"452\" fill=\"#222\">Group commit on (ramps 20261017-183051, 60 s steps, and 20261017-194306, 15 s steps)</text>"
-	print "<text x=\"118\" y=\"470\" fill=\"#666\">No run between 500 and 900/s is plotted. Same GKE cluster, commit e406077, 6 x e2-standard-2 in europe-west1;</text>"
-	print "<text x=\"118\" y=\"488\" fill=\"#666\">each point is one step of k6 (one pod), from the run directory steps.csv.</text>"
+	print "<text x=\"118\" y=\"470\" fill=\"#666\">Off was not run past 500/s: it had collapsed there. The 500-900/s ramp (20261017-191704) is not plotted.</text>"
+	print "<text x=\"118\" y=\"488\" fill=\"#666\">Same GKE cluster, commit e406077; each point is one step of k6, from the run directory steps.csv.</text>"
 	print "</svg>"
 }' "$B"/20261017-180827-gke-writes-ramp/steps.csv \
 	"$B"/20261017-183051-gke-writes-ramp/steps.csv \
