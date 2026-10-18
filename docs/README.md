@@ -14,5 +14,5 @@
 | [development.md](development.md) | Building, testing, and regenerating the checked-in gRPC code with pinned tool versions. |
 | [known-limitations.md](known-limitations.md) | What the store does not do, or does imperfectly, and why: consistency, data model, membership, operations, durability. |
 
-The project overview, architecture and roadmap are in the
+The project overview, architecture, key decisions and headline results are in the
 [top-level README](../README.md).

@@ -1,6 +1,6 @@
 # Known limitations
 
-This project is a Dynamo-style key-value store built as a learning and portfolio artifact. It runs as a cluster of separate processes and survives failures, but it is not a production database, and nothing for running it on Kubernetes exists yet (that is on the roadmap in the [README](../README.md)). This page lists what it deliberately does not do, or does imperfectly, so readers can see the tradeoffs.
+This project is a Dynamo-style key-value store built as a learning and portfolio artifact. It runs as a cluster of separate processes, by hand or on Kubernetes through its operator ([operator.md](operator.md)), and its failure tests on GKE lost no acknowledged write ([gke.md](gke.md#session-3-results-2026-10-17)), but it is not a production database. This page lists what it deliberately does not do, or does imperfectly, so readers can see the tradeoffs.
 
 ## Consistency and write semantics
 
